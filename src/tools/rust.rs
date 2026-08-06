@@ -113,10 +113,27 @@ fn rules_and_reason(arguments: &str) -> (Vec<String>, Option<String>) {
             }
             // A lint path is captured exactly as written: `clippy::…` and
             // `rustdoc::…` prefixes are part of the name.
-            _ => rules.push(argument.to_string()),
+            _ if is_lint_path(argument) => rules.push(argument.to_string()),
+            // Attribute text is source, and a file we scan need not even
+            // compile. An argument that cannot be a lint name is dropped rather
+            // than reported as a rule someone silenced.
+            _ => {}
         }
     }
     (rules, reason)
+}
+
+/// Whether an argument has the shape of a lint path — `dead_code`,
+/// `clippy::needless_return`, `rustdoc::broken_intra_doc_links`.
+fn is_lint_path(argument: &str) -> bool {
+    let mut segments = argument.split("::").peekable();
+    segments.peek().is_some()
+        && segments.all(|segment| {
+            let segment = segment.strip_prefix("r#").unwrap_or(segment);
+            !segment.is_empty()
+                && !segment.starts_with(|c: char| c.is_ascii_digit())
+                && segment.chars().all(|c| c.is_alphanumeric() || c == '_')
+        })
 }
 
 /// Split on commas that are not inside a string literal.
@@ -300,6 +317,16 @@ mod tests {
         ] {
             assert!(parse(source).is_empty(), "{source:?} is not a suppression");
         }
+    }
+
+    #[test]
+    fn an_argument_that_cannot_be_a_lint_name_is_not_reported_as_one() {
+        // The scanned file need not compile, so the argument list is not a
+        // vetted lint list: only what could be a lint path is reported as one.
+        let directive = only("#[allow(dead_code, 42, \"quoted\", a-b, )]\nfn f() {}\n");
+        assert_eq!(directive.rules, vec!["dead_code"]);
+        assert!(is_lint_path("r#type") && is_lint_path("clippy::all"));
+        assert!(!is_lint_path("") && !is_lint_path("a::") && !is_lint_path("9lives"));
     }
 
     #[test]

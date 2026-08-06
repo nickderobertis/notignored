@@ -178,3 +178,21 @@ fn an_inner_attribute_suppresses_the_whole_file_and_is_reported_as_file_scope() 
         "a file-wide exemption runs to end-of-file"
     );
 }
+
+/// Raising a lint is not silencing it, and a conditional suppression that is not
+/// active silences nothing either — rustc settles both, and notignored must not
+/// claim a suppression the compiler never applied.
+#[test]
+fn attributes_that_do_not_silence_the_lint_are_not_reported_as_suppressions() {
+    let file = parity_dir().join("not_suppressed.rs");
+    assert!(
+        !rustc_accepts(&file, &[LINT]),
+        "`#[deny]` raises {LINT}, and the `cfg_attr` allow is inactive outside cfg(test)"
+    );
+
+    let report = report_for("not_suppressed.rs");
+    assert!(
+        report["ignores"].as_array().unwrap().is_empty(),
+        "nothing here suppresses anything: {report:#}"
+    );
+}
