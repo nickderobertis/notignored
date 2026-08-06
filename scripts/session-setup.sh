@@ -3,25 +3,17 @@
 # SessionStart hook (.claude/settings.json). Its job is to make a fresh web/cloud
 # session able to run the documented `just` command surface with no manual steps.
 #
-# What it does, and why:
-#   1. Ensures `just` — the entry point to every recipe. A cloud image often ships
-#      a language toolchain but not `just`, so the very first `just ...` would
-#      fail. `rust-just` packages the prebuilt binary on PyPI, so `uv tool install`
-#      fetches it with no Rust toolchain and no github.com reachability.
-#   2. Verifies the rest of the toolchain (uv, rustup, cargo) and logs an
-#      actionable pointer for anything missing rather than attempting a
-#      multi-minute install a startup hook can't do reliably. `just bootstrap`
-#      installs the pinned Rust toolchain components when you are ready.
-#   3. Hands off to scripts/setup-llmlint.sh so one hook readies the whole
-#      session, kept separate so `just setup-llmlint` can run it standalone.
-#
-# CI provisions the toolchain itself, so this no-ops there. Every step tolerates
-# failure and the script always exits 0 — a flaky install must never abort session
-# startup. Also safe to run by hand (`just session-setup`).
+# Only `just` is installed; the rest of the toolchain is reported rather than
+# fetched, because a startup hook cannot reliably do a multi-minute install
+# (`just bootstrap` does it when you are ready). CI provisions itself, so this
+# no-ops there. Every step tolerates failure and the script always exits 0 — a
+# flaky install must never abort session startup. Also safe to run by hand
+# (`just session-setup`).
 # llmlint: ignore-file[tool_output_is_signal, boundary_inputs_validated] a SessionStart hook must never abort a session, so failures log and continue instead of exiting non-zero; the only external input is a PyPI wheel fetched by uv, which validates it.
 set -uo pipefail
 
-# `just` floor. `rust-just` is the PyPI package that ships the `just` binary.
+# `just` floor. `rust-just` ships the prebuilt `just` binary on PyPI, so uv can
+# fetch it with no Rust toolchain and no github.com reachability.
 readonly JUST_MIN="1.51.0"
 readonly BIN_DIR="$HOME/.local/bin"
 # Capture the inherited PATH before we prepend BIN_DIR, so persist_session_env can

@@ -170,7 +170,7 @@ impl fmt::Display for Scope {
 }
 
 /// The best-effort range of source lines a directive silences.
-// llmlint: ignore[invalid_states_unrepresentable] the record's field types are the fixed public contract this repo exists to stabilise (see AGENTS.md) — later parser dispatches implement against them, so newtyping the 1-based coordinates now would churn every downstream branch for an invalid state the extractor cannot produce (its cursor starts at 1 and only increments). The boundary that can actually receive bad data — deserializing a foreign report — validates its envelope version.
+// llmlint: ignore[invalid_states_unrepresentable] plain 1-based coordinates are the fixed public contract; see "The ignore-record contract" in AGENTS.md for why they are not newtyped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Suppressed {
     /// First 1-based line the directive silences.
@@ -184,7 +184,7 @@ pub struct Suppressed {
 ///
 /// Serializes to the documented record shape; see the module docs before
 /// touching field names or order.
-// llmlint: ignore[invalid_states_unrepresentable] the record's field types are the fixed public contract this repo exists to stabilise (see AGENTS.md) — later parser dispatches implement against them, so newtyping the 1-based coordinates now would churn every downstream branch for an invalid state the extractor cannot produce (its cursor starts at 1 and only increments). The boundary that can actually receive bad data — deserializing a foreign report — validates its envelope version.
+// llmlint: ignore[invalid_states_unrepresentable] plain 1-based coordinates are the fixed public contract; see "The ignore-record contract" in AGENTS.md for why they are not newtyped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IgnoreDirective {
     /// The tool whose rules are being silenced.
