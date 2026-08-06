@@ -8,8 +8,10 @@
 mod support;
 
 mod cli;
+mod diff;
 mod installer;
 mod python_tools_setup;
 mod python_types_parity;
 mod ruff_grammar;
 mod ruff_parity;
+mod rust_parity;

@@ -16,6 +16,7 @@ mod python;
 pub mod mypy;
 pub mod pyright;
 pub mod ruff;
+pub mod rust;
 pub mod ty;
 
 /// Turns one tool's suppression syntax into [`IgnoreDirective`] records.
@@ -49,7 +50,7 @@ pub fn registry() -> Vec<Box<dyn ToolParser>> {
         Box::new(mypy::MypyParser),
         Box::new(pyright::PyrightParser),
         Box::new(ty::TyParser),
-        // rust: planned — `#[allow(dead_code)]` / `#[expect(…, reason = "…")]`
+        Box::new(rust::RustParser),
         // shellcheck: planned — `# shellcheck disable=SC2086  # reason`
         // llmlint: planned — its inline `ignore[rule] reason` directive
     ]
@@ -78,7 +79,10 @@ mod tests {
             tools.len(),
             "a tool is registered twice: {tools:?}"
         );
-        assert_eq!(tools, vec![Tool::Ruff, Tool::Mypy, Tool::Pyright, Tool::Ty]);
+        assert_eq!(
+            tools,
+            vec![Tool::Ruff, Tool::Mypy, Tool::Pyright, Tool::Ty, Tool::Rust]
+        );
     }
 
     #[test]

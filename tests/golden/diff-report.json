@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "ignores": [
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "E501"
+      ],
+      "reason": "long wrapped URL",
+      "path": "src/app.py",
+      "line": 3,
+      "end_line": 3,
+      "column": 12,
+      "raw": "# noqa: E501  # long wrapped URL",
+      "suppressed": {
+        "start_line": 3,
+        "end_line": 3
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "file",
+      "rules": [],
+      "reason": "generated, do not lint",
+      "path": "src/new.py",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "raw": "# ruff: noqa  # generated, do not lint",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    }
+  ],
+  "errors": []
+}
