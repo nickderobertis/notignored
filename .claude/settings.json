@@ -50,8 +50,11 @@
       "Bash(git commit:*)",
       "Bash(git switch:*)",
       "Bash(git branch:*)",
-      "Bash(gh pr create:*)",
-      "Bash(gh pr merge:*)"
+      "Bash(gh pr merge --auto --squash)",
+      "Bash(gh pr status)",
+      "Bash(gh pr view:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)"
     ],
     "deny": []
   }
