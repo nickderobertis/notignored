@@ -71,14 +71,10 @@ will be misread as comments.
 
 ## Command surface
 
-`just --list` is the catalog; use the recipes rather than hand-rolling their
-commands. What the listing does not say:
-
-- `just check` is the gate and must pass before any commit or PR.
-- `just bootstrap` has to keep working from a clean clone, including the pinned
-  `ruff` the parity suite drives.
-- The `lint-llm*` recipes are the LLM-judge tier — non-deterministic and
-  credentialed, so deliberately outside `check`.
+`just check` must pass before any commit or PR, and `just bootstrap` must stay
+sufficient from a clean clone — CI runs exactly those two and nothing else.
+When a step becomes routine, add a recipe rather than a one-off command, so CI
+and contributors keep running the same thing.
 
 ## Commits, releases, and merging
 

@@ -46,7 +46,7 @@ check: fmt-check lint test doc
 
 # Verify formatting without modifying files.
 fmt-check:
-    @cargo fmt --all -- --check
+    @cargo fmt --all -- --check || { echo "formatting drift above — run 'just format'" >&2; exit 1; }
 
 # Format the codebase in place.
 format:

@@ -18,10 +18,18 @@ cd "$ROOT"
 PIN="$(tr -d '[:space:]' < .ruff-version)"
 # `.ruff-version` feeds a package requirement, so validate its shape before use
 # rather than letting arbitrary file contents reach the resolver.
+# Reject anything outside digits and dots before checking the X.Y.Z shape, so no
+# extra requirement specifier or shell metacharacter can reach the resolver.
 case "$PIN" in
+  *[!0-9.]* | *..*) PIN="" ;;
   [0-9]*.[0-9]*.[0-9]*) ;;
-  *) echo "setup-ruff: .ruff-version must hold a version like 0.16.1 (got '$PIN')" >&2; exit 1 ;;
+  *) PIN="" ;;
 esac
+if [ -z "$PIN" ]; then
+  echo "setup-ruff: .ruff-version must hold a version like 0.16.1" >&2
+  echo "ACTION: write a published ruff version (see https://pypi.org/project/ruff/#history)" >&2
+  exit 1
+fi
 VENV=".dev/ruff"
 if [ -x "$VENV/bin/ruff" ]; then
   BIN="$VENV/bin/ruff"
@@ -42,5 +50,13 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 rm -rf "$VENV"
-uv venv --quiet "$VENV"
-uv pip install --quiet --python "$VENV" "ruff==$PIN"
+uv venv --quiet "$VENV" || {
+  echo "setup-ruff: cannot create the venv at $VENV" >&2
+  echo "ACTION: check disk space and that 'uv --version' works, then re-run 'just setup-ruff'" >&2
+  exit 1
+}
+uv pip install --quiet --python "$VENV" "ruff==$PIN" || {
+  echo "setup-ruff: cannot install ruff==$PIN" >&2
+  echo "ACTION: check network access to PyPI, or set .ruff-version to a published release" >&2
+  exit 1
+}

@@ -50,6 +50,7 @@ EOF
 
 VERSION="${NOTIGNORED_VERSION:-}"
 INSTALL_DIR="${NOTIGNORED_INSTALL_DIR:-$HOME/.local/bin}"
+[ -n "$INSTALL_DIR" ] || err "install directory is empty (set --to <dir> or NOTIGNORED_INSTALL_DIR)"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -114,6 +115,12 @@ detect_target
 # The tag becomes a URL path segment, so validate its shape at the boundary
 # instead of trusting the flag, the env var, or the API response.
 case "$VERSION" in
+    # Reject anything outside `v` + digits + dots before checking the X.Y.Z
+    # shape, so no path traversal or shell metacharacter can reach the URL.
+    # Anything outside `v`, digits, and single dots is rejected outright, so no
+    # path traversal or shell metacharacter can reach the URL; the second pattern
+    # then requires the vX.Y.Z shape.
+    *[!0-9.v]* | *..*) err "invalid release tag: $VERSION (expected vX.Y.Z)" ;;
     v[0-9]*.[0-9]*.[0-9]*) ;;
     *) err "invalid release tag: $VERSION (expected vX.Y.Z)" ;;
 esac
@@ -129,17 +136,21 @@ actual="$(sha256_of "$WORK/$ARCHIVE")"
 [ "$expected" = "$actual" ] \
     || err "checksum mismatch for $ARCHIVE (expected $expected, got $actual); refusing to install"
 
+extract_failed="cannot extract $ARCHIVE (truncated download?); re-run the installer"
 case "$EXT" in
-    tar.gz) tar -xzf "$WORK/$ARCHIVE" -C "$WORK" ;;
-    zip) have unzip || err "unzip is required to extract $ARCHIVE"; unzip -q "$WORK/$ARCHIVE" -d "$WORK" ;;
+    tar.gz) tar -xzf "$WORK/$ARCHIVE" -C "$WORK" || err "$extract_failed" ;;
+    zip) have unzip || err "unzip is required to extract $ARCHIVE; install unzip and re-run"
+         unzip -q "$WORK/$ARCHIVE" -d "$WORK" || err "$extract_failed" ;;
 esac
 
 extracted="$(find "$WORK" -name "$BIN_FILE" -type f | head -n1)"
 [ -n "$extracted" ] || err "$BIN_FILE not found inside $ARCHIVE"
 
-mkdir -p "$INSTALL_DIR"
+cannot_write="cannot write $INSTALL_DIR/$BIN_FILE; re-run with --to <a directory you can write to>"
+mkdir -p "$INSTALL_DIR" || err "$cannot_write"
 install -m 755 "$extracted" "$INSTALL_DIR/$BIN_FILE" 2>/dev/null \
-    || { cp "$extracted" "$INSTALL_DIR/$BIN_FILE" && chmod 755 "$INSTALL_DIR/$BIN_FILE"; }
+    || { cp "$extracted" "$INSTALL_DIR/$BIN_FILE" && chmod 755 "$INSTALL_DIR/$BIN_FILE"; } \
+    || err "$cannot_write"
 
 case ":$PATH:" in
     *":$INSTALL_DIR:"*) say "notignored $VERSION installed: $INSTALL_DIR/$BIN_FILE" ;;
