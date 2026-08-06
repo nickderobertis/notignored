@@ -3,14 +3,17 @@ name: Release
 # Build, archive, checksum, and attach the cross-platform binaries for a
 # published GitHub Release.
 #
-# The Release itself is created by release-plz (see release-plz.yml) when a
-# version-bump PR merges. Because release-plz authenticates with a PAT, that
-# Release fires the `release: published` event below — the default GITHUB_TOKEN
-# would not, and the binaries would silently never build.
+# The tag is what fires this: release-plz (see release-plz.yml) computes the
+# version, writes the changelog and manifests, and pushes `vX.Y.Z`. Versioning
+# and building stay separate jobs in separate workflows, joined only by the tag.
+#
+# release-plz authenticates with a PAT precisely so that push fires this
+# workflow — a tag pushed by the default GITHUB_TOKEN triggers nothing, and the
+# release would silently ship no binaries.
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:
   contents: read
