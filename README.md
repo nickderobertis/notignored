@@ -149,7 +149,7 @@ The `json` format emits the full report envelope:
 | `mypy` | `# type: ignore`, `# type: ignore[arg-type]` | Planned |
 | `pyright` | `# pyright: ignore[reportAny]` | Planned |
 | `ty` | `# ty: ignore[unresolved-import]` | Planned |
-| `rust` | `#[allow(…)]`, `#[expect(…, reason = "…")]` | Planned |
+| `rust` | `#[allow(…)]`, `#[expect(…, reason = "…")]` | **Supported** |
 | `shellcheck` | `# shellcheck disable=SC2086` | Planned |
 | `llmlint` | its inline `ignore[rule] reason` suppression directive | Planned |
 

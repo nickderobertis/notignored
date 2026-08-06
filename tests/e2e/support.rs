@@ -91,6 +91,63 @@ pub fn ruff_passes(file: &Path, rule: &str) -> bool {
     output.status.success()
 }
 
+/// The rustc version this repo pins, from `rust-toolchain.toml`.
+pub fn pinned_rustc_version() -> String {
+    let path = repo_root().join("rust-toolchain.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+    manifest
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("channel = "))
+        .map(|channel| channel.trim().trim_matches('"').to_string())
+        .expect("rust-toolchain.toml pins a channel")
+}
+
+/// Compile `file` as a library with `lint` denied, returning whether it built
+/// clean.
+///
+/// The compiler *is* the tool whose lint is being silenced, so parity is proved
+/// against the pinned toolchain rustup already resolves `rustc` to — a different
+/// compiler would prove a different claim.
+pub fn rustc_accepts(file: &Path, lint: &str) -> bool {
+    let expected = pinned_rustc_version();
+    let version = Command::new("rustc")
+        .arg("--version")
+        .output()
+        .expect("run rustc --version");
+    let reported = String::from_utf8_lossy(&version.stdout).trim().to_string();
+    assert!(
+        reported.starts_with(&format!("rustc {expected} ")),
+        "rustc is {reported}, not the pinned {expected}\nACTION: run `rustup toolchain install` \
+         from the repository root so the pin resolves"
+    );
+
+    let out_dir = tempfile::tempdir().expect("tempdir");
+    let output = Command::new("rustc")
+        .args([
+            "--edition",
+            "2021",
+            "--crate-type",
+            "lib",
+            "--emit",
+            "metadata",
+            "-D",
+        ])
+        .arg(lint)
+        .arg("--out-dir")
+        .arg(out_dir.path())
+        .arg(file)
+        .output()
+        .expect("run rustc");
+    assert!(
+        output.status.code().is_some(),
+        "rustc exited unexpectedly ({:?}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.status.success()
+}
+
 /// Run `git` in `dir`, failing with the command that broke and git's own reason.
 ///
 /// The diff journeys drive a **real** repository: a stubbed git would prove
@@ -109,6 +166,23 @@ pub fn git(dir: &Path, args: &[&str]) {
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// Run `git` in `dir` and return its stdout, for a journey that needs to read
+/// the change the way git itself describes it.
+pub fn git_stdout(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("cannot run git {args:?}: {error}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 /// A repository on `main` with no commits yet, configured so the developer's own

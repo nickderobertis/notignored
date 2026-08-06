@@ -12,6 +12,7 @@ use crate::model::{IgnoreDirective, Tool};
 use crate::source::SourceFile;
 
 pub mod ruff;
+pub mod rust;
 
 /// Turns one tool's suppression syntax into [`IgnoreDirective`] records.
 pub trait ToolParser: Send + Sync {
@@ -44,7 +45,7 @@ pub fn registry() -> Vec<Box<dyn ToolParser>> {
         // mypy: planned — `# type: ignore[arg-type]  # reason`
         // pyright: planned — `# pyright: ignore[reportAny]`
         // ty: planned — `# ty: ignore[unresolved-import]`
-        // rust: planned — `#[allow(dead_code)]` / `#[expect(…, reason = "…")]`
+        Box::new(rust::RustParser),
         // shellcheck: planned — `# shellcheck disable=SC2086  # reason`
         // llmlint: planned — its inline `ignore[rule] reason` directive
     ]
@@ -73,7 +74,7 @@ mod tests {
             tools.len(),
             "a tool is registered twice: {tools:?}"
         );
-        assert_eq!(tools, vec![Tool::Ruff]);
+        assert_eq!(tools, vec![Tool::Ruff, Tool::Rust]);
     }
 
     #[test]

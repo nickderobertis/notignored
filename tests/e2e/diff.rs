@@ -7,7 +7,9 @@
 
 use std::fs;
 
-use crate::support::{commit, git, git_repo, notignored, parse_report, repo_root, write};
+use crate::support::{
+    commit, git, git_repo, git_stdout, notignored, parse_report, repo_root, write,
+};
 
 /// Every suppression a JSON run reported, as `path:line rules`.
 fn reported(stdout: &[u8]) -> Vec<String> {
@@ -34,6 +36,27 @@ fn reported(stdout: &[u8]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// The 1-based lines `git diff` itself shows as added for `path`.
+///
+/// Read straight from git's hunk headers, independently of the binary under
+/// test, so a journey that hinges on *which* lines changed cannot quietly drift
+/// into proving nothing.
+fn git_added_lines(root: &std::path::Path, path: &str) -> Vec<u32> {
+    let patch = git_stdout(root, &["diff", "--unified=0", "--no-color", "--", path]);
+    let mut added = Vec::new();
+    for header in patch.lines().filter_map(|line| line.strip_prefix("@@ ")) {
+        let new_side = header
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix('+'))
+            .expect("a hunk header names its new side");
+        let (first, count) = new_side.split_once(',').unwrap_or((new_side, "1"));
+        let first: u32 = first.parse().expect("a hunk header line number");
+        let count: u32 = count.parse().expect("a hunk header line count");
+        added.extend(first..first + count);
+    }
+    added
 }
 
 /// Run the binary in `dir` with `args` and `--format json`, asserting the exit
@@ -307,6 +330,80 @@ fn a_file_added_in_the_range_but_gone_from_the_work_tree_is_skipped() {
         "a file the work tree no longer has is not an unreadable one: {report:#}"
     );
     assert_eq!(reported(&output.stdout), vec!["kept.py:1 F401"]);
+}
+
+/// A directive written across lines counts as new when the change added **any**
+/// of the lines it occupies, not only its first.
+///
+/// A reviewer editing the lint list inside an existing `#[allow(…)]` is adding a
+/// suppression — the directive now silences something it did not silence before
+/// — even though the `#[allow(` line itself is untouched. The record here is a
+/// real one: `end_line > line` comes from the Rust parser reading a real
+/// attribute, and rustc agrees it suppresses (see `rust_parity.rs`).
+#[test]
+fn a_directive_spanning_lines_is_new_when_the_change_added_part_of_it() {
+    let repo = git_repo();
+    let root = repo.path();
+    // A second multi-line directive further down, which the change never touches.
+    let untouched = concat!(
+        "\n",
+        "#[allow(\n",
+        "    unused_variables,\n",
+        ")]\n",
+        "fn other(value: u32) {}\n",
+    );
+    write(
+        root,
+        "src/lib.rs",
+        &format!("#[allow(\n    dead_code,\n)]\nfn helper() {{}}\n{untouched}"),
+    );
+    commit(root, "baseline");
+
+    // Exactly one line added, *inside* the first directive's span: neither its
+    // opening `#[allow(` nor its closing `)]` is touched, and the trailing comma
+    // was already there so no other line moves.
+    write(
+        root,
+        "src/lib.rs",
+        &format!(
+            "#[allow(\n    dead_code,\n    unused_imports,\n)]\nfn helper() {{}}\n{untouched}"
+        ),
+    );
+
+    let output = notignored(root)
+        .args(["--diff", "--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let report = parse_report(&output.stdout);
+    let ignores = report["ignores"].as_array().unwrap();
+    assert_eq!(
+        ignores.len(),
+        1,
+        "only the directive the change edited is new: {report:#}"
+    );
+    let directive = &ignores[0];
+    assert_eq!(directive["path"], "src/lib.rs");
+    assert_eq!(
+        directive["rules"],
+        serde_json::json!(["dead_code", "unused_imports"])
+    );
+    // The record really does span lines, and the change added neither its first
+    // nor its last one — only line 3, in the middle.
+    assert_eq!(directive["line"], 1);
+    assert_eq!(directive["end_line"], 4);
+    assert_eq!(
+        git_added_lines(root, "src/lib.rs"),
+        vec![3],
+        "the scenario hinges on the added line falling inside, not at, the span"
+    );
 }
 
 #[test]

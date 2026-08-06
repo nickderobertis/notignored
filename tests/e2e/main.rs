@@ -11,3 +11,4 @@ mod diff;
 mod installer;
 mod ruff_grammar;
 mod ruff_parity;
+mod rust_parity;
