@@ -268,6 +268,11 @@ pub fn biome_passes(file: &Path, rule: &str) -> bool {
 /// This is what proves the `biome-ignore-start` / `-end` pairing rule: a
 /// mismatched or unclosed range is only a *warning*, so biome still exits 0 and
 /// [`biome_passes`] cannot tell the two apart.
+///
+/// Each diagnostic is attributed to `file` before its line number is trusted: a
+/// complaint biome raised about some other file would otherwise read as one
+/// about this fixture. Biome names it relative to the directory it ran in, so
+/// the comparison goes through [`relative_to`] like every other checker's.
 pub fn biome_diagnostics(file: &Path, rule: &str) -> Vec<(String, String, u64)> {
     let output = biome_lint(file, rule, &["--reporter=json", "--colors=off"]);
     let report: serde_json::Value =
@@ -277,11 +282,24 @@ pub fn biome_diagnostics(file: &Path, rule: &str) -> Vec<(String, String, u64)> 
                 String::from_utf8_lossy(&output.stdout)
             )
         });
+    let directory = file.parent().expect("a fixture directory");
+    let name = file
+        .file_name()
+        .expect("a fixture file name")
+        .to_string_lossy();
     report["diagnostics"]
         .as_array()
         .unwrap_or_else(|| panic!("biome's JSON report has no diagnostics array: {report:#}"))
         .iter()
         .map(|diagnostic| {
+            let path = diagnostic["location"]["path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a diagnostic names no file: {diagnostic:#}"));
+            assert_eq!(
+                relative_to(directory, path),
+                name,
+                "biome reported a diagnostic about another file: {diagnostic:#}"
+            );
             (
                 diagnostic["category"].as_str().unwrap_or_default().into(),
                 diagnostic["message"].as_str().unwrap_or_default().into(),
