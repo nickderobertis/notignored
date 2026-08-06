@@ -506,6 +506,33 @@ fn the_dogfood_workflow_runs_this_repositorys_own_action_on_its_own_pull_request
     );
 }
 
+/// The dogfood run builds the binary from source on every pull request, which is
+/// minutes of release build unless it is cached.
+///
+/// Both halves are load-bearing and neither is visible in a green run: `cargo
+/// install` builds in a throwaway target directory unless `CARGO_TARGET_DIR`
+/// points elsewhere, so without it the cache action has nothing of the build to
+/// save and every run pays full price. Dropping either one only shows up as a
+/// slow job, which is exactly the kind of regression nobody files.
+#[test]
+fn the_dogfood_workflow_caches_the_build_it_does_on_every_pull_request() {
+    let job = parse(&read(".github/workflows/notignored.yml"))
+        .get("jobs")
+        .get("suppressions")
+        .clone();
+    assert_eq!(
+        job.get("env").get("CARGO_TARGET_DIR").scalar(),
+        "${{ github.workspace }}/target",
+        "`cargo install` must build into the cached workspace target directory"
+    );
+    assert!(
+        job.get("steps").to_vec().iter().any(|step| step
+            .find("uses")
+            .is_some_and(|uses| uses.scalar().starts_with("Swatinem/rust-cache"))),
+        "the dogfood workflow no longer caches the cargo build"
+    );
+}
+
 /// A helper for the assertions above: sequences come back borrowed.
 trait ToVec {
     fn to_vec(&self) -> Vec<Node>;

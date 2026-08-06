@@ -24,11 +24,20 @@ jobs:
     # fail on something the contributor has no way to fix.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # `version: local` builds the action's own source with `cargo install`, which
+    # otherwise builds in a throwaway target directory the cache never sees — a
+    # cold release build on every pull request. Pointing it at the workspace
+    # target directory is what makes the cache below apply to it. Job-level so
+    # the composite action's own steps inherit it.
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - uses: actions/checkout@v4
         with:
           # --diff resolves the base branch, which a shallow checkout omits.
           fetch-depth: 0
+      # Keyed on Cargo.lock and the toolchain, so a warm run reuses every
+      # dependency and rebuilds only this branch's own crate.
       - uses: Swatinem/rust-cache@v2
       - uses: ./
         with:
