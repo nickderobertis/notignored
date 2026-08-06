@@ -91,6 +91,31 @@ must stop at the next one, or a live suppression is filed as its neighbour's
 justification. `src/tools/python.rs::segments` owns that boundary; a new Python
 parser adds an `opens_directive` recognizer to it.
 
+## The GitHub Action
+
+`action.yml` (composite, repo root) + `scripts/action/comment.sh` are the
+product's review surface. Keep the judgment in Rust: `--format markdown` renders
+the whole comment body, golden-tested at the counts the rules turn on
+(`tests/golden/markdown/`), so the composite's shell only moves bytes. Its two
+scripts are proven by *lifting them out of `action.yml`* and running them
+(`tests/e2e/action_scan.rs`, `tests/e2e/action_comment.rs`); a copy in a test
+would keep passing after the action stopped doing what it says. GitHub's API is
+the only thing stubbed — everything else is a real repository, the real binary,
+and the real `gh`.
+
+Never interpolate `${{ github.event.* }}` (or an input) into a `run:` script: on
+a fork's pull request that text is attacker-controlled and `${{ }}` splices it in
+as shell source. Pass it through `env`, or read the payload as data from
+`$GITHUB_EVENT_PATH`. `tests/action_contract.rs` fails the build otherwise, and
+also gates the inputs, outputs, and the sticky marker the renderer and the
+comment script must agree on.
+
+`.github/workflows/notignored.yml` dogfoods it with `version: local`, which
+builds the branch's own source. It is **not a required check** and must not
+become one: it is skipped on fork pull requests, whose read-only token cannot
+upsert a comment, and a required context that never reports would block them
+forever.
+
 ## Commits, releases, and merging
 
 - **Squash-merge only, via PR, with auto-merge.** The default branch is

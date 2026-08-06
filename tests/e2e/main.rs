@@ -7,6 +7,8 @@
 
 mod support;
 
+mod action_comment;
+mod action_scan;
 mod biome_parity;
 mod cli;
 mod diff;

@@ -45,17 +45,20 @@ tagged release attaches per-platform archives built on native runners.
 ## Usage
 
 ```
-notignored [PATHS...] [--format human|json] [--tool NAME]... [--fail-if-found]
-           [--diff [--diff-base REF]]
+notignored [PATHS...] [--format human|json|markdown] [--tool NAME]... [--fail-if-found]
+           [--diff [--diff-base REF]] [--github-repo OWNER/REPO] [--github-sha SHA]
 ```
 
 - `PATHS` — files and/or directories. Directories are walked recursively,
   honouring `.gitignore`. Defaults to `.`.
-- `--format` — `human` (default) or `json`.
+- `--format` — `human` (default), `json`, or `markdown` (a pull-request comment
+  body; see the action below).
 - `--tool` — only report this tool; repeat to allow several. Omit for all.
 - `--fail-if-found` — exit 1 when any suppression is reported.
 - `--diff` — report only the suppressions the change added (see below).
 - `--diff-base` — the git revision or range `--diff` compares against.
+- `--github-repo` / `--github-sha` — the `owner/repo` and commit the `markdown`
+  format builds its permalinks from.
 
 ### Reviewing a pull request
 
@@ -85,6 +88,67 @@ notignored: 1 ignore in 1 file
 
 `--diff` shells out to `git` — infrastructure, not one of the linters whose
 directives are parsed natively — so it needs `git` on `PATH` and a work tree.
+
+### On a pull request: the GitHub Action
+
+The action posts one sticky comment naming every suppression the pull request
+added, with its stated reason and a link to the line. It edits that same comment
+on each push instead of adding another, and on a pull request that adds none it
+posts nothing at all.
+
+```yaml
+# .github/workflows/notignored.yml
+name: notignored
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  suppressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the base branch has to be fetched to diff against it
+      - uses: nickderobertis/notignored@main
+```
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `github-token` | `${{ github.token }}` | Token used to upsert the comment. Needs `pull-requests: write`. |
+| `diff-base` | the pull request's base branch | Any git revision or range, as `--diff-base` takes. |
+| `paths` | the whole repository | Whitespace-separated files and directories to scan. |
+| `version` | `latest` | A release tag such as `v0.1.0`, or `local` to build the action's own source with `cargo`. |
+
+It exposes `count` (how many suppressions the change added) and `report-path`
+(the JSON report), so a later step can fail the build, upload the report, or
+gate on a threshold:
+
+```yaml
+      - uses: nickderobertis/notignored@main
+        id: notignored
+      - if: steps.notignored.outputs.count != '0'
+        run: echo "this change adds ${{ steps.notignored.outputs.count }} suppression(s)"
+```
+
+The runner needs `bash`, `jq`, and the `gh` CLI — every GitHub-hosted runner
+ships all three — plus `cargo` when `version: local`.
+
+`--format markdown` renders exactly the body the action posts, so it can be
+previewed locally:
+
+```console
+$ notignored --diff --diff-base main --format markdown \
+    --github-repo nickderobertis/notignored --github-sha "$(git rev-parse HEAD)"
+```
+
+Both permalink flags are optional; without them each location renders as plain
+`path:line` text. When a body names fewer than four suppressions, each one also
+carries the source line with two lines of context on either side.
 
 ### Exit codes
 
