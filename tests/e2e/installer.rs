@@ -23,10 +23,14 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::support::repo_root;
 
@@ -39,54 +43,97 @@ struct Release {
     tag: String,
 }
 
-/// A child process that is always killed and reaped when it goes out of scope,
-/// so no server outlives the test that started it.
-struct Server(Child);
+/// A minimal static-file HTTP server, in-process.
+///
+/// The installer has to reach its release over a real socket with a real client
+/// (curl or wget) for these journeys to mean anything — but spawning an external
+/// server per test made the suite hostage to that program's startup time, which
+/// is exactly how it flaked on a loaded macOS runner. This serves the same bytes
+/// with no external dependency, and the listener is already bound when the
+/// constructor returns, so there is nothing to wait for.
+struct Server {
+    shutdown: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-/// A port nothing is listening on. Bound and released so the server can take it.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("bind an ephemeral port")
-        .local_addr()
-        .expect("the bound address")
-        .port()
-}
-
-/// Serve `root` over HTTP until the returned child is dropped.
-fn serve(root: &Path) -> (Server, String) {
-    let port = free_port();
-    let server = Server(
-        Command::new("python3")
-            .args([
-                "-m",
-                "http.server",
-                &port.to_string(),
-                "--bind",
-                "127.0.0.1",
-            ])
-            .arg("--directory")
-            .arg(root)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("python3 -m http.server (required by the installer e2e)"),
-    );
-
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while Instant::now() < deadline {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return (server, format!("http://127.0.0.1:{port}"));
+        self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
-        std::thread::sleep(Duration::from_millis(25));
     }
-    panic!("the release server never started on port {port}");
+}
+
+/// Serve `root` over HTTP until the returned server is dropped.
+fn serve(root: &Path) -> (Server, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind a port");
+    let port = listener.local_addr().expect("the bound address").port();
+    listener
+        .set_nonblocking(true)
+        .expect("non-blocking listener");
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&shutdown);
+    let root = root.to_path_buf();
+    let worker = std::thread::spawn(move || {
+        while !stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((stream, _)) => serve_one(stream, &root),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    (
+        Server {
+            shutdown,
+            worker: Some(worker),
+        },
+        format!("http://127.0.0.1:{port}"),
+    )
+}
+
+/// Answer one request: 200 with the file's bytes, or 404.
+fn serve_one(mut stream: TcpStream, root: &Path) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut request = String::new();
+    if BufReader::new(&stream).read_line(&mut request).is_err() {
+        return;
+    }
+    let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+
+    // Only ever resolve inside `root`: a `..` in the request is a 404, not an
+    // escape. Serving a fixture is no reason to serve the filesystem.
+    let relative = path.trim_start_matches('/');
+    let body = if relative
+        .split('/')
+        .any(|part| part == ".." || part.is_empty())
+    {
+        None
+    } else {
+        fs::read(root.join(relative)).ok()
+    };
+
+    let response = match &body {
+        Some(bytes) => format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            bytes.len()
+        ),
+        None => {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+        }
+    };
+    if stream.write_all(response.as_bytes()).is_err() {
+        return;
+    }
+    if let Some(bytes) = body {
+        let _ = stream.write_all(&bytes);
+    }
+    let _ = stream.flush();
 }
 
 fn host_target() -> &'static str {
