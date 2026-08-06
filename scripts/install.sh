@@ -12,8 +12,9 @@
 #   curl -fsSL .../install.sh | sh -s -- --version v0.1.0 --to ~/.local/bin
 #
 # Equivalent environment variables: NOTIGNORED_VERSION, NOTIGNORED_INSTALL_DIR,
-# and NOTIGNORED_RELEASE_BASE_URL (point the download at a mirror; the checksum
-# is fetched from the same place, so only use a source you trust).
+# and NOTIGNORED_RELEASE_BASE_URL / NOTIGNORED_RELEASE_API_URL (point the
+# download and the "latest" lookup at a mirror; the checksum is fetched from the
+# same place, so only use a source you trust).
 # Set GITHUB_TOKEN to lift the GitHub API rate limit when resolving "latest".
 #
 # Covers Linux and macOS (x86_64, arm64) and Windows x86_64 under a POSIX shell
@@ -36,6 +37,7 @@ BIN_FILE="$BIN"
 # below verbatim — the test reads it.
 # ASSET_NAME_TEMPLATE: $bin-$tag-$target
 BASE_URL="${NOTIGNORED_RELEASE_BASE_URL:-https://github.com/$REPO/releases/download}"
+API_URL="${NOTIGNORED_RELEASE_API_URL:-https://api.github.com}"
 
 say() { printf '%s\n' "$*" >&2; }
 err() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -93,7 +95,7 @@ fetch() {
 }
 
 resolve_latest() {
-    api="https://api.github.com/repos/$REPO/releases/latest"
+    api="$API_URL/repos/$REPO/releases/latest"
     tmp="$WORK/latest.json"
     fetch "$api" "$tmp" \
         || err "cannot reach the GitHub API; re-run with --version vX.Y.Z to skip the lookup"

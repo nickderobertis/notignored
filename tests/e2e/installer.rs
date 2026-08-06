@@ -12,8 +12,14 @@
 //! deterministic gate has to stay offline, and the network path itself is still
 //! exercised for real.
 //!
-//! Unix only: `install.sh` is the POSIX-shell surface. Windows users take
-//! `cargo install`, which the CI install job exercises on its own.
+//! Unix only: `install.sh` is the POSIX-shell surface, and the Windows ZIP branch
+//! needs a Windows shell plus `unzip`, which the runners do not ship. The install
+//! method the README gives Windows users is `cargo install`, and the CI
+//! `install` / `install-documented` jobs exercise exactly that on windows-latest.
+// llmlint: ignore-file[changed_behavior_has_e2e] the Windows/ZIP branch of install.sh
+// cannot run on a Unix host without stubbing `uname` — which would test the stub — and
+// the documented Windows install path (`cargo install`) is covered by CI's install jobs
+// on windows-latest instead.
 #![cfg(unix)]
 
 use std::fs;
@@ -144,6 +150,18 @@ fn publish(tag: &str, corrupt_checksum: bool, with_checksum: bool) -> Release {
         .status()
         .expect("tar");
     assert!(status.success(), "could not build the fixture archive");
+
+    // The `releases/latest` document the API lookup parses, served from the same
+    // root so `NOTIGNORED_RELEASE_API_URL` can point at it.
+    let api = dir
+        .path()
+        .join("releases/repos/nickderobertis/notignored/releases");
+    fs::create_dir_all(&api).unwrap();
+    fs::write(
+        api.join("latest"),
+        format!("{{\n  \"tag_name\": \"{tag}\",\n  \"name\": \"{tag}\"\n}}\n"),
+    )
+    .unwrap();
 
     if with_checksum {
         let digest = if corrupt_checksum {
@@ -281,35 +299,103 @@ fn a_missing_release_asset_names_the_release_that_lacks_it() {
     );
 }
 
-#[test]
-fn without_a_sha256_tool_the_installer_refuses_rather_than_skipping_verification() {
-    let release = publish("v9.9.9", false, true);
-    let target = tempfile::tempdir().unwrap();
+/// The tools `install.sh` needs before it reaches the step under test. Symlinked
+/// into a scratch directory so PATH can be narrowed to exactly these — the real
+/// "this tool is missing" boundary, with no stubbing.
+const CORE_TOOLS: &[&str] = &[
+    "sh", "tar", "gzip", "gunzip", "uname", "mktemp", "rm", "find", "head", "cut", "mkdir",
+    "install", "cp", "chmod", "printf", "sed", "tr", "cat",
+];
 
-    // A PATH holding only the tools the script needs to get as far as hashing —
-    // and no hasher. This is the real "nothing can vouch for it" boundary.
+/// SHA-256 tools `install.sh` knows how to use; whichever the host has is enough.
+const HASHERS: &[&str] = &["sha256sum", "shasum", "openssl"];
+
+fn path_with(extra: &[&str]) -> tempfile::TempDir {
     let bin = tempfile::tempdir().unwrap();
-    for tool in [
-        "sh", "curl", "tar", "uname", "mktemp", "rm", "find", "head", "cut", "mkdir", "install",
-        "cp", "chmod", "printf", "sed", "tr",
-    ] {
+    for tool in CORE_TOOLS.iter().chain(extra) {
         if let Ok(found) = which(tool) {
             let _ = std::os::unix::fs::symlink(found, bin.path().join(tool));
         }
     }
+    bin
+}
 
-    let output = Command::new("sh")
+fn install_with_path(release: &Release, target: &Path, bin: &Path, args: &[&str]) -> Output {
+    Command::new("sh")
         .arg(repo_root().join("scripts/install.sh"))
-        .args([
-            "--version",
-            &release.tag,
-            "--to",
-            target.path().to_str().unwrap(),
-        ])
+        .args(["--to", target.to_str().unwrap()])
+        .args(args)
         .env("NOTIGNORED_RELEASE_BASE_URL", &release.base_url)
-        .env("PATH", bin.path())
+        .env("NOTIGNORED_RELEASE_API_URL", &release.base_url)
+        .env("PATH", bin)
         .output()
-        .expect("run install.sh");
+        .expect("run install.sh")
+}
+
+#[test]
+fn with_no_version_the_installer_resolves_the_latest_release() {
+    let release = publish("v9.9.9", false, true);
+    let target = tempfile::tempdir().unwrap();
+    let bin = path_with(&[&["curl"], HASHERS].concat());
+    let output = install_with_path(&release, target.path(), bin.path(), &[]);
+
+    let stderr = stderr_of(&output);
+    assert!(output.status.success(), "{:?}: {stderr}", output.status);
+    assert!(stderr.contains("notignored v9.9.9 installed"), "{stderr}");
+    assert!(target.path().join("notignored").exists());
+}
+
+#[test]
+fn wget_stands_in_when_curl_is_unavailable() {
+    if which("wget").is_err() {
+        panic!("wget is required to prove the installer's downloader fallback");
+    }
+    let release = publish("v9.9.9", false, true);
+    let target = tempfile::tempdir().unwrap();
+    let bin = path_with(&[&["wget"], HASHERS].concat());
+    let output = install_with_path(
+        &release,
+        target.path(),
+        bin.path(),
+        &["--version", "v9.9.9"],
+    );
+
+    let stderr = stderr_of(&output);
+    assert!(output.status.success(), "{:?}: {stderr}", output.status);
+    assert!(target.path().join("notignored").exists(), "{stderr}");
+}
+
+#[test]
+fn without_any_downloader_the_installer_says_what_to_install() {
+    let release = publish("v9.9.9", false, true);
+    let target = tempfile::tempdir().unwrap();
+    let bin = path_with(&[]);
+    let output = install_with_path(
+        &release,
+        target.path(),
+        bin.path(),
+        &["--version", "v9.9.9"],
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.status);
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("neither curl nor wget"), "{stderr}");
+    assert!(stderr.contains("install one and re-run"), "{stderr}");
+    assert!(!target.path().join("notignored").exists());
+}
+
+#[test]
+fn without_a_sha256_tool_the_installer_refuses_rather_than_skipping_verification() {
+    let release = publish("v9.9.9", false, true);
+    let target = tempfile::tempdir().unwrap();
+    // Everything the script needs to reach the hashing step — and no hasher.
+    let bin = path_with(&["curl"]);
+    let output = install_with_path(
+        &release,
+        target.path(),
+        bin.path(),
+        &["--version", "v9.9.9"],
+    );
 
     assert_eq!(output.status.code(), Some(1), "{:?}", output.status);
     let stderr = stderr_of(&output);
