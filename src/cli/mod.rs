@@ -22,7 +22,8 @@ pub const EXIT_OK: u8 = 0;
 /// `--fail-if-found` was given and at least one suppression was reported.
 pub const EXIT_FOUND: u8 = 1;
 /// The scan could not complete: a path was unreadable or a file could not be
-/// parsed as source.
+/// parsed as source. Clap exits with the same code when an argument is invalid,
+/// so 2 means "nothing was reported, and why" either way.
 pub const EXIT_ERROR: u8 = 2;
 
 /// How to render the report.
@@ -46,7 +47,8 @@ pub enum Format {
                   Exit codes:\n  \
                   0  the scan completed\n  \
                   1  --fail-if-found was given and at least one suppression was reported\n  \
-                  2  the scan could not complete (an unreadable path or file)"
+                  2  the scan could not run or could not complete (a bad argument, \
+                  or an unreadable path or file)"
 )]
 pub struct Cli {
     /// Files and/or directories to scan. Directories are walked recursively,
