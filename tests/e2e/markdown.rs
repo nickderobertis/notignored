@@ -17,7 +17,7 @@ const REPO: &str = "acme/widgets";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 /// The tools the fixtures below are written in. Scoping the run keeps the
-/// `llmlint: ignore-file[…]` footer a reason-less fixture must carry from
+/// llmlint `ignore-file` footer a reason-less fixture must carry from
 /// counting as one more finding and shifting every golden by a file.
 const TOOLS: [&str; 4] = ["eslint", "ruff", "rust", "typescript"];
 

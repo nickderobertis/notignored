@@ -193,6 +193,11 @@ pub fn js_binary(name: &str) -> PathBuf {
 /// Run the pinned eslint over `file` with exactly `rules` in play, returning its
 /// JSON result for that file.
 ///
+/// The result is attributed to `file` before anything is read out of it: ESLint
+/// answers with an array, and a report about some other file would otherwise be
+/// read as this fixture's. It names the file absolutely, so the comparison goes
+/// through [`relative_to`] like every other checker's.
+///
 /// `--no-config-lookup` keeps the developer's own `eslint.config.js` out of the
 /// result and `--rule` makes the rules under test the only ones enabled — so a
 /// pass/fail flip is caused by the suppression and nothing else. The JSON
@@ -228,11 +233,27 @@ pub fn eslint_result(file: &Path, rules: &[&str]) -> serde_json::Value {
                 String::from_utf8_lossy(&output.stdout)
             )
         });
-    results
+    let result = results
         .as_array()
         .and_then(|files| files.first())
         .cloned()
-        .unwrap_or_else(|| panic!("eslint reported nothing for {}", file.display()))
+        .unwrap_or_else(|| panic!("eslint reported nothing for {}", file.display()));
+    let directory = file.parent().expect("a fixture directory");
+    let name = file
+        .file_name()
+        .expect("a fixture file name")
+        .to_string_lossy();
+    assert_eq!(
+        relative_to(
+            directory,
+            result["filePath"]
+                .as_str()
+                .unwrap_or_else(|| panic!("eslint's result names no file: {result:#}"))
+        ),
+        name,
+        "eslint reported another file: {result:#}"
+    );
+    result
 }
 
 /// Whether the pinned eslint found any problem in `file`.
@@ -788,7 +809,7 @@ fn portable(path: &str) -> String {
 /// names `d:\x\y.py`, not `d` — and a parser that takes the first colon either
 /// loses the file or, worse, fails to recognize the line at all and reports a
 /// diagnostic-free run.
-fn split_path_field(line: &str) -> Option<(&str, &str)> {
+pub fn split_path_field(line: &str) -> Option<(&str, &str)> {
     let bytes = line.as_bytes();
     let drive = bytes.first().is_some_and(u8::is_ascii_alphabetic) && bytes.get(1) == Some(&b':');
     // Start the search past `d:` so its colon cannot be mistaken for the split.

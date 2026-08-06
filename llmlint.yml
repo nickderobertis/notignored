@@ -31,8 +31,10 @@ files:
     # re-compose, so they are generated output, not repo-authored code.
     - "oneharness.toml"
     - "scripts/setup-llmlint.sh"
-    # Resolved by `npm ci`, not written by hand: the pin that matters is the
-    # exact version in the manifest beside it.
+    # Lock files: resolved by `cargo`/`npm ci`, not written by hand. The pin that
+    # matters is the exact version in the manifest beside each one, and that
+    # manifest is judged.
+    - "Cargo.lock"
     - "tests/js-toolchain/package-lock.json"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
