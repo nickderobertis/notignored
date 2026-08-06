@@ -17,6 +17,23 @@
       }
     },
     {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "the missing reason is the point:",
+      "path": "malformed/disable_error_code_no_value.py",
+      "line": 9,
+      "end_line": 9,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
       "tool": "mypy",
       "scope": "line",
       "rules": [
@@ -216,6 +233,23 @@
       }
     },
     {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "the missing reason is the point:",
+      "path": "pyright/embedded.py",
+      "line": 9,
+      "end_line": 9,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
       "tool": "pyright",
       "scope": "file",
       "rules": [
@@ -298,6 +332,23 @@
       "suppressed": {
         "start_line": 7,
         "end_line": 7
+      }
+    },
+    {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "the missing reason is the point:",
+      "path": "ty/embedded.py",
+      "line": 9,
+      "end_line": 9,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
       }
     },
     {
