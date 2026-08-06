@@ -1,10 +1,11 @@
 //! Shared plumbing for the end-to-end journeys.
 //!
-//! Everything here resolves *real* artifacts: the compiled `notignored` binary
-//! and the pinned `ruff`, `mypy`, `pyright`, and `ty` installs, the pinned
-//! `rustc`, and real `git`. Nothing is stubbed — if a prerequisite is missing the
-//! suite fails with an actionable message rather than skipping, so a green run
-//! always means the journeys actually ran.
+//! Everything here resolves *real* artifacts: the compiled `notignored` binary,
+//! the pinned `ruff`, `mypy`, `pyright`, `ty`, `shellcheck`, and `llmlint`
+//! installs, the pinned toolchain's own `rustc` and `clippy-driver`, and real
+//! `git`. Nothing is stubbed — if a prerequisite is missing the suite fails with
+//! an actionable message rather than skipping, so a green run always means the
+//! journeys actually ran.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -41,7 +42,7 @@ pub fn pinned_version(tool: &str) -> String {
         .to_string()
 }
 
-/// The pinned `tool` binary installed by `scripts/setup-python-tools.sh`.
+/// The pinned `tool` binary installed by `just bootstrap`.
 ///
 /// Panics with the fix when it is missing or the wrong version — a parity test
 /// that silently skipped would report an unproven claim as proven.
@@ -51,30 +52,54 @@ pub fn tool_binary(tool: &str) -> PathBuf {
         venv.join(format!("bin/{tool}")),
         venv.join(format!("Scripts/{tool}.exe")),
     ];
-    let binary = candidates.iter().find(|path| path.exists()).unwrap_or_else(|| {
-        panic!(
-            "pinned {tool} not installed at {}\nACTION: run `just bootstrap` (or ./scripts/setup-python-tools.sh)",
-            venv.display()
-        )
-    });
+    let binary = candidates
+        .iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| {
+            panic!(
+                "pinned {tool} not installed at {}\nACTION: run `just bootstrap`",
+                venv.display()
+            )
+        });
 
-    let expected = pinned_version(tool);
+    let pin = pinned_version(tool);
     let output = Command::new(binary)
         .arg("--version")
         .env("PYRIGHT_PYTHON_IGNORE_WARNINGS", "1")
         .output()
         .unwrap_or_else(|error| panic!("run {tool} --version: {error}"));
-    // Tools pad the line differently (`mypy 2.3.0 (compiled: yes)`), so match
-    // the leading `<tool> <version>` token rather than the whole line.
     let reported = String::from_utf8_lossy(&output.stdout);
-    let reported = reported.lines().next().unwrap_or_default().trim();
-    let prefix = format!("{tool} {expected}");
     assert!(
-        reported == prefix || reported.starts_with(&format!("{prefix} ")),
-        "the installed {tool} reports {reported:?}, not the pinned {prefix:?}\n\
-         ACTION: re-run ./scripts/setup-python-tools.sh"
+        reports_version(&reported, &pin),
+        "the installed {tool} reports {reported:?}, not the pinned {pin:?}\n\
+         ACTION: re-run `just bootstrap`"
     );
     binary.clone()
+}
+
+/// Whether a tool's `--version` output names `pin`.
+///
+/// Tools word that output differently — `mypy 2.3.0 (compiled: yes)` pads the
+/// line, ShellCheck puts `version: 0.11.0` on a line of its own — so the pin is
+/// matched as a whole version token anywhere in the output rather than as a
+/// leading `<tool> <pin>`. A pin may also carry a packaging revision the tool
+/// itself never reports (`shellcheck-py` 0.11.0.1 ships ShellCheck 0.11.0), so
+/// its first three components count too. Both setup scripts assert the same
+/// thing, and the token boundaries are what keep 0.11.0 from matching a
+/// reported 0.11.0.2.
+fn reports_version(reported: &str, pin: &str) -> bool {
+    let short: String = pin.split('.').take(3).collect::<Vec<_>>().join(".");
+    contains_version_token(reported, pin) || contains_version_token(reported, &short)
+}
+
+/// Whether `reported` holds `wanted` bounded by something other than a digit or
+/// a dot on either side.
+fn contains_version_token(reported: &str, wanted: &str) -> bool {
+    let bounded = |ch: Option<char>| !ch.is_some_and(|c| c.is_ascii_digit() || c == '.');
+    reported.match_indices(wanted).any(|(at, _)| {
+        bounded(reported[..at].chars().next_back())
+            && bounded(reported[at + wanted.len()..].chars().next())
+    })
 }
 
 /// Run the pinned ruff over `file`, returning whether it found any violation.
@@ -233,6 +258,20 @@ fn assert_checker_ran(tool: &str, output: &std::process::Output) {
     );
 }
 
+/// Run the pinned ShellCheck over `file`, returning whether it found anything.
+///
+/// ShellCheck needs no rule selection: every fixture is written so the only
+/// finding it can produce is the one the directive under test silences, and a
+/// directive ShellCheck itself rejects shows up here as a finding too.
+pub fn shellcheck_passes(file: &Path) -> bool {
+    let output = Command::new(tool_binary("shellcheck"))
+        .arg(file)
+        .output()
+        .expect("run shellcheck");
+    assert_checker_ran("shellcheck", &output);
+    output.status.success()
+}
+
 /// The rustc version this repo pins, from `rust-toolchain.toml`.
 pub fn pinned_rustc_version() -> String {
     let path = repo_root().join("rust-toolchain.toml");
@@ -292,6 +331,76 @@ pub fn rustc_accepts(file: &Path, lints: &[&str]) -> bool {
         String::from_utf8_lossy(&output.stderr)
     );
     output.status.success()
+}
+
+/// Compile `file` with the pinned toolchain's `clippy-driver`, denying every
+/// warning, and report whether it built clean.
+///
+/// `rust-toolchain.toml` pins the toolchain and rustup reads it from the repo
+/// root, so this is the same clippy `just lint` runs — no second pin to drift.
+/// Metadata goes to a scratch directory: the fixtures are compiled to be judged,
+/// not kept.
+pub fn clippy_passes(file: &Path) -> bool {
+    let out_dir = tempfile::tempdir().expect("scratch dir for clippy output");
+    let output = Command::new("clippy-driver")
+        .current_dir(repo_root())
+        .args([
+            "--edition",
+            "2021",
+            "--crate-type",
+            "lib",
+            "--emit=metadata",
+        ])
+        .arg("--out-dir")
+        .arg(out_dir.path())
+        .arg(file)
+        .args(["-D", "warnings", "-W", "clippy::all"])
+        .output()
+        .expect("run clippy-driver (install it with `rustup component add clippy`)");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("is not installed"),
+        "clippy-driver is missing from the pinned toolchain\n\
+         ACTION: run `just bootstrap` (or `rustup component add clippy`)"
+    );
+    assert!(
+        !stderr.contains("couldn't read"),
+        "clippy-driver could not read the fixture: {stderr}"
+    );
+    output.status.success()
+}
+
+/// Run `llmlint check-ignores` over `dir` with the fixtures' own rule config,
+/// returning `(passed, output)`.
+///
+/// `check-ignores` is llmlint's deterministic, model-free gate: it validates
+/// every inline directive without a single judge call, so the parity proof costs
+/// no tokens and cannot be flaky. `-c` pins it to the fixtures' config, which is
+/// deliberately not named `llmlint.yml` so the repo's own run never discovers it.
+pub fn llmlint_check_ignores(dir: &Path) -> (bool, String) {
+    let config = fixture("llmlint-parity").join("rules.yml");
+    let output = Command::new(tool_binary("llmlint"))
+        .arg("check-ignores")
+        .arg("--cwd")
+        .arg(dir)
+        .arg("-c")
+        .arg(&config)
+        .output()
+        .expect("run llmlint check-ignores");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output
+            .status
+            .code()
+            .is_some_and(|code| code == 0 || code == 2),
+        "llmlint exited unexpectedly ({:?}): {combined}",
+        output.status
+    );
+    (output.status.success(), combined)
 }
 
 /// A `git` invocation rooted at `dir` and insulated from an ambient repository.

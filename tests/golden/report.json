@@ -51,6 +51,23 @@
       }
     },
     {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "fixture input, not production code: the bare directive above proves a blanket, reason-less suppression is reported with empty rules and a null reason (tests/golden/report.json).",
+      "path": "src/app.py",
+      "line": 13,
+      "end_line": 13,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production code: the bare directive above proves a blanket, reason-less suppression is reported with empty rules and a null reason (tests/golden/report.json).",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
       "tool": "ruff",
       "scope": "file",
       "rules": [
