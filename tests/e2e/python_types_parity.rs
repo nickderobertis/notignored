@@ -25,9 +25,16 @@ fn family_dir() -> PathBuf {
 }
 
 /// The CLI's JSON report for one fixture, with paths relative to the family root.
+///
+/// Scoped to the tools these fixtures are about: one holding the reason-less
+/// form of a directive carries an `llmlint: ignore-file[…]` footer to keep it,
+/// and that footer is this repo's own lint bookkeeping rather than a record the
+/// family asserts on. The golden report below scans unfiltered and does show it.
 fn report_for(path: &str) -> serde_json::Value {
     let output = notignored(&family_dir())
         .args([path, "--format", "json"])
+        .args(["--tool", "ruff", "--tool", "mypy"])
+        .args(["--tool", "pyright", "--tool", "ty"])
         .output()
         .expect("run notignored");
     assert!(output.status.success(), "exit: {:?}", output.status);

@@ -6,10 +6,64 @@
 
 use notignored::{tools::registry, Tool};
 
-fn readme() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
+fn source(relative: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+}
+
+/// The `fn …;` / `fn … {` lines declared directly inside `pub trait <name>`.
+fn trait_methods(source: &str, name: &str) -> Vec<String> {
+    source
+        .lines()
+        .skip_while(|line| !line.starts_with(&format!("pub trait {name}")))
+        .skip(1)
+        .take_while(|line| *line != "}")
+        .map(str::trim)
+        .filter(|line| line.starts_with("fn "))
+        .map(str::to_string)
+        .collect()
+}
+
+/// `ToolParser` is a fixed contract: a parser hands back directives and nothing
+/// else.
+///
+/// A fourth method — even a defaulted one carrying an error channel — changes
+/// what every downstream implementor is promised, so it is a deliberate contract
+/// move rather than an implementation detail. llmlint's unclosed-block errors,
+/// which an `IgnoreDirective` cannot express, ride on an inherent method on its
+/// own parser and are folded in by the scan layer instead.
+///
+/// A compile-time companion to this lives in `src/tools/mod.rs`: a minimal
+/// parser implementing exactly these three and nothing more.
+#[test]
+fn the_tool_parser_trait_declares_exactly_its_three_methods() {
+    let mod_source = source("src/tools/mod.rs");
+    assert_eq!(
+        trait_methods(&mod_source, "ToolParser"),
+        vec![
+            "fn tool(&self) -> Tool;",
+            "fn applies_to(&self, file: &SourceFile) -> bool;",
+            "fn parse(&self, file: &SourceFile) -> Vec<IgnoreDirective>;",
+        ],
+        "the ToolParser contract moved; see the note above this test"
+    );
+}
+
+/// The scan layer is where a parser's richer result is integrated, and it names
+/// the one tool that has one — so the seam stays visible instead of becoming a
+/// trait everyone pays for.
+#[test]
+fn the_scan_layer_is_where_llmlints_extra_errors_are_folded_in() {
+    let scan_source = source("src/scan.rs");
+    assert!(
+        scan_source.contains("LlmlintParser.scan(&file)"),
+        "src/scan.rs no longer collects llmlint's unclosed-block errors"
+    );
+}
+
+fn readme() -> String {
+    source("README.md")
 }
 
 /// The supported-tools table, as `(tool, row)` pairs.
@@ -76,10 +130,7 @@ fn every_registered_parser_is_a_declared_tool() {
 fn the_planned_tools_are_visibly_placeholdered_in_the_registry() {
     // The registry keeps a commented placeholder per planned tool so a follow-up
     // PR swaps one line instead of reshuffling the list.
-    let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools/mod.rs"),
-    )
-    .unwrap();
+    let source = source("src/tools/mod.rs");
     for tool in Tool::ALL.into_iter().filter(|tool| !tool.is_implemented()) {
         assert!(
             source.contains(&format!("// {}: planned", tool.as_str())),
