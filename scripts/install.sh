@@ -11,7 +11,9 @@
 # Pin a version or choose where it lands (flags win over the env vars):
 #   curl -fsSL .../install.sh | sh -s -- --version v0.1.0 --to ~/.local/bin
 #
-# Equivalent environment variables: NOTIGNORED_VERSION, NOTIGNORED_INSTALL_DIR.
+# Equivalent environment variables: NOTIGNORED_VERSION, NOTIGNORED_INSTALL_DIR,
+# and NOTIGNORED_RELEASE_BASE_URL (point the download at a mirror; the checksum
+# is fetched from the same place, so only use a source you trust).
 # Set GITHUB_TOKEN to lift the GitHub API rate limit when resolving "latest".
 #
 # Covers Linux and macOS (x86_64, arm64) and Windows x86_64 under a POSIX shell
@@ -33,7 +35,7 @@ BIN_FILE="$BIN"
 # tests/install_contract.rs fails the build when they disagree. Keep the line
 # below verbatim — the test reads it.
 # ASSET_NAME_TEMPLATE: $bin-$tag-$target
-BASE_URL="https://github.com/$REPO/releases/download"
+BASE_URL="${NOTIGNORED_RELEASE_BASE_URL:-https://github.com/$REPO/releases/download}"
 
 say() { printf '%s\n' "$*" >&2; }
 err() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -63,8 +65,8 @@ done
 
 # Map uname output onto the Rust target triples the release workflow builds.
 detect_target() {
-    os="$(uname -s)"
-    arch="$(uname -m)"
+    os="$(uname -s)" || err "cannot detect the OS (uname failed); install from source: cargo install --git https://github.com/$REPO --locked"
+    arch="$(uname -m)" || err "cannot detect the architecture (uname failed); install from source: cargo install --git https://github.com/$REPO --locked"
     case "$os" in
         Linux) suffix="unknown-linux-gnu"; EXT="tar.gz" ;;
         Darwin) suffix="apple-darwin"; EXT="tar.gz" ;;
@@ -113,7 +115,7 @@ sha256_of() {
     if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
     elif have shasum; then shasum -a 256 "$1" | cut -d' ' -f1
     elif have openssl; then openssl dgst -sha256 "$1" | sed 's/.*= *//'
-    else err "no SHA-256 tool found; install coreutils, shasum, or openssl and re-run — refusing to install unverified"
+    else say "no SHA-256 tool found; install coreutils, shasum, or openssl"; return 1
     fi
 }
 
@@ -137,7 +139,8 @@ fetch "$BASE_URL/$VERSION/$ARCHIVE.sha256" "$WORK/$ARCHIVE.sha256" \
     || err "cannot download the checksum for $ARCHIVE; refusing to install unverified — retry, or install from source: cargo install --git https://github.com/$REPO --locked"
 
 expected="$(cut -d' ' -f1 < "$WORK/$ARCHIVE.sha256")"
-actual="$(sha256_of "$WORK/$ARCHIVE")"
+actual="$(sha256_of "$WORK/$ARCHIVE")" \
+    || err "cannot compute the SHA-256 of $ARCHIVE (see above); refusing to install unverified"
 [ "$expected" = "$actual" ] \
     || err "checksum mismatch for $ARCHIVE (expected $expected, got $actual); refusing to install — retry the download, and report it at https://github.com/$REPO/issues if it persists"
 
@@ -148,7 +151,11 @@ case "$EXT" in
          unzip -q "$WORK/$ARCHIVE" -d "$WORK" || err "$extract_failed" ;;
 esac
 
-extracted="$(find "$WORK" -name "$BIN_FILE" -type f | head -n1)"
+# Not `find | head`: in a pipeline the status is head's, so a failing find would
+# be reported as "binary not found" instead of as a search failure.
+matches="$(find "$WORK" -name "$BIN_FILE" -type f)" \
+    || err "cannot search the extracted archive; re-run the installer, or install from source: cargo install --git https://github.com/$REPO --locked"
+extracted="$(printf '%s\n' "$matches" | head -n1)"
 [ -n "$extracted" ] \
     || err "$BIN_FILE not found inside $ARCHIVE; report it at https://github.com/$REPO/issues"
 

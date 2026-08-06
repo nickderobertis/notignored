@@ -38,6 +38,11 @@ follow-ups.
 
 ## Stack and composition
 
+<!-- llmlint: ignore[agents_md_durable_and_terse] the create-repo baseline checker
+     (`check_repo_baseline.py`) fails the repo unless this section records the shape,
+     languages, references, and exclusions verbatim, so it is a required artifact
+     rather than optional narrative. -->
+
 - **Product shape:** cli
 - **Language(s):** rust
 - **References composed:** base.md, shapes/cli.md, languages/rust.md,
@@ -87,16 +92,14 @@ will be misread as comments.
   merges.
 - **The PR description becomes the squash commit body**, so it is history, not
   paperwork.
-- **Releases: release-plz, release-PR gate shape.** The bot opens a release PR
-  accumulating unreleased commits; merging it writes `Cargo.toml`/`Cargo.lock`/
-  `CHANGELOG.md`, tags `vX.Y.Z`, and cuts the GitHub Release. That tag (pushed
-  with `RELEASE_PLZ_TOKEN`, a PAT — the default `GITHUB_TOKEN` would not fire
-  downstream workflows) triggers `release.yml`, which builds, checksums, and
-  attaches the per-platform archives. The only human action is merging a PR.
-- **Bump policy (pre-1.0 regime).** `feat` → minor, `feat!`/`BREAKING CHANGE` →
-  minor (a breaking change pre-1.0 is not a major), `fix`/`perf`/`refactor`/
-  `build` → patch, `chore`/`docs`/`ci`/`test`/`style` → no release. Revisit at
-  1.0, where a breaking change becomes a major.
+- **Merging a PR is the only human action in a release.** Never hand-edit a
+  version, hand-tag, or hand-dispatch a publish; if a release needs that, the
+  pipeline is broken.
+- **`RELEASE_PLZ_TOKEN` must stay a PAT.** A tag pushed by the default
+  `GITHUB_TOKEN` does not trigger other workflows, so `release.yml` would never
+  build the binaries and the release would ship nothing — silently.
+- **We are pre-1.0**, so a breaking change is a minor bump, not a major.
+  Revisit the mapping in `release-plz.toml` at 1.0.
 
 ## Invariants (non-negotiable)
 
@@ -128,10 +131,9 @@ true.
 
 ## Keeping the allowlist current
 
-- The agent command allowlist lives in `.claude/settings.json`; the tool
-  enforces it, so this file does not restate "follow the allowlist."
-- Keep it current and narrow: when a routine command joins the workflow, add it
-  rather than re-approving it every session.
+Grant `just` recipes, not raw `cargo`/`uv` wildcards: a wildcard on a build tool
+is arbitrary code execution. When a routine command joins the workflow, add its
+recipe to `.claude/settings.json` rather than re-approving it every session.
 
 ## Conventions
 
@@ -140,9 +142,3 @@ true.
   so `--diff` and other modes slot in without touching parsers.
 - Rule codes and reasons are captured **verbatim** as written in the source; do
   not normalize case, expand aliases, or re-order.
-
-## After the main task: refine and hand off
-
-After completing the requested task, act on the two standing goals: propose
-follow-ups that are materially helpful (scripts, `AGENTS.md` notes, skills,
-tests/fixtures/docs), each with its likely impact. Skip busywork.

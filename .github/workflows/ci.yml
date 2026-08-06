@@ -120,9 +120,6 @@ jobs:
       # runs, so the string users copy is proven on every platform.
       - name: Install (this revision)
         run: cargo install --path . --locked
-      - name: Install via the documented command
-        if: github.event_name == 'push'
-        run: cargo install --git https://github.com/nickderobertis/notignored --locked --force
       - name: Smoke-test the installed binary
         run: |
           notignored --version
@@ -135,6 +132,28 @@ jobs:
           code=0
           notignored "$tmp" --fail-if-found || code=$?
           [ "$code" -eq 1 ] || { echo "::error::expected exit 1, got $code"; exit 1; }
+
+  # The README's install one-liner, run verbatim. It can only resolve code that is
+  # already on the remote, so it runs on main rather than on PRs — where the
+  # `install` job above proves the same path against the branch's own revision.
+  install-documented:
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: Swatinem/rust-cache@v2
+      - name: Install (the command the README gives users)
+        run: cargo install --git https://github.com/nickderobertis/notignored --locked
+      - name: Smoke-test the installed binary
+        run: |
+          notignored --version
+          notignored --help >/dev/null
 
   # Lint the PR title: under squash-merge it becomes the release-driving commit.
   pr-title:
