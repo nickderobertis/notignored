@@ -98,6 +98,11 @@ jobs:
           archive: $bin-$tag-$target
           checksum: sha256
           include: README.md,LICENSE,CHANGELOG.md
+          # Uploading an asset to a release that already exists triggers no
+          # workflow, so the job-scoped GITHUB_TOKEN is the least privilege that
+          # does the job; a PAT here would only widen it. The PAT this pipeline
+          # does need is RELEASE_PLZ_TOKEN, which creates the tag that starts
+          # this workflow — see release-plz.yml and the note at the top.
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # crates.io publishing: runs whenever CARGO_REGISTRY_TOKEN is set. Gated on the

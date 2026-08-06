@@ -14,6 +14,7 @@ mod cli;
 mod diff;
 mod eslint_parity;
 mod installer;
+mod js_tools_setup;
 mod llmlint_parity;
 mod markdown;
 mod polyglot;

@@ -76,11 +76,11 @@ boundary — an envelope from a newer build — is rejected on deserialization.
 One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
 row in the README supported-tools table, and one directive in
 `tests/fixtures/polyglot/` (re-bless with `just bless`). Keep it to those four
-touch points so parallel branches don't conflict. The fixture is not optional
-bookkeeping: `tests/e2e/polyglot.rs` fails when a registered tool is missing
-from that tree, and it is the only place a parser that quietly stopped applying
-— a narrowed language claim, a registry line lost in a merge — shows up, because
-every other suite asks its own parser directly. Parsers consume the comments,
+touch points so parallel branches don't conflict. The fixture is not optional:
+`tests/e2e/polyglot.rs` fails when a registered tool is missing from that tree,
+and it is the only place a parser that quietly stopped applying — a narrowed
+language claim, a registry line lost in a merge — shows up, because every other
+suite asks its own parser directly. Parsers consume the comments,
 attributes, and item punctuation `src/comments.rs` extracted — never re-scan raw
 lines, or string literals will be misread as comments. Grammar shared by a
 *family* of tools lives in a private sibling module (`src/tools/python.rs` serves
@@ -110,9 +110,10 @@ the whole comment body, golden-tested at the counts the rules turn on
 (`tests/golden/markdown/`), so the composite's shell only moves bytes. Its two
 scripts are proven by *lifting them out of `action.yml`* and running them
 (`tests/e2e/action_scan.rs`, `tests/e2e/action_comment.rs`); a copy in a test
-would keep passing after the action stopped doing what it says. GitHub's API is
-the only thing stubbed — everything else is a real repository, the real binary,
-and the real `gh`.
+would keep passing after the action stopped doing what it says. Nothing is
+mocked: github.com is the one host those journeys cannot own, so `gh` talks HTTP
+to a real server they run on loopback, and everything else is a real repository,
+the real binary, and the real `gh`.
 
 Never interpolate `${{ github.event.* }}` (or an input) into a `run:` script: on
 a fork's pull request that text is attacker-controlled and `${{ }}` splices it in
@@ -224,9 +225,14 @@ genuinely has no failing exit to offer.
 
 ## Keeping the allowlist current
 
-Grant `just` recipes, not raw `cargo`/`uv` wildcards: a wildcard on a build tool
-is arbitrary code execution. When a routine command joins the workflow, add its
-recipe to `.claude/settings.json` rather than re-approving it every session.
+Grant `just` recipes, not raw `cargo`/`uv` wildcards, and grant the **exact**
+command — `allow` carries no `:*` at all. A wildcard on a build tool is
+arbitrary code execution, `just run *ARGS` interpolates its arguments into the
+shell, and a trailing wildcard on `git commit`/`switch`/`branch` is an unbounded
+write; those prompt, once each, which is the right friction on a write. `deny`
+blocks outright what the sections above already forbid: force-push,
+hand-tagging, `cargo publish`, `gh auth`/`secret`/`variable`. Add a routine
+command's exact form here rather than re-approving it every session.
 
 ## Conventions
 

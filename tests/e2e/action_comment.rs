@@ -1,11 +1,14 @@
-//! The composite action's comment step, driven against a stub GitHub API.
+//! The composite action's comment step, driven against a real local GitHub API.
 //!
-//! GitHub's API is the one boundary these journeys cannot own, so it is the one
-//! thing stubbed: the real `scripts/action/comment.sh`, the real `gh` CLI, and
-//! the real checked-in comment bodies drive a throwaway HTTP server that records
-//! exactly what the script asked it to do. What is proven here is the upsert
-//! rule — edit the marked comment when one exists, create it when none does, and
-//! post nothing at all when there is nothing to say.
+//! Nothing here is mocked. The real `scripts/action/comment.sh` runs under real
+//! bash, calls the real `gh` CLI, and reads the real checked-in comment bodies;
+//! `gh` speaks HTTP over a loopback socket to a real server this module runs,
+//! which answers the two endpoints the script uses and records every request it
+//! received. Only the *host* is local: github.com is the one boundary these
+//! journeys cannot own, so it is served here instead of reached over the
+//! network. What is proven is the upsert rule — edit the marked comment when one
+//! exists, create it when none does, and post nothing at all when there is
+//! nothing to say.
 //!
 //! POSIX-only: the composite runs bash on GitHub's Linux and macOS runners, and
 //! driving it through Git Bash on Windows would be testing the runner's path
@@ -36,22 +39,33 @@ struct Recorded {
     body: String,
 }
 
-/// A throwaway GitHub API that answers the two endpoints the script uses.
-struct StubApi {
+/// A real HTTP server on loopback, answering the two GitHub endpoints the
+/// script calls and logging what it was asked for.
+struct LocalGitHub {
     address: String,
     requests: Arc<Mutex<Vec<Recorded>>>,
     running: Arc<AtomicBool>,
     server: Option<JoinHandle<()>>,
 }
 
-impl StubApi {
-    /// Start a stub whose comment list either holds the sticky comment or does
+impl LocalGitHub {
+    /// Start a server whose comment list either holds the sticky comment or does
     /// not.
-    fn start(sticky: Option<u64>) -> StubApi {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the stub API");
+    fn start(sticky: Option<u64>) -> LocalGitHub {
+        LocalGitHub::listen(sticky, true)
+    }
+
+    /// The same server, but refusing every write the way GitHub refuses a token
+    /// without `pull-requests: write`.
+    fn refusing_writes(sticky: Option<u64>) -> LocalGitHub {
+        LocalGitHub::listen(sticky, false)
+    }
+
+    fn listen(sticky: Option<u64>, writable: bool) -> LocalGitHub {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the local API");
         let address = format!(
             "http://{}",
-            listener.local_addr().expect("the stub API address")
+            listener.local_addr().expect("the local API address")
         );
         let requests = Arc::new(Mutex::new(Vec::new()));
         let running = Arc::new(AtomicBool::new(true));
@@ -63,13 +77,14 @@ impl StubApi {
                     break;
                 }
                 let Ok(mut stream) = stream else { break };
-                // A stub that panics mid-journey would hang the client instead of
-                // failing it, so a malformed exchange just closes the connection.
-                let _ = serve(&mut stream, sticky, &log);
+                // A server that panics mid-journey would hang the client instead
+                // of failing it, so a malformed exchange just closes the
+                // connection.
+                let _ = serve(&mut stream, sticky, writable, &log);
                 let _ = stream.shutdown(Shutdown::Both);
             }
         });
-        StubApi {
+        LocalGitHub {
             address,
             requests,
             running,
@@ -91,7 +106,7 @@ impl StubApi {
     }
 }
 
-impl Drop for StubApi {
+impl Drop for LocalGitHub {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
         // Unblock the accept loop so the thread can notice and exit.
@@ -107,6 +122,7 @@ impl Drop for StubApi {
 fn serve(
     stream: &mut TcpStream,
     sticky: Option<u64>,
+    writable: bool,
     log: &Mutex<Vec<Recorded>>,
 ) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -152,11 +168,19 @@ fn serve(
                 None => r#"[{"id":5,"body":"looks good to me"}]"#.to_string(),
             },
         ),
+        (method, path)
+            if !writable && method != "GET" && (path == comments || path == sticky_comment) =>
+        {
+            (
+                "403 Forbidden",
+                r#"{"message":"Resource not accessible by integration"}"#.to_string(),
+            )
+        }
         ("POST", path) if path == comments => ("201 Created", r#"{"id":101}"#.to_string()),
         ("PATCH", path) if path == sticky_comment => ("200 OK", format!(r#"{{"id":{STICKY_ID}}}"#)),
         _ => (
             "404 Not Found",
-            r#"{"message":"the action asked for an endpoint this stub does not serve"}"#
+            r#"{"message":"the action asked for an endpoint this server does not implement"}"#
                 .to_string(),
         ),
     };
@@ -189,7 +213,7 @@ fn golden_body(count: usize) -> PathBuf {
 }
 
 /// Run the composite's comment step against `api`.
-fn comment(api: &StubApi, count: usize) -> Output {
+fn comment(api: &LocalGitHub, count: usize) -> Output {
     require_gh();
     let body = golden_body(count);
     let output = Command::new("bash")
@@ -199,9 +223,9 @@ fn comment(api: &StubApi, count: usize) -> Output {
         .env("PR_NUMBER", PULL_REQUEST)
         .env("BODY_FILE", &body)
         .env("COUNT", count.to_string())
-        .env("GH_TOKEN", "stub-token")
+        .env("GH_TOKEN", "local-token")
         // Insulate gh from the developer's own configuration and hosts file:
-        // the journey must talk to the stub and to nothing else.
+        // the journey must talk to the local server and to nothing else.
         .env("GH_CONFIG_DIR", repo_root().join("target/gh-config"))
         .env("GH_NO_UPDATE_NOTIFIER", "1")
         .env("NO_COLOR", "1")
@@ -233,7 +257,7 @@ fn posted_body(request: &Recorded) -> String {
 
 #[test]
 fn a_pull_request_with_no_comment_yet_gets_one() {
-    let api = StubApi::start(None);
+    let api = LocalGitHub::start(None);
     let output = comment(&api, 3);
 
     let writes = api.writes();
@@ -253,7 +277,7 @@ fn a_pull_request_with_no_comment_yet_gets_one() {
 
 #[test]
 fn a_second_run_edits_the_comment_the_first_one_left() {
-    let api = StubApi::start(Some(STICKY_ID));
+    let api = LocalGitHub::start(Some(STICKY_ID));
     let output = comment(&api, 3);
 
     let writes = api.writes();
@@ -275,7 +299,7 @@ fn a_second_run_edits_the_comment_the_first_one_left() {
 /// ignore it.
 #[test]
 fn a_clean_pull_request_with_no_comment_yet_is_left_alone() {
-    let api = StubApi::start(None);
+    let api = LocalGitHub::start(None);
     let output = comment(&api, 0);
 
     assert!(api.writes().is_empty(), "{:#?}", api.writes());
@@ -290,7 +314,7 @@ fn a_clean_pull_request_with_no_comment_yet_is_left_alone() {
 /// stale list stays on the page as the reviewer's last word.
 #[test]
 fn a_pull_request_that_stopped_adding_suppressions_has_its_comment_cleared() {
-    let api = StubApi::start(Some(STICKY_ID));
+    let api = LocalGitHub::start(Some(STICKY_ID));
     comment(&api, 0);
 
     let writes = api.writes();
@@ -307,14 +331,14 @@ fn a_pull_request_that_stopped_adding_suppressions_has_its_comment_cleared() {
 #[test]
 fn a_run_with_no_pull_request_posts_nothing_and_succeeds() {
     require_gh();
-    let api = StubApi::start(None);
+    let api = LocalGitHub::start(None);
     let output = Command::new("bash")
         .arg(repo_root().join("scripts/action/comment.sh"))
         .env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &api.address)
         .env("BODY_FILE", golden_body(0))
         .env("COUNT", "0")
-        .env("GH_TOKEN", "stub-token")
+        .env("GH_TOKEN", "local-token")
         .env_remove("PR_NUMBER")
         .env_remove("GITHUB_EVENT_PATH")
         .output()
@@ -334,7 +358,7 @@ fn a_run_with_no_pull_request_posts_nothing_and_succeeds() {
 #[test]
 fn the_pull_request_number_is_read_from_the_event_payload() {
     require_gh();
-    let api = StubApi::start(None);
+    let api = LocalGitHub::start(None);
     let event = tempfile::NamedTempFile::new().expect("an event payload");
     std::fs::write(
         event.path(),
@@ -349,7 +373,7 @@ fn the_pull_request_number_is_read_from_the_event_payload() {
         .env("GITHUB_EVENT_PATH", event.path())
         .env("BODY_FILE", golden_body(1))
         .env("COUNT", "1")
-        .env("GH_TOKEN", "stub-token")
+        .env("GH_TOKEN", "local-token")
         .env_remove("PR_NUMBER")
         .output()
         .expect("run comment.sh");
@@ -367,11 +391,162 @@ fn the_pull_request_number_is_read_from_the_event_payload() {
     );
 }
 
+/// An input the composite forgot to pass fails the same way a bad one does.
+///
+/// Each of these is a wiring mistake in the workflow that called the step, so
+/// the message has to name the variable *and* where its value comes from —
+/// bash's own "parameter null or not set" names only the half the reader
+/// already has.
+#[test]
+fn an_unset_input_fails_with_the_cause_and_the_fix() {
+    require_gh();
+    for missing in ["GITHUB_REPOSITORY", "BODY_FILE", "COUNT"] {
+        let api = LocalGitHub::start(None);
+        let mut command = Command::new("bash");
+        command
+            .arg(repo_root().join("scripts/action/comment.sh"))
+            .env("GITHUB_REPOSITORY", REPO)
+            .env("GITHUB_API_URL", &api.address)
+            .env("PR_NUMBER", PULL_REQUEST)
+            .env("BODY_FILE", golden_body(1))
+            .env("COUNT", "1")
+            .env("GH_TOKEN", "local-token")
+            .env_remove(missing);
+        let output = command.output().expect("run comment.sh");
+
+        assert!(
+            !output.status.success(),
+            "a run with no {missing} was accepted"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(missing), "{stderr}");
+        assert!(stderr.contains("ACTION:"), "{stderr}");
+        assert!(api.requests().is_empty(), "{:#?}", api.requests());
+    }
+}
+
+/// Run the comment step with `overrides` applied to the working environment.
+fn comment_with(api: &LocalGitHub, overrides: &[(&str, &str)]) -> Output {
+    require_gh();
+    let mut command = Command::new("bash");
+    command
+        .arg(repo_root().join("scripts/action/comment.sh"))
+        .env("GITHUB_REPOSITORY", REPO)
+        .env("GITHUB_API_URL", &api.address)
+        .env("PR_NUMBER", PULL_REQUEST)
+        .env("BODY_FILE", golden_body(1))
+        .env("COUNT", "1")
+        .env("GH_TOKEN", "local-token")
+        .env("GH_CONFIG_DIR", repo_root().join("target/gh-config"))
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("GITHUB_EVENT_PATH");
+    for (name, value) in overrides {
+        command.env(name, value);
+    }
+    command.output().expect("run comment.sh")
+}
+
+/// Assert the step failed naming `cause`, with a next action, having changed
+/// nothing.
+fn assert_failed(output: &Output, api: &LocalGitHub, cause: &str) {
+    assert!(
+        !output.status.success(),
+        "the step accepted it: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(cause), "{stderr}");
+    assert!(stderr.contains("ACTION:"), "{stderr}");
+    assert!(api.writes().is_empty(), "{:#?}", api.requests());
+}
+
+/// The API refusing the call is the failure this action actually has in the
+/// field, and `gh` reports the status without saying which knob fixes it.
+///
+/// Both writes are covered: the token is refused whether the pull request has a
+/// sticky comment to edit or needs its first one.
+#[test]
+fn an_api_that_refuses_the_write_names_the_permission_to_grant() {
+    for (sticky, cause) in [
+        (
+            Some(STICKY_ID),
+            format!("cannot update comment {STICKY_ID}"),
+        ),
+        (None, format!("cannot comment on #{PULL_REQUEST}")),
+    ] {
+        let api = LocalGitHub::refusing_writes(sticky);
+        let output = comment_with(&api, &[]);
+        assert!(!output.status.success(), "a refused write was accepted");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(&cause), "{stderr}");
+        assert!(stderr.contains("pull-requests: write"), "{stderr}");
+    }
+}
+
+/// A read the token cannot make is the same failure one step earlier.
+#[test]
+fn an_api_that_refuses_the_read_names_the_permission_to_grant() {
+    let api = LocalGitHub::start(None);
+    // A repository this server does not serve answers 404, which is what a token
+    // that cannot see the pull request gets too.
+    let output = comment_with(&api, &[("GITHUB_REPOSITORY", "acme/not-served")]);
+    assert_failed(&output, &api, "cannot list the comments");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("pull-requests: write"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The two values that are interpolated into an API path are bounded to their
+/// documented shapes, so a mis-wired workflow cannot aim the request elsewhere.
+#[test]
+fn an_input_that_would_redirect_the_request_is_refused() {
+    let api = LocalGitHub::start(None);
+    for (name, value, cause) in [
+        (
+            "GITHUB_REPOSITORY",
+            "acme/widgets/../../evil",
+            "not owner/repo",
+        ),
+        ("GITHUB_REPOSITORY", "widgets", "not owner/repo"),
+        // A character outside the slug's alphabet would truncate or redirect
+        // the path it is interpolated into.
+        ("GITHUB_REPOSITORY", "acme/widgets?x=1", "not owner/repo"),
+        (
+            "GITHUB_API_URL",
+            "file:///etc/passwd",
+            "not an http(s) origin",
+        ),
+    ] {
+        let output = comment_with(&api, &[(name, value)]);
+        assert_failed(&output, &api, cause);
+    }
+}
+
+/// The event payload is read as data, and data can be malformed.
+#[test]
+fn an_unreadable_event_payload_fails_with_the_fix() {
+    let api = LocalGitHub::start(None);
+    let event = tempfile::NamedTempFile::new().expect("an event payload");
+    std::fs::write(event.path(), "{not json").expect("write the event payload");
+
+    let output = comment_with(
+        &api,
+        &[
+            ("PR_NUMBER", ""),
+            ("GITHUB_EVENT_PATH", &event.path().to_string_lossy()),
+        ],
+    );
+    assert_failed(&output, &api, "cannot read the pull request number");
+}
+
 /// A body that never got written is a broken run, not an empty comment.
 #[test]
 fn a_missing_body_file_fails_with_the_fix() {
     require_gh();
-    let api = StubApi::start(None);
+    let api = LocalGitHub::start(None);
     let output = Command::new("bash")
         .arg(repo_root().join("scripts/action/comment.sh"))
         .env("GITHUB_REPOSITORY", REPO)
@@ -379,7 +554,7 @@ fn a_missing_body_file_fails_with_the_fix() {
         .env("PR_NUMBER", PULL_REQUEST)
         .env("BODY_FILE", repo_root().join("target/does-not-exist.md"))
         .env("COUNT", "1")
-        .env("GH_TOKEN", "stub-token")
+        .env("GH_TOKEN", "local-token")
         .output()
         .expect("run comment.sh");
 

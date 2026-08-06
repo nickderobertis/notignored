@@ -33,8 +33,16 @@ if [ -d "$VENV/node_modules" ] \
   exit 0
 fi
 
-mkdir -p "$VENV"
-cp "$MANIFEST/package.json" "$MANIFEST/package-lock.json" "$VENV/"
+mkdir -p "$VENV" || {
+  echo "setup-js: cannot create $ROOT/$VENV" >&2
+  echo "ACTION: check the directory is writable (or remove a stale file at that path), then re-run 'just setup-js'" >&2
+  exit 1
+}
+cp "$MANIFEST/package.json" "$MANIFEST/package-lock.json" "$VENV/" || {
+  echo "setup-js: cannot copy the pinned manifest from $MANIFEST into $ROOT/$VENV" >&2
+  echo "ACTION: check that tests/js-toolchain/package.json and package-lock.json exist, then re-run 'just setup-js'" >&2
+  exit 1
+}
 # --ignore-scripts: nothing in this tree needs a postinstall, and the pinned
 # linters are dev inputs, not code we run in production. Least privilege.
 if ! (cd "$VENV" && npm ci --silent --no-audit --no-fund --ignore-scripts); then
