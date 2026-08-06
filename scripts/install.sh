@@ -117,7 +117,7 @@ sha256_of() {
     fi
 }
 
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d)" || err "cannot create a temporary directory; free space in \$TMPDIR and re-run"
 trap 'rm -rf "$WORK"' EXIT
 
 detect_target

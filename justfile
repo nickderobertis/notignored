@@ -46,7 +46,7 @@ fmt-check:
 
 # Format the codebase in place.
 format:
-    cargo fmt --all
+    @cargo fmt --all
 
 # Lint with clippy; any warning is an error.
 lint:

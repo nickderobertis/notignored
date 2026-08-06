@@ -15,7 +15,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PIN="$(tr -d '[:space:]' < .ruff-version)"
+PIN="$(tr -d '[:space:]' < .ruff-version)" || {
+  echo "setup-ruff: cannot read $ROOT/.ruff-version" >&2
+  echo "ACTION: restore it from git ('git checkout -- .ruff-version')" >&2
+  exit 1
+}
 # `.ruff-version` feeds a package requirement, so validate its shape before use
 # rather than letting arbitrary file contents reach the resolver.
 # Exactly three numeric components: a glob alone would let `1.2.3.4` — or a
@@ -44,7 +48,11 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-rm -rf "$VENV"
+rm -rf "$VENV" || {
+  echo "setup-ruff: cannot remove the stale venv at $ROOT/$VENV" >&2
+  echo "ACTION: delete it by hand (it may be in use), then re-run 'just setup-ruff'" >&2
+  exit 1
+}
 uv venv --quiet "$VENV" || {
   echo "setup-ruff: cannot create the venv at $VENV" >&2
   echo "ACTION: check disk space and that 'uv --version' works, then re-run 'just setup-ruff'" >&2
