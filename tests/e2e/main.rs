@@ -7,4 +7,5 @@
 mod support;
 
 mod cli;
+mod ruff_grammar;
 mod ruff_parity;

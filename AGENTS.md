@@ -61,6 +61,11 @@ or the envelope shape unilaterally: bump `REPORT_VERSION` and update
 `tests/golden/` in the same change. `tests/schema.rs` locks the serialized shape.
 New fields must be optional, round-trip, and be omitted when empty.
 
+The 1-based coordinates stay plain `u32` with public fields rather than newtypes:
+the record is what every parser dispatch builds against, and the extractor's
+cursor cannot emit a zero. The invariant that *is* enforceable at a trust
+boundary — an envelope from a newer build — is rejected on deserialization.
+
 ## Adding a tool parser
 
 One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
@@ -80,8 +85,8 @@ will be misread as comments.
   contexts by name, so adding a job means re-running the create-repo skill's
   `setup_github_governance.py` with the new context — otherwise a red run still
   merges.
-- **PRs follow the template** (`.github/pull_request_template.md`): terse
-  **What** and **Why**. It becomes the squash commit body.
+- **The PR description becomes the squash commit body**, so it is history, not
+  paperwork.
 - **Releases: release-plz, release-PR gate shape.** The bot opens a release PR
   accumulating unreleased commits; merging it writes `Cargo.toml`/`Cargo.lock`/
   `CHANGELOG.md`, tags `vX.Y.Z`, and cuts the GitHub Release. That tag (pushed

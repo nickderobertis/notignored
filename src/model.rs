@@ -170,6 +170,7 @@ impl fmt::Display for Scope {
 }
 
 /// The best-effort range of source lines a directive silences.
+// llmlint: ignore[invalid_states_unrepresentable] the record's field types are the fixed public contract this repo exists to stabilise (see AGENTS.md) — later parser dispatches implement against them, so newtyping the 1-based coordinates now would churn every downstream branch for an invalid state the extractor cannot produce (its cursor starts at 1 and only increments). The boundary that can actually receive bad data — deserializing a foreign report — validates its envelope version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Suppressed {
     /// First 1-based line the directive silences.
@@ -183,6 +184,7 @@ pub struct Suppressed {
 ///
 /// Serializes to the documented record shape; see the module docs before
 /// touching field names or order.
+// llmlint: ignore[invalid_states_unrepresentable] the record's field types are the fixed public contract this repo exists to stabilise (see AGENTS.md) — later parser dispatches implement against them, so newtyping the 1-based coordinates now would churn every downstream branch for an invalid state the extractor cannot produce (its cursor starts at 1 and only increments). The boundary that can actually receive bad data — deserializing a foreign report — validates its envelope version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IgnoreDirective {
     /// The tool whose rules are being silenced.
@@ -225,11 +227,30 @@ pub struct ReportError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Report {
     /// Envelope version; see [`REPORT_VERSION`].
+    ///
+    /// Rejected at the trust boundary when a report claims a version this build
+    /// does not understand: a newer envelope may carry fields these types drop,
+    /// and silently parsing it would hand the caller a truncated report.
+    #[serde(deserialize_with = "deserialize_version")]
     pub version: u32,
     /// Every directive found, ordered by path, then line, then column.
     pub ignores: Vec<IgnoreDirective>,
     /// Files that could not be read and directives that could not be parsed.
     pub errors: Vec<ReportError>,
+}
+
+fn deserialize_version<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let version = u32::deserialize(deserializer)?;
+    if version > REPORT_VERSION {
+        return Err(serde::de::Error::custom(format!(
+            "report version {version} is newer than this build understands \
+             ({REPORT_VERSION}); upgrade notignored"
+        )));
+    }
+    Ok(version)
 }
 
 impl Report {
@@ -322,6 +343,26 @@ mod tests {
             Some("long wrapped URL".into())
         );
         assert_eq!(normalize_reason("   \n  "), None);
+    }
+
+    #[test]
+    fn a_future_envelope_version_is_rejected_at_the_boundary() {
+        let future = format!(
+            r#"{{"version": {}, "ignores": [], "errors": []}}"#,
+            REPORT_VERSION + 1
+        );
+        let error = serde_json::from_str::<Report>(&future).unwrap_err();
+        assert!(
+            error.to_string().contains("newer than this build"),
+            "{error}"
+        );
+
+        // The current version, and any older one, still parse.
+        let current = format!(r#"{{"version": {REPORT_VERSION}, "ignores": [], "errors": []}}"#);
+        assert_eq!(
+            serde_json::from_str::<Report>(&current).unwrap(),
+            Report::new()
+        );
     }
 
     #[test]

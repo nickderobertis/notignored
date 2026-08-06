@@ -243,6 +243,27 @@ fn a_consumer_that_stops_reading_does_not_fail_the_scan() {
     );
 }
 
+/// A genuine write failure (not a closed pipe) must exit 2 and say why —
+/// `/dev/full` is the real ENOSPC a full disk would produce.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_stdout_that_cannot_be_written_exits_two_with_the_reason() {
+    let full = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("open /dev/full");
+    let output = notignored(&tree())
+        .args(["--format", "json"])
+        .stdout(full)
+        .output()
+        .expect("run notignored");
+
+    assert_eq!(output.status.code(), Some(2), "{:?}", output.status);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("cannot write report"), "{stderr}");
+    assert!(stderr.contains("No space left on device"), "{stderr}");
+}
+
 #[test]
 fn an_unknown_tool_name_is_rejected_before_any_scanning() {
     let dir = tempfile::tempdir().unwrap();

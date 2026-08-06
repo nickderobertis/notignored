@@ -121,8 +121,14 @@ jobs:
       - name: Install the toolchain pinned in rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - name: Install (recommended end-user method)
+      # On a PR, the change is not on the remote yet, so `--path .` is the only
+      # way to install *this* revision; on main the literal documented command
+      # runs, so the string users copy is proven on every platform.
+      - name: Install (this revision)
         run: cargo install --path . --locked
+      - name: Install via the documented command
+        if: github.event_name == 'push'
+        run: cargo install --git https://github.com/nickderobertis/notignored --locked --force
       - name: Smoke-test the installed binary
         run: |
           notignored --version
@@ -160,6 +166,14 @@ jobs:
           fetch-depth: 0
       - uses: extractions/setup-just@v3
       - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # oneharness.toml's primary harness. Without a harness binary on PATH,
+      # llmlint has nothing to drive and the job would fail with no findings —
+      # which reads like a clean run.
+      - name: Install the Codex harness
+        run: npm install -g @openai/codex
       - name: Install llmlint toolchain
         run: just setup-llmlint
       - name: Validate llmlint config
