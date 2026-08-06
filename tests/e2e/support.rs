@@ -455,11 +455,33 @@ fn ty_diagnostic_path(line: &str) -> Option<&str> {
 }
 
 /// Which of `targets` the pinned pyright still reports a diagnostic in.
+pub fn pyright_failures(cwd: &Path, project: &str, targets: &[&str]) -> Vec<String> {
+    let mut found: Vec<String> = pyright_diagnostics(cwd, project, targets)
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// Every diagnostic the pinned pyright emits for `targets`, as
+/// `(cwd-relative path, rule, 1-based line)`.
+///
+/// Exit status cannot discriminate a rule override pyright *applies* while
+/// faulting where it was written: the file fails either way. What separates the
+/// two is which diagnostics remain, so that journey asserts on them directly.
 ///
 /// `--outputjson` is what makes this parseable *and* silent: the wrapper skips
 /// its "a newer pyright exists" notice — and the PyPI lookup behind it — whenever
-/// the output has to be machine-readable.
-pub fn pyright_failures(cwd: &Path, project: &str, targets: &[&str]) -> Vec<String> {
+/// the output has to be machine-readable. Pyright always names a file
+/// absolutely, so each path goes through [`relative_to`] like every other
+/// checker's.
+pub fn pyright_diagnostics(
+    cwd: &Path,
+    project: &str,
+    targets: &[&str],
+) -> Vec<(String, Option<String>, u64)> {
     let output = Command::new(tool_binary("pyright"))
         .current_dir(cwd)
         .env("PYRIGHT_PYTHON_IGNORE_WARNINGS", "1")
@@ -475,13 +497,29 @@ pub fn pyright_failures(cwd: &Path, project: &str, targets: &[&str]) -> Vec<Stri
                 String::from_utf8_lossy(&output.stderr)
             )
         });
-    let diagnostics = report["generalDiagnostics"]
+    // The absolute paths pyright emits are already symlink-resolved, so the root
+    // has to be too or nothing lines up.
+    let root = cwd
+        .canonicalize()
+        .unwrap_or_else(|error| panic!("canonical checker root {}: {error}", cwd.display()));
+    report["generalDiagnostics"]
         .as_array()
         .expect("pyright reports generalDiagnostics")
         .iter()
-        .map(|diagnostic| diagnostic["file"].as_str().expect("a diagnostic file"))
-        .collect::<Vec<_>>();
-    collect_paths(cwd, diagnostics.into_iter())
+        .map(|diagnostic| {
+            (
+                relative_to(
+                    &root,
+                    diagnostic["file"].as_str().expect("a diagnostic file"),
+                ),
+                diagnostic["rule"].as_str().map(str::to_string),
+                diagnostic["range"]["start"]["line"]
+                    .as_u64()
+                    .expect("a diagnostic line")
+                    + 1,
+            )
+        })
+        .collect()
 }
 
 /// A checker that could not run at all must fail the test, not read as a clean

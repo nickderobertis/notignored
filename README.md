@@ -212,7 +212,7 @@ The `json` format emits the full report envelope:
 | `ruff` | `# noqa`, `# noqa: E501, F401`, `# ruff: noqa`, `# ruff: noqa: E501` | **Supported** |
 | `typescript` | `// @ts-ignore`, `// @ts-expect-error reason`, `/* @ts-ignore */`, `// @ts-nocheck` | **Supported** |
 | `mypy` | `# type: ignore`, `# type: ignore[arg-type, index]`, `# mypy: ignore-errors`, `# mypy: disable-error-code="arg-type"` | **Supported** |
-| `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]` | **Supported** |
+| `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]`, `# pyright: reportMissingImports=false` | **Supported** |
 | `ty` | `# ty: ignore`, `# ty: ignore[invalid-argument-type]` | **Supported** |
 | `rust` | `#[allow(dead_code)]`, `#[allow(clippy::needless_collect, dead_code)]`, `#[expect(dead_code, reason = "…")]`, `#![allow(…)]`, `#![expect(…, reason = "…")]` | **Supported** |
 | `shellcheck` | `# shellcheck disable=SC2086`, `# shellcheck disable=SC2086,SC2046`, `# shellcheck disable=SC2000-SC2100`, `# shellcheck disable=all`, `# shellcheck disable=SC2086  # reason` | **Supported** |
@@ -251,9 +251,10 @@ if a row here and the registered parsers disagree.
 
 ## Where a directive reaches, and who honours it
 
-Every `# type: ignore` and `# pyright: ignore` is `line`-scoped; mypy's
-module-wide exemptions are the two `# mypy:` config comments; and for ty, where
-the comment sits is the scope:
+Every `# type: ignore` and `# pyright: ignore` is `line`-scoped; the module-wide
+forms are mypy's two `# mypy:` config comments and pyright's rule override; for
+ty, where the comment sits is the scope; and a Rust attribute reaches to the end
+of the item it annotates:
 
 | Source | Reported as |
 | --- | --- |
@@ -261,9 +262,26 @@ the comment sits is the scope:
 | `# mypy: ignore-errors` on its own line | `mypy`, `file` |
 | `# mypy: disable-error-code="arg-type"` on its own line | `mypy`, `file` |
 | `f(x)  # pyright: ignore` | `pyright`, `line` |
+| `# pyright: reportMissingImports=false` | `pyright`, `file` |
 | `f(x)  # ty: ignore` | `ty`, `line` |
 | `# ty: ignore` above every statement | `ty`, `file` |
 | `# ty: ignore` on its own line in the body | `ty`, `next-line` |
+| `#[allow(dead_code)]` above an item | `rust`, `next-line`, `suppressed` through the item's last line |
+| `#[expect(dead_code, reason = "…")]` above an item | `rust`, `next-line`, `reason` from the attribute |
+| `#![allow(dead_code)]` at the top of the file | `rust`, `file` |
+
+A Rust attribute's `scope` is `next-line` — that is where the item it annotates
+starts, and where a reviewer has to look — while its `suppressed` range covers
+the whole item, however many lines that item runs to. An inner `#![…]` attribute
+exempts the file it opens.
+
+Pyright's `<rule>=<value>` override is reported only for the two values that
+switch a rule off, `false` and `none`; `true`, `error`, `warning`, and
+`information` turn a rule on or move its severity, so they are configuration
+rather than suppression. Pyright reads the rest of that line as its own item
+list, so the form can carry no reason — and a comment it refuses (a trailing
+`# why`, a value outside those six, or a directive that does not open the
+comment) silences nothing and is not reported.
 
 Several tools honour a directive they did not invent: pyright and ty both act on
 mypy's `# type: ignore`, and ruff, pyright, and ty all act on one that does not
