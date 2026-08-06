@@ -33,7 +33,8 @@ bootstrap:
     @just _ensure-tool cargo-nextest
     @just _ensure-tool cargo-llvm-cov
     @cargo fetch --locked --quiet
-    @bash scripts/setup-parity-tools.sh
+    @bash scripts/setup-ruff.sh
+    @bash scripts/setup-misc-tools.sh
 
 # These are test runners, not rules: their version cannot change the gate's
 # verdict, so both here and CI take the latest rather than keeping two pins that
@@ -87,13 +88,18 @@ doc:
 run *ARGS:
     cargo run --locked --quiet -- {{ARGS}}
 
-# Install the pinned linters the e2e parity suite drives (also run by `bootstrap`).
-setup-parity-tools:
-    @bash scripts/setup-parity-tools.sh
+# Install the pinned ruff the e2e parity suite drives (also run by `bootstrap`).
+setup-ruff:
+    @bash scripts/setup-ruff.sh
+
+# Install the pinned shellcheck/llmlint the e2e parity suites drive (also run by
+# `bootstrap`). Rust needs no pin here — `rust-toolchain.toml` is the one source.
+setup-misc-tools:
+    @bash scripts/setup-misc-tools.sh
 
 # Only after reviewing the diff — and bump REPORT_VERSION when the shape, not
 # just the data, moved.
-# Rewrite the checked-in golden report from the current output.
+# Rewrite the checked-in golden reports from the current output.
 bless:
     @NOTIGNORED_BLESS=1 cargo test --quiet --locked --test e2e json_format
 

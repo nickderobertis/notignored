@@ -41,7 +41,7 @@ pub fn pinned_version(tool: &str) -> String {
         .to_string()
 }
 
-/// A pinned linter installed by `scripts/setup-parity-tools.sh`.
+/// A pinned linter installed by `just bootstrap`.
 ///
 /// Panics with the fix when it is missing or the wrong version — a parity test
 /// that silently skipped would report an unproven claim as proven. The reported
@@ -60,7 +60,7 @@ pub fn pinned_binary(tool: &str) -> PathBuf {
         .unwrap_or_else(|| {
             panic!(
                 "pinned {tool} not installed at {}\n\
-                 ACTION: run `just bootstrap` (or ./scripts/setup-parity-tools.sh)",
+                 ACTION: run `just bootstrap`",
                 venv.display()
             )
         });
@@ -75,7 +75,7 @@ pub fn pinned_binary(tool: &str) -> PathBuf {
     assert!(
         reported.contains(&pin) || reported.contains(&short),
         "the installed {tool} is not the pinned {pin} but {reported:?}\n\
-         ACTION: re-run ./scripts/setup-parity-tools.sh"
+         ACTION: re-run `just bootstrap`"
     );
     binary.clone()
 }

@@ -131,10 +131,14 @@ result as an *inherent* method on its own parser — `LlmlintParser::scan` — w
 A parser is unproven until an e2e drives the **real** tool over a fixture and
 shows it *fails* without the suppression and *passes* with it, while notignored
 reports exactly that suppression. `tests/e2e/ruff_parity.rs` is the shape to
-copy; every tool is pinned (`.<tool>-version` +
-`scripts/setup-parity-tools.sh`, or `rust-toolchain.toml` for clippy) so the
+copy; every tool is pinned — a `.<tool>-version` file plus the `scripts/setup-*`
+installer `just bootstrap` runs, or `rust-toolchain.toml` for clippy — so the
 proof is reproducible. Coverage (95%, enforced) is a floor that a mocked suite
 could also clear — parity is what makes the claim true.
+
+One installer per tool family, each owning its own pins: renaming or folding one
+into another collides with whatever branch owns the other family. A new tool
+joins the family whose installer already speaks its packaging.
 
 A tool with no pass/fail verdict to compare against still owes agreement on the
 directive set: llmlint's parity runs `llmlint check-ignores`, its deterministic
