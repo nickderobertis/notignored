@@ -100,41 +100,17 @@ fn the_readme_table_lists_every_tool_exactly_once() {
     );
 }
 
+/// The registry and the contract name the same tools, in the same order.
+///
+/// Both directions matter: a parser missing from [`Tool::ALL`] cannot be asked
+/// for by `--tool` or spelled in a report, and a declared tool with no parser is
+/// a `--tool` value that reports nothing while the README says it is supported.
 #[test]
-fn the_readme_marks_unimplemented_tools_as_planned() {
-    let readme = readme();
-    for (name, row) in table_rows(&readme) {
-        let tool: Tool = name.parse().expect("a README row names a real tool");
-        let says_planned = row.to_lowercase().contains("planned");
-        assert_eq!(
-            says_planned,
-            !tool.is_implemented(),
-            "README row for `{name}` disagrees with the registry: {row}"
-        );
-    }
-}
-
-#[test]
-fn every_registered_parser_is_a_declared_tool() {
-    for parser in registry() {
-        assert!(
-            Tool::ALL.contains(&parser.tool()),
-            "{} is registered but missing from Tool::ALL",
-            parser.tool()
-        );
-        assert!(parser.tool().is_implemented());
-    }
-}
-
-#[test]
-fn the_planned_tools_are_visibly_placeholdered_in_the_registry() {
-    // The registry keeps a commented placeholder per planned tool so a follow-up
-    // PR swaps one line instead of reshuffling the list.
-    let source = source("src/tools/mod.rs");
-    for tool in Tool::ALL.into_iter().filter(|tool| !tool.is_implemented()) {
-        assert!(
-            source.contains(&format!("// {}: planned", tool.as_str())),
-            "src/tools/mod.rs has no placeholder line for the planned tool `{tool}`"
-        );
-    }
+fn every_declared_tool_has_exactly_one_registered_parser() {
+    let registered: Vec<Tool> = registry().iter().map(|parser| parser.tool()).collect();
+    assert_eq!(
+        registered,
+        Tool::ALL.to_vec(),
+        "the registry and Tool::ALL disagree about the tool set or its order"
+    );
 }
