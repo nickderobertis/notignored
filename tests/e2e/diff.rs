@@ -623,3 +623,43 @@ fn the_diff_json_matches_the_checked_in_golden_report() {
          NOTIGNORED_BLESS=1 and bump REPORT_VERSION when the shape (not just the data) moved."
     );
 }
+
+/// `--diff` from inside a git hook reads the repository it was pointed at, not
+/// the one the hook fired in.
+///
+/// Every hook runs with `GIT_DIR` exported, and `pre-push` adds `GIT_INDEX_FILE`;
+/// neither is outranked by the `-C` this tool passes. Inherited, they answered
+/// for the *hook's* repository — so a pre-push gate or a CI step git itself
+/// invoked would compare a tree nobody asked about and report its suppressions
+/// as this change's. The variables are set on the child alone, the way git sets
+/// them, so nothing here depends on the test process's own environment.
+#[test]
+fn a_diff_run_from_inside_a_git_hook_still_reads_the_repository_it_was_given() {
+    let hooks_repo = git_repo();
+    let elsewhere = hooks_repo.path();
+    write(elsewhere, "elsewhere.py", "other = 1  # noqa: E501\n");
+    commit(elsewhere, "a repository this run must not read");
+
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "value = 1\n");
+    commit(root, "baseline");
+    write(root, "app.py", "value = 1\nimport os  # noqa: F401\n");
+
+    let output = notignored(root)
+        .args(["--diff", "--format", "json"])
+        // Exactly what git exports to a `pre-push` hook running in `elsewhere`.
+        .env("GIT_DIR", elsewhere.join(".git"))
+        .env("GIT_INDEX_FILE", elsewhere.join(".git/index"))
+        .env("GIT_PREFIX", "")
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(reported(&output.stdout), vec!["app.py:2 F401"]);
+}

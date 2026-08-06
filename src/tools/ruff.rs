@@ -13,7 +13,9 @@
 //! `noqa` is matched case-insensitively and need not start the comment — ruff
 //! honours `# type: ignore  # noqa: E501`, and so do we, reporting the span of
 //! the inner `#` that opened the directive. Any trailing `# …` after the codes
-//! is captured as the [`reason`](crate::model::IgnoreDirective::reason).
+//! is captured as the [`reason`](crate::model::IgnoreDirective::reason), up to
+//! the next tool's directive: on a shared line each record covers its own
+//! directive only (see `src/tools/python.rs::segments`).
 //!
 //! A directive whose codes don't parse (`# noqa:` with nothing after it) is
 //! reported as a **blanket** suppression rather than dropped: the author plainly
@@ -22,6 +24,7 @@
 
 use crate::model::{normalize_reason, IgnoreDirective, Scope, Suppressed, Tool};
 use crate::source::{Language, SourceFile};
+use crate::tools::python;
 use crate::tools::ToolParser;
 
 /// Parses ruff's `# noqa` family out of Python sources.
@@ -40,34 +43,26 @@ impl ToolParser for RuffParser {
     fn parse(&self, file: &SourceFile) -> Vec<IgnoreDirective> {
         let mut out = Vec::new();
         for comment in file.comments() {
-            // Python has no block comments, so a comment never spans lines and
-            // the column arithmetic below stays on one line.
-            for (char_offset, (byte_offset, ch)) in comment.raw.char_indices().enumerate() {
-                if ch != '#' {
-                    continue;
-                }
-                let Some((scope, rest)) = directive_at(&comment.raw[byte_offset + 1..]) else {
-                    continue;
-                };
-                let (rules, reason) = rules_and_reason(rest);
-                let column = comment
-                    .column
-                    .saturating_add(u32::try_from(char_offset).unwrap_or(u32::MAX));
-                out.push(IgnoreDirective {
-                    tool: Tool::Ruff,
-                    scope,
-                    rules,
-                    reason,
-                    path: file.display_path().to_string(),
-                    line: comment.line,
-                    end_line: comment.end_line,
-                    column,
-                    raw: comment.raw[byte_offset..].to_string(),
-                    suppressed: suppressed_range(scope, comment.line),
-                });
-                // Ruff honours at most one directive per comment.
-                break;
-            }
+            // Ruff honours at most one directive per comment.
+            let found = python::segments(comment).into_iter().find_map(|segment| {
+                directive_at(segment.after_hash).map(|parsed| (segment, parsed))
+            });
+            let Some((segment, (scope, rest))) = found else {
+                continue;
+            };
+            let (rules, reason) = rules_and_reason(rest);
+            out.push(IgnoreDirective {
+                tool: Tool::Ruff,
+                scope,
+                rules,
+                reason,
+                path: file.display_path().to_string(),
+                line: comment.line,
+                end_line: comment.end_line,
+                column: segment.column,
+                raw: segment.raw.to_string(),
+                suppressed: suppressed_range(scope, comment.line),
+            });
         }
         out
     }
@@ -85,6 +80,14 @@ fn suppressed_range(scope: Scope, line: u32) -> Suppressed {
             end_line: Some(line),
         },
     }
+}
+
+/// True when the text after a `#` opens a ruff directive.
+///
+/// The shared segment scan uses this to bound the run before it; see
+/// `src/tools/python.rs::segments`.
+pub(super) fn opens_directive(after_hash: &str) -> bool {
+    directive_at(after_hash).is_some()
 }
 
 /// Recognize a directive immediately after a `#`, returning its scope and the

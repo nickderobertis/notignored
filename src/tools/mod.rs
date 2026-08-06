@@ -11,8 +11,13 @@
 use crate::model::{IgnoreDirective, Tool};
 use crate::source::SourceFile;
 
+mod python;
+
+pub mod mypy;
+pub mod pyright;
 pub mod ruff;
 pub mod rust;
+pub mod ty;
 
 /// Turns one tool's suppression syntax into [`IgnoreDirective`] records.
 pub trait ToolParser: Send + Sync {
@@ -42,9 +47,9 @@ pub fn registry() -> Vec<Box<dyn ToolParser>> {
         // biome: planned — `// biome-ignore lint/suspicious/noAny: reason`
         Box::new(ruff::RuffParser),
         // typescript: planned — `// @ts-expect-error reason`
-        // mypy: planned — `# type: ignore[arg-type]  # reason`
-        // pyright: planned — `# pyright: ignore[reportAny]`
-        // ty: planned — `# ty: ignore[unresolved-import]`
+        Box::new(mypy::MypyParser),
+        Box::new(pyright::PyrightParser),
+        Box::new(ty::TyParser),
         Box::new(rust::RustParser),
         // shellcheck: planned — `# shellcheck disable=SC2086  # reason`
         // llmlint: planned — its inline `ignore[rule] reason` directive
@@ -74,7 +79,10 @@ mod tests {
             tools.len(),
             "a tool is registered twice: {tools:?}"
         );
-        assert_eq!(tools, vec![Tool::Ruff, Tool::Rust]);
+        assert_eq!(
+            tools,
+            vec![Tool::Ruff, Tool::Mypy, Tool::Pyright, Tool::Ty, Tool::Rust]
+        );
     }
 
     #[test]
@@ -89,6 +97,7 @@ mod tests {
     fn filtering_selects_the_named_tools_only() {
         assert_eq!(registry_for(&[]).len(), registry().len());
         assert_eq!(registry_for(&[Tool::Ruff]).len(), 1);
+        assert_eq!(registry_for(&[Tool::Mypy, Tool::Ty]).len(), 2);
         assert!(registry_for(&[Tool::Eslint]).is_empty());
     }
 }

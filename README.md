@@ -146,9 +146,9 @@ The `json` format emits the full report envelope:
 | `biome` | `// biome-ignore lint/group/rule: reason` | Planned |
 | `ruff` | `# noqa`, `# noqa: E501, F401`, `# ruff: noqa`, `# ruff: noqa: E501` | **Supported** |
 | `typescript` | `// @ts-ignore`, `// @ts-expect-error` | Planned |
-| `mypy` | `# type: ignore`, `# type: ignore[arg-type]` | Planned |
-| `pyright` | `# pyright: ignore[reportAny]` | Planned |
-| `ty` | `# ty: ignore[unresolved-import]` | Planned |
+| `mypy` | `# type: ignore`, `# type: ignore[arg-type, index]`, `# mypy: ignore-errors`, `# mypy: disable-error-code="arg-type"` | **Supported** |
+| `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]` | **Supported** |
+| `ty` | `# ty: ignore`, `# ty: ignore[invalid-argument-type]` | **Supported** |
 | `rust` | `#[allow(…)]`, `#[expect(…, reason = "…")]` | **Supported** |
 | `shellcheck` | `# shellcheck disable=SC2086` | Planned |
 | `llmlint` | its inline `ignore[rule] reason` suppression directive | Planned |
@@ -157,6 +157,44 @@ Adding one is three touch points: a module under `src/tools/`, one line in
 `src/tools/mod.rs::registry()`, and one row above. The registry is the single
 source of truth for the Status column: `tests/tools_contract.rs` fails the build
 if a row here and the registered parsers disagree.
+
+## Where a directive reaches, and who honours it
+
+Every `# type: ignore` and `# pyright: ignore` is `line`-scoped; mypy's
+module-wide exemptions are the two `# mypy:` config comments; and for ty, where
+the comment sits is the scope:
+
+| Source | Reported as |
+| --- | --- |
+| `f(x)  # type: ignore` | `mypy`, `line` |
+| `# mypy: ignore-errors` on its own line | `mypy`, `file` |
+| `# mypy: disable-error-code="arg-type"` on its own line | `mypy`, `file` |
+| `f(x)  # pyright: ignore` | `pyright`, `line` |
+| `f(x)  # ty: ignore` | `ty`, `line` |
+| `# ty: ignore` above every statement | `ty`, `file` |
+| `# ty: ignore` on its own line in the body | `ty`, `next-line` |
+
+Several tools honour a directive they did not invent: pyright and ty both act on
+mypy's `# type: ignore`, and ruff, pyright, and ty all act on one that does not
+open its comment (mypy does not). A directive is reported **once, under the tool
+whose syntax it is** — `# type: ignore` is one `mypy` record, not three — so a
+count of records is a count of suppressions written, not of checkers affected.
+
+One line can still carry directives for several tools, and each record covers
+**its own directive only**. Given
+
+```python
+import legacy  # type: ignore[import-not-found]  # no stubs published  # noqa: F401  # imported for its side effects
+```
+
+the `mypy` record's `raw` stops at `# no stubs published` and its `reason` is
+`"no stubs published"`; the `ruff` record's `raw` starts at `# noqa: F401` and
+its `reason` is `"imported for its side effects"`. A record's `raw` and `reason`
+always end where the next tool's directive begins, so one tool's live suppression
+can never be filed as another's justification.
+
+`# pyright: basic` and `# pyright: strict` switch pyright's type-checking mode
+rather than silencing a diagnostic, and are deliberately not reported.
 
 ## How it works
 
@@ -175,8 +213,10 @@ just --list      # everything else
 ```
 
 `just check` runs the end-to-end suite, which drives the compiled binary as a
-subprocess and the **real, pinned** `ruff` (see `.ruff-version`) to prove that
-what `notignored` reports is what `ruff` actually suppresses.
+subprocess and the **real, pinned** `ruff`, `mypy`, `pyright`, and `ty` (see
+`.ruff-version` and its siblings) to prove that what `notignored` reports is what
+those tools actually suppress. `just bootstrap` installs them with `uv` into
+project-local venvs under `.dev/`.
 
 ## License
 

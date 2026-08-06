@@ -1,4 +1,5 @@
-//! End-to-end journeys: the compiled binary, real files, and the real ruff.
+//! End-to-end journeys: the compiled binary, real files, and the real linters
+//! and type checkers it claims parity with.
 //!
 //! Split into its own test target so `just test-e2e` can run the slow binary
 //! journeys alone — but `just check` runs them either way. Nothing here is
@@ -9,6 +10,8 @@ mod support;
 mod cli;
 mod diff;
 mod installer;
+mod python_tools_setup;
+mod python_types_parity;
 mod ruff_grammar;
 mod ruff_parity;
 mod rust_parity;

@@ -6,6 +6,10 @@
 //! suppress it, and the CLI must report it with the right codes, span, and
 //! reason. A grammar branch covered only by a unit test is a claim about the
 //! parser, not about what a user gets.
+//!
+//! `--tool ruff` scopes every run: line 4 of the fixture carries a mypy directive
+//! too, and what happens when several tools share a line belongs to
+//! [`python_types_parity`](crate::python_types_parity).
 
 use crate::support::{fixture, notignored, parse_report, ruff_passes};
 
@@ -90,7 +94,7 @@ fn real_ruff_accepts_every_form_the_grammar_fixture_uses() {
 #[test]
 fn the_cli_reports_every_form_with_its_codes_span_and_reason() {
     let output = notignored(&grammar_dir())
-        .args(["grammar.py", "--format", "json"])
+        .args(["grammar.py", "--tool", "ruff", "--format", "json"])
         .output()
         .expect("run notignored");
     assert!(output.status.success(), "exit: {:?}", output.status);
@@ -122,7 +126,7 @@ fn the_cli_reports_every_form_with_its_codes_span_and_reason() {
 #[test]
 fn a_noqa_inside_a_string_literal_is_never_reported() {
     let output = notignored(&grammar_dir())
-        .args(["grammar.py", "--format", "json"])
+        .args(["grammar.py", "--tool", "ruff", "--format", "json"])
         .output()
         .expect("run notignored");
     let report = parse_report(&output.stdout);
@@ -141,7 +145,7 @@ fn a_noqa_inside_a_string_literal_is_never_reported() {
 #[test]
 fn the_human_format_renders_the_same_grammar_readably() {
     let output = notignored(&grammar_dir())
-        .arg("grammar.py")
+        .args(["grammar.py", "--tool", "ruff"])
         .output()
         .expect("run notignored");
     assert!(output.status.success());

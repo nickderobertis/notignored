@@ -77,7 +77,19 @@ One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
 row in the README supported-tools table. Keep it to those three touch points so
 parallel branches don't conflict. Parsers consume the extracted comments and
 attributes from `src/comments.rs` — never re-scan raw lines, or string literals
-will be misread as comments.
+will be misread as comments. Grammar shared by a *family* of tools lives in a
+private sibling module (`src/tools/python.rs` serves mypy/pyright/ty); it is not
+a tool and stays out of the registry.
+
+A tool's scope is what it honours, not what its docs headline — ty reads an
+own-line directive as covering the line below. Derive each from the real tool,
+but report only the scopes the record contract specifies: a checker may honour
+more than we claim, and widening that unasked changes the contract.
+
+One line can carry several tools' directives. Each record's `raw` and `reason`
+must stop at the next one, or a live suppression is filed as its neighbour's
+justification. `src/tools/python.rs::segments` owns that boundary; a new Python
+parser adds an `opens_directive` recognizer to it.
 
 ## Commits, releases, and merging
 
@@ -128,6 +140,25 @@ reports exactly that suppression. `tests/e2e/ruff_parity.rs` is the shape to
 copy; the tool is pinned so the proof is reproducible. Coverage (95%, enforced)
 is a floor that a mocked suite could also clear — parity is what makes the claim
 true.
+
+Never compare a path a checker reported against an expected one directly — send
+it through `support::relative_to`. Tools disagree about absolute vs relative, and
+on Windows two spellings of the same path (`d:/a/…` vs the verbatim `\\?\D:\a\…`
+`canonicalize` returns) match on neither case, separator, nor prefix. The Linux
+gate cannot see any of that; `support::paths` proves it with hand-written paths.
+
+A fixture holding the *reason-less* form of a directive earns its keep with an
+`llmlint: ignore-file[suppressions_justified]` footer — adding a reason instead
+would delete the only coverage of that form. Put it after the code so the line
+numbers the assertions cite do not move.
+
+For a family of forms, `tests/e2e/python_types_parity.rs` scales it: every
+fixture is the *same* program with a directive in a different slot, one test
+asserts they differ only in comments, and one checker run per tool decides the
+whole family. That keeps a slow checker (pyright) to a single invocation and
+makes `violation.py` a control rather than a separate program.
+
+Pin each checker in `.<tool>-version` and add it to `scripts/setup-python-tools.sh`.
 
 ## Keeping the allowlist current
 
