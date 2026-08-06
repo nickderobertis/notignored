@@ -45,17 +45,20 @@ tagged release attaches per-platform archives built on native runners.
 ## Usage
 
 ```
-notignored [PATHS...] [--format human|json] [--tool NAME]... [--fail-if-found]
-           [--diff [--diff-base REF]]
+notignored [PATHS...] [--format human|json|markdown] [--tool NAME]... [--fail-if-found]
+           [--diff [--diff-base REF]] [--github-repo OWNER/REPO] [--github-sha SHA]
 ```
 
 - `PATHS` — files and/or directories. Directories are walked recursively,
   honouring `.gitignore`. Defaults to `.`.
-- `--format` — `human` (default) or `json`.
+- `--format` — `human` (default), `json`, or `markdown` (a pull-request comment
+  body; see the action below).
 - `--tool` — only report this tool; repeat to allow several. Omit for all.
 - `--fail-if-found` — exit 1 when any suppression is reported.
 - `--diff` — report only the suppressions the change added (see below).
 - `--diff-base` — the git revision or range `--diff` compares against.
+- `--github-repo` / `--github-sha` — the `owner/repo` and commit the `markdown`
+  format builds its permalinks from.
 
 ### Reviewing a pull request
 
@@ -85,6 +88,68 @@ notignored: 1 ignore in 1 file
 
 `--diff` shells out to `git` — infrastructure, not one of the linters whose
 directives are parsed natively — so it needs `git` on `PATH` and a work tree.
+
+### On a pull request: the GitHub Action
+
+The action posts one sticky comment naming every suppression the pull request
+added, with its stated reason and a link to the line. It edits that same comment
+on each push instead of adding another, and on a pull request that adds none it
+posts nothing at all.
+
+```yaml
+# .github/workflows/notignored.yml
+name: notignored
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  suppressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the base branch has to be fetched to diff against it
+      - uses: nickderobertis/notignored@main
+```
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `github-token` | `${{ github.token }}` | Token used to upsert the comment. Needs `pull-requests: write`. |
+| `diff-base` | the pull request's base branch | Any git revision or range, as `--diff-base` takes. |
+| `paths` | the whole repository | Whitespace-separated files and directories to scan. |
+| `version` | `latest` | A release tag such as `v0.1.0`, or `local` to build the action's own source with `cargo`. |
+
+It exposes `count` (how many suppressions the change added) and `report-path`
+(the JSON report), so a later step can fail the build, upload the report, or
+gate on a threshold:
+
+```yaml
+      - uses: nickderobertis/notignored@main
+        id: notignored
+      - if: steps.notignored.outputs.count != '0'
+        run: echo "this change adds ${{ steps.notignored.outputs.count }} suppression(s)"
+```
+
+The steps are `bash`, so the action runs on the Linux and macOS runners; it needs
+`jq` and the `gh` CLI (both preinstalled there), plus `cargo` when
+`version: local`.
+
+`--format markdown` renders exactly the body the action posts, so it can be
+previewed locally:
+
+```console
+$ notignored --diff --diff-base main --format markdown \
+    --github-repo nickderobertis/notignored --github-sha "$(git rev-parse HEAD)"
+```
+
+Both permalink flags are optional; without them each location renders as plain
+`path:line` text. When a body names fewer than four suppressions, each one also
+carries the source line with two lines of context on either side.
 
 ### Exit codes
 
@@ -149,9 +214,22 @@ The `json` format emits the full report envelope:
 | `mypy` | `# type: ignore`, `# type: ignore[arg-type, index]`, `# mypy: ignore-errors`, `# mypy: disable-error-code="arg-type"` | **Supported** |
 | `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]` | **Supported** |
 | `ty` | `# ty: ignore`, `# ty: ignore[invalid-argument-type]` | **Supported** |
-| `rust` | `#[allow(…)]`, `#[expect(…, reason = "…")]` | **Supported** |
-| `shellcheck` | `# shellcheck disable=SC2086` | Planned |
-| `llmlint` | its inline `ignore[rule] reason` suppression directive | Planned |
+| `rust` | `#[allow(dead_code)]`, `#[allow(clippy::needless_collect, dead_code)]`, `#[expect(dead_code, reason = "…")]`, `#![allow(…)]`, `#![expect(…, reason = "…")]` | **Supported** |
+| `shellcheck` | `# shellcheck disable=SC2086`, `# shellcheck disable=SC2086,SC2046`, `# shellcheck disable=SC2000-SC2100`, `# shellcheck disable=all`, `# shellcheck disable=SC2086  # reason` | **Supported** |
+| `llmlint` | `ignore[rule, …] reason`, `ignore-file[rule, …] reason`, `ignore-block[rule, …] reason` … `ignore-end[rule, …]` — each written after the `llmlint` keyword and a colon, in the host language's comment syntax | **Supported** |
+
+Scope follows each tool's own rules, not a house convention:
+
+- **rust** — an outer attribute is `next-line` and its `suppressed` range runs
+  through the end of the item it annotates; an inner `#![…]` is `file`. A
+  `reason = "…"` is the record's reason, even when the string wraps.
+- **shellcheck** — a directive above the first command is `file`; anywhere else
+  it is `next-line`. A directive ShellCheck itself rejects (trailing prose with
+  no `#`, or one placed after a command) is reported by neither tool.
+- **llmlint** — `ignore` is `line`, `ignore-file` is `file`, and
+  `ignore-block` … `ignore-end` is one `block` record spanning both directives.
+  A block left unclosed keeps a null `suppressed.end_line` and adds an `errors`
+  entry.
 
 Each tool's own reason syntax is what gets captured: ESLint's ` -- description`,
 Biome's mandatory `: explanation`, ruff's trailing `# comment`, and — for
@@ -213,9 +291,10 @@ rather than silencing a diagnostic, and are deliberately not reported.
 
 Source is scanned once per file by a language-aware comment extractor
 (`src/comments.rs`) that understands `#` comments, `//` line comments, multi-line
-`/* … */` blocks (nested, for Rust), and Rust attributes — and that knows a string
-literal when it sees one, so `MESSAGE = "# noqa: E501"` is never reported. Tool
-parsers consume those extracted comments; they never re-scan raw lines.
+`/* … */` blocks (nested, for Rust), Rust attributes, and the punctuation that
+delimits a Rust item — and that knows a string literal when it sees one, so
+`MESSAGE = "# noqa: E501"` is never reported. Tool parsers consume that
+extraction; they never re-scan raw lines.
 
 ## Development
 
@@ -226,11 +305,12 @@ just --list      # everything else
 ```
 
 `just check` runs the end-to-end suite, which drives the compiled binary as a
-subprocess and the **real, pinned** checkers — `ruff`, `mypy`, `pyright`, and
-`ty` (see `.ruff-version` and its siblings) and `eslint` / `biome` / `tsc` (see
-`tests/js-toolchain/package.json`) — to prove that what `notignored` reports is
-what those tools actually suppress. `just bootstrap` installs them all under
-`.dev/`; it needs `uv` and Node.js 20+ on `PATH`.
+subprocess and the **real, pinned** tools — `ruff`, `mypy`, `pyright`, `ty`,
+`shellcheck`, and `llmlint` (see the `.<tool>-version` files), `eslint` /
+`biome` / `tsc` (see `tests/js-toolchain/package.json`), plus the pinned
+toolchain's own `rustc` and `clippy-driver` — to prove that what `notignored`
+reports is what those tools actually suppress. `just bootstrap` installs them
+all under `.dev/`; it needs `uv` and Node.js 20+ on `PATH`.
 
 ## License
 

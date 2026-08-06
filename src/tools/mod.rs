@@ -4,9 +4,9 @@
 //! [`registry`], and one row in the README's supported-tools table. Keeping it
 //! to those three keeps parallel branches from colliding.
 //!
-//! Parsers read the comments and attributes a [`SourceFile`] already extracted.
-//! They must not re-scan raw source lines — that is how string literals get
-//! mistaken for directives.
+//! Parsers read the comments, attributes, and item punctuation a [`SourceFile`]
+//! already extracted. They must not re-scan raw source lines — that is how
+//! string literals get mistaken for directives.
 
 use crate::model::{IgnoreDirective, Tool};
 use crate::source::SourceFile;
@@ -15,14 +15,26 @@ mod python;
 
 pub mod biome;
 pub mod eslint;
+pub mod llmlint;
 pub mod mypy;
 pub mod pyright;
 pub mod ruff;
 pub mod rust;
+pub mod shellcheck;
 pub mod ty;
 pub mod typescript;
 
 /// Turns one tool's suppression syntax into [`IgnoreDirective`] records.
+///
+/// The three methods below are the whole contract, and it is **fixed**: a
+/// parser hands back directives and nothing else.
+/// `tests/tools_contract.rs` locks the signatures.
+///
+/// A syntax that can be malformed in a way an [`IgnoreDirective`] cannot express
+/// — llmlint's `ignore-block` with no closing directive — keeps that richer
+/// result as an inherent method on its own parser and is integrated by
+/// [`crate::scan`], rather than widening this trait for the one tool that needs
+/// it. See [`llmlint::LlmlintParser::scan`].
 pub trait ToolParser: Send + Sync {
     /// The tool this parser understands.
     fn tool(&self) -> Tool;
@@ -54,8 +66,8 @@ pub fn registry() -> Vec<Box<dyn ToolParser>> {
         Box::new(pyright::PyrightParser),
         Box::new(ty::TyParser),
         Box::new(rust::RustParser),
-        // shellcheck: planned — `# shellcheck disable=SC2086  # reason`
-        // llmlint: planned — its inline `ignore[rule] reason` directive
+        Box::new(shellcheck::ShellcheckParser),
+        Box::new(llmlint::LlmlintParser),
     ]
 }
 
@@ -92,9 +104,36 @@ mod tests {
                 Tool::Mypy,
                 Tool::Pyright,
                 Tool::Ty,
-                Tool::Rust
+                Tool::Rust,
+                Tool::Shellcheck,
+                Tool::Llmlint
             ]
         );
+    }
+
+    /// A parser needs nothing beyond the three contract methods to be
+    /// registered — if the trait ever grows a fourth, this stops compiling.
+    #[test]
+    fn the_three_contract_methods_are_all_a_parser_must_implement() {
+        struct Minimal;
+
+        impl ToolParser for Minimal {
+            fn tool(&self) -> Tool {
+                Tool::Eslint
+            }
+            fn applies_to(&self, _: &SourceFile) -> bool {
+                false
+            }
+            fn parse(&self, _: &SourceFile) -> Vec<IgnoreDirective> {
+                Vec::new()
+            }
+        }
+
+        let parser: Box<dyn ToolParser> = Box::new(Minimal);
+        let file = SourceFile::new("a.py", "x = 1  # noqa\n".to_string());
+        assert_eq!(parser.tool(), Tool::Eslint);
+        assert!(!parser.applies_to(&file));
+        assert!(parser.parse(&file).is_empty());
     }
 
     #[test]
@@ -111,6 +150,6 @@ mod tests {
         assert_eq!(registry_for(&[Tool::Ruff]).len(), 1);
         assert_eq!(registry_for(&[Tool::Eslint, Tool::Biome]).len(), 2);
         assert_eq!(registry_for(&[Tool::Mypy, Tool::Ty]).len(), 2);
-        assert!(registry_for(&[Tool::Shellcheck]).is_empty());
+        assert_eq!(registry_for(&[Tool::Rust, Tool::Llmlint]).len(), 2);
     }
 }

@@ -24,6 +24,9 @@ fn human_format_lists_every_suppression_and_summarizes_on_stderr() {
             "src/app.py:3:12 ruff F401 (line) -- re-exported for the public API\n",
             "src/app.py:5:58 ruff E501 (line) -- long wrapped URL\n",
             "src/app.py:10:17 ruff * (line)\n",
+            // The fixture's own llmlint directive is a suppression like any
+            // other, so a scan that claims to list every one has to show it.
+            "src/app.py:13:3 llmlint suppressions_justified (file) -- fixture input, not production code: the bare directive above proves a blanket, reason-less suppression is reported with empty rules and a null reason (tests/golden/report.json).\n",
             "src/app.ts:1:1 eslint no-console (next-line) -- debugging aid\n",
             "src/app.ts:4:1 biome lint/suspicious/noDebugger (next-line) -- stepping through the parser\n",
             "src/app.ts:7:1 typescript * (next-line) -- the vendored SDK ships no types\n",
@@ -35,7 +38,7 @@ fn human_format_lists_every_suppression_and_summarizes_on_stderr() {
     );
 
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(stderr, "notignored: 9 ignores in 4 files\n", "{stderr}");
+    assert_eq!(stderr, "notignored: 10 ignores in 4 files\n", "{stderr}");
 }
 
 #[test]
@@ -56,6 +59,54 @@ fn json_format_matches_the_checked_in_golden_report() {
         actual, expected,
         "the JSON report changed. If the change is intended, re-run with NOTIGNORED_BLESS=1 \
          and bump REPORT_VERSION when the shape (not just the data) moved."
+    );
+}
+
+/// The multi-tool tree: one file per newly supported tool, every scope in play.
+fn tools_tree() -> std::path::PathBuf {
+    fixture("tools-tree")
+}
+
+#[test]
+fn json_format_over_the_multi_tool_tree_matches_its_checked_in_golden() {
+    let output = notignored(&tools_tree())
+        .args(["--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+
+    let golden_path = repo_root().join("tests/golden/tools-report.json");
+    let actual = String::from_utf8(output.stdout).unwrap();
+    if std::env::var_os("NOTIGNORED_BLESS").is_some() {
+        fs::write(&golden_path, &actual).expect("write golden report");
+    }
+    let expected = fs::read_to_string(&golden_path).expect("read golden report");
+    assert_eq!(
+        actual, expected,
+        "the JSON report changed. If the change is intended, re-run with NOTIGNORED_BLESS=1 \
+         and bump REPORT_VERSION when the shape (not just the data) moved."
+    );
+}
+
+#[test]
+fn the_multi_tool_tree_renders_every_tool_and_scope_readably() {
+    let output = notignored(&tools_tree()).output().expect("run notignored");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        concat!(
+            "scripts/deploy.sh:2:1 shellcheck SC2086 (file) -- every expansion here is a pre-split argument list\n",
+            "scripts/deploy.sh:5:1 shellcheck SC2046,SC2000-SC2100 (next-line)\n",
+            "scripts/deploy.sh:7:1 shellcheck * (next-line)\n",
+            "src/lints.rs:1:1 rust clippy::needless_return (file)\n",
+            "src/lints.rs:4:1 rust dead_code,clippy::needless_collect (next-line)\n",
+            "src/lints.rs:10:1 rust dead_code (next-line) -- a justification long enough that it wraps across two lines of the attribute\n",
+            "src/service.py:1:3 llmlint boundary_inputs_validated (file) -- a transport shim: the caller validates before this layer\n",
+            "src/service.py:2:12 ruff F401 (line) -- re-exported for the public API\n",
+            "src/service.py:4:3 llmlint tool_output_is_signal (block) -- the trace is this module's whole job\n",
+        ),
+        "{stdout}"
     );
 }
 

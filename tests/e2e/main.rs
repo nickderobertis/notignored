@@ -7,14 +7,19 @@
 
 mod support;
 
+mod action_comment;
+mod action_scan;
 mod biome_parity;
 mod cli;
 mod diff;
 mod eslint_parity;
 mod installer;
+mod llmlint_parity;
+mod markdown;
 mod python_tools_setup;
 mod python_types_parity;
 mod ruff_grammar;
 mod ruff_parity;
 mod rust_parity;
+mod shellcheck_parity;
 mod typescript_parity;

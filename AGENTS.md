@@ -75,11 +75,17 @@ boundary — an envelope from a newer build — is rejected on deserialization.
 
 One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
 row in the README supported-tools table. Keep it to those three touch points so
-parallel branches don't conflict. Parsers consume the extracted comments and
-attributes from `src/comments.rs` — never re-scan raw lines, or string literals
-will be misread as comments. Grammar shared by a *family* of tools lives in a
-private sibling module (`src/tools/python.rs` serves mypy/pyright/ty); it is not
-a tool and stays out of the registry.
+parallel branches don't conflict. Parsers consume the comments, attributes, and
+item punctuation `src/comments.rs` extracted — never re-scan raw lines, or string
+literals will be misread as comments. Grammar shared by a *family* of tools lives
+in a private sibling module (`src/tools/python.rs` serves mypy/pyright/ty); it is
+not a tool and stays out of the registry.
+
+`ToolParser` is **fixed at three methods** returning directives and nothing else;
+`tests/tools_contract.rs` locks the signatures. A syntax that can be malformed in
+a way the record cannot express (an unclosed llmlint block) keeps that richer
+result as an *inherent* method on its own parser — `LlmlintParser::scan` — which
+`scan_files` folds into the report. Do not widen the trait for one tool's defect.
 
 A tool's scope is what it honours, not what its docs headline — ty reads an
 own-line directive as covering the line below. Derive each from the real tool,
@@ -90,6 +96,31 @@ One line can carry several tools' directives. Each record's `raw` and `reason`
 must stop at the next one, or a live suppression is filed as its neighbour's
 justification. `src/tools/python.rs::segments` owns that boundary; a new Python
 parser adds an `opens_directive` recognizer to it.
+
+## The GitHub Action
+
+`action.yml` (composite, repo root) + `scripts/action/comment.sh` are the
+product's review surface. Keep the judgment in Rust: `--format markdown` renders
+the whole comment body, golden-tested at the counts the rules turn on
+(`tests/golden/markdown/`), so the composite's shell only moves bytes. Its two
+scripts are proven by *lifting them out of `action.yml`* and running them
+(`tests/e2e/action_scan.rs`, `tests/e2e/action_comment.rs`); a copy in a test
+would keep passing after the action stopped doing what it says. GitHub's API is
+the only thing stubbed — everything else is a real repository, the real binary,
+and the real `gh`.
+
+Never interpolate `${{ github.event.* }}` (or an input) into a `run:` script: on
+a fork's pull request that text is attacker-controlled and `${{ }}` splices it in
+as shell source. Pass it through `env`, or read the payload as data from
+`$GITHUB_EVENT_PATH`. `tests/action_contract.rs` fails the build otherwise, and
+also gates the inputs, outputs, and the sticky marker the renderer and the
+comment script must agree on.
+
+`.github/workflows/notignored.yml` dogfoods it with `version: local`, which
+builds the branch's own source. It is **not a required check** and must not
+become one: it is skipped on fork pull requests, whose read-only token cannot
+upsert a comment, and a required context that never reports would block them
+forever.
 
 ## Commits, releases, and merging
 
@@ -137,9 +168,20 @@ parser adds an `opens_directive` recognizer to it.
 A parser is unproven until an e2e drives the **real** tool over a fixture and
 shows it *fails* without the suppression and *passes* with it, while notignored
 reports exactly that suppression. `tests/e2e/ruff_parity.rs` is the shape to
-copy; the tool is pinned so the proof is reproducible. Coverage (95%, enforced)
-is a floor that a mocked suite could also clear — parity is what makes the claim
-true.
+copy; every tool is pinned — a `.<tool>-version` file plus the `scripts/setup-*`
+installer `just bootstrap` runs, or `rust-toolchain.toml` for clippy — so the
+proof is reproducible. Coverage (95%, enforced) is a floor that a mocked suite
+could also clear — parity is what makes the claim true.
+
+One installer per tool family, each owning its own pins: renaming or folding one
+into another collides with whatever branch owns the other family. A new tool
+joins the family whose installer already speaks its packaging.
+
+A tool with no pass/fail verdict to compare against still owes agreement on the
+directive set: llmlint's parity runs `llmlint check-ignores`, its deterministic
+model-free validator, and asserts the same files, lines, and rules. **Never
+reach for llmlint's judge tier from a test** — it is a paid model call, so a
+suite that used it would be neither free nor deterministic.
 
 Never compare a path a checker reported against an expected one directly — send
 it through `support::relative_to`. Tools disagree about absolute vs relative, and
@@ -150,7 +192,9 @@ gate cannot see any of that; `support::paths` proves it with hand-written paths.
 A fixture holding the *reason-less* form of a directive earns its keep with an
 `llmlint: ignore-file[suppressions_justified]` footer — adding a reason instead
 would delete the only coverage of that form. Put it after the code so the line
-numbers the assertions cite do not move.
+numbers the assertions cite do not move. That footer is itself a directive we
+parse, so a suite asserting on a fixture's *whole* record set scopes its run with
+`--tool`; only the golden reports scan unfiltered.
 
 For a family of forms, `tests/e2e/python_types_parity.rs` scales it: every
 fixture is the *same* program with a directive in a different slot, one test
@@ -158,11 +202,9 @@ asserts they differ only in comments, and one checker run per tool decides the
 whole family. That keeps a slow checker (pyright) to a single invocation and
 makes `violation.py` a control rather than a separate program.
 
-Two installers, both run by `just bootstrap` and both installing under the
-gitignored `.dev/`: `scripts/setup-python-tools.sh` reads a `.<tool>-version`
-pin per Python checker (needs `uv`), and `scripts/setup-js.sh` reads
-`tests/js-toolchain/package.json` for eslint/biome/tsc (needs Node). Pin a new
-checker in whichever of the two owns its ecosystem — never add a third.
+The JS family is the one installer that does not read a `.<tool>-version` file:
+`scripts/setup-js.sh` takes its pins from `tests/js-toolchain/package.json`
+(eslint/biome/tsc, needs Node).
 
 Where a tool parses its own reason — eslint's ` -- ` description, in
 `suppressedMessages[].suppressions[].justification` — the e2e asserts our

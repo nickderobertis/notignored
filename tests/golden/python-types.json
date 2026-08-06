@@ -69,6 +69,23 @@
       }
     },
     {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "fixture input, not production",
+      "path": "mypy/disable_error_code.py",
+      "line": 9,
+      "end_line": 9,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
       "tool": "mypy",
       "scope": "file",
       "rules": [],
@@ -78,6 +95,23 @@
       "end_line": 6,
       "column": 1,
       "raw": "# mypy: ignore-errors",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "fixture input, not production",
+      "path": "mypy/ignore_errors.py",
+      "line": 9,
+      "end_line": 9,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -96,6 +130,23 @@
       "suppressed": {
         "start_line": 7,
         "end_line": 7
+      }
+    },
+    {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "fixture input, not production",
+      "path": "mypy/line_blanket.py",
+      "line": 9,
+      "end_line": 9,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
       }
     },
     {
@@ -209,6 +260,23 @@
       "suppressed": {
         "start_line": 7,
         "end_line": 7
+      }
+    },
+    {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "fixture input, not production",
+      "path": "ty/line_blanket.py",
+      "line": 9,
+      "end_line": 9,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
       }
     },
     {
