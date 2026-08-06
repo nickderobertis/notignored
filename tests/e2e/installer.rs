@@ -37,7 +37,8 @@ use crate::support::repo_root;
 /// A directory laid out like a GitHub release — one archive plus its `.sha256`,
 /// named exactly as `release.yml` publishes them — served over real HTTP.
 struct Release {
-    _dir: tempfile::TempDir,
+    dir: PathBuf,
+    _tempdir: tempfile::TempDir,
     _server: Option<Server>,
     base_url: String,
     tag: String,
@@ -97,7 +98,8 @@ fn serve(root: &Path) -> (Server, String) {
     )
 }
 
-/// Answer one request: 200 with the file's bytes, or 404.
+/// Answer one request: 200 with the file's bytes, or 404. Every request is
+/// appended to `<root>/../requests.log` so a test can assert on what was sent.
 fn serve_one(mut stream: TcpStream, root: &Path) {
     // On BSD-derived systems (macOS) an accepted socket inherits the listener's
     // O_NONBLOCK, so the read below would return WouldBlock and answer nothing;
@@ -106,14 +108,43 @@ fn serve_one(mut stream: TcpStream, root: &Path) {
         return;
     }
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let mut request = String::new();
-    if !matches!(BufReader::new(&stream).read_line(&mut request), Ok(n) if n > 0) {
+
+    // One reader for the whole head: a second BufReader would discard whatever
+    // the first had already buffered, so the headers would look absent.
+    let mut reader = BufReader::new(stream.try_clone().expect("clone the stream"));
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let blank = line.trim().is_empty();
+                head.push_str(&line);
+                if blank {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    if head.is_empty() {
         return;
     }
-    let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
+    let path = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/")
+        .to_string();
 
-    // Only ever resolve inside `root`: a `..` in the request is a 404, not an
-    // escape. Serving a fixture is no reason to serve the filesystem.
+    if let Some(log) = root.parent().map(|parent| parent.join("requests.log")) {
+        let _ = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .map(|mut file| file.write_all(head.as_bytes()));
+    }
+
     let relative = path.trim_start_matches('/');
     let body = if relative
         .split('/')
@@ -235,7 +266,15 @@ fn publish(tag: &str, corrupt_checksum: bool, with_checksum: bool) -> Release {
         _server: Some(server),
         base_url,
         tag: tag.to_string(),
-        _dir: dir,
+        dir: dir.path().to_path_buf(),
+        _tempdir: dir,
+    }
+}
+
+impl Release {
+    /// Every request line and header the server received.
+    fn requests(&self) -> String {
+        fs::read_to_string(self.dir.join("requests.log")).unwrap_or_default()
     }
 }
 
@@ -282,6 +321,63 @@ fn the_installer_downloads_verifies_and_installs_a_runnable_binary() {
             .contains(env!("CARGO_PKG_VERSION")),
         "the installed binary is not the artifact we packaged"
     );
+}
+
+#[test]
+fn a_github_token_is_never_sent_to_a_mirror() {
+    let release = publish("v9.9.9", false, true);
+    let target = tempfile::tempdir().unwrap();
+    let output = Command::new("sh")
+        .arg(repo_root().join("scripts/install.sh"))
+        .args([
+            "--version",
+            &release.tag,
+            "--to",
+            target.path().to_str().unwrap(),
+        ])
+        .env("NOTIGNORED_RELEASE_BASE_URL", &release.base_url)
+        .env("GITHUB_TOKEN", "ghp_supersecrettokenvalue")
+        .output()
+        .expect("run install.sh");
+
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let requests = release.requests();
+    assert!(
+        !requests.is_empty(),
+        "the mirror received no requests at all"
+    );
+    assert!(
+        !requests.to_lowercase().contains("authorization"),
+        "the installer sent a credential to a mirror:\n{requests}"
+    );
+    assert!(
+        !requests.contains("ghp_supersecrettokenvalue"),
+        "the token leaked to the mirror:\n{requests}"
+    );
+}
+
+#[test]
+fn a_mirror_url_must_be_http_or_https() {
+    let target = tempfile::tempdir().unwrap();
+    for url in ["ftp://evil.example/x", "file:///etc", "javascript:alert(1)"] {
+        let output = Command::new("sh")
+            .arg(repo_root().join("scripts/install.sh"))
+            .args([
+                "--version",
+                "v9.9.9",
+                "--to",
+                target.path().to_str().unwrap(),
+            ])
+            .env("NOTIGNORED_RELEASE_BASE_URL", url)
+            .output()
+            .expect("run install.sh");
+        assert_eq!(output.status.code(), Some(1), "{url} was accepted");
+        assert!(
+            stderr_of(&output).contains("must start with http:// or https://"),
+            "{url}: {}",
+            stderr_of(&output)
+        );
+    }
 }
 
 #[test]
@@ -336,11 +432,13 @@ fn a_malformed_version_tag_is_rejected_before_any_download() {
 fn a_missing_release_asset_names_the_release_that_lacks_it() {
     let release = publish("v9.9.9", false, true);
     let target = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
     let missing = Release {
         _server: None,
         base_url: release.base_url.clone(),
         tag: "v8.8.8".to_string(),
-        _dir: tempfile::tempdir().unwrap(),
+        dir: scratch.path().to_path_buf(),
+        _tempdir: scratch,
     };
     let output = install(&missing, target.path(), &[]);
 

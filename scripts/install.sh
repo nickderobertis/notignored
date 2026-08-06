@@ -14,7 +14,8 @@
 # Equivalent environment variables: NOTIGNORED_VERSION, NOTIGNORED_INSTALL_DIR,
 # and NOTIGNORED_RELEASE_BASE_URL / NOTIGNORED_RELEASE_API_URL (point the
 # download and the "latest" lookup at a mirror; the checksum is fetched from the
-# same place, so only use a source you trust).
+# same place, so only use a source you trust). GITHUB_TOKEN is sent to canonical
+# GitHub only — never to a mirror, whoever runs it.
 # Set GITHUB_TOKEN to lift the GitHub API rate limit when resolving "latest".
 #
 # Covers Linux and macOS (x86_64, arm64) and Windows x86_64 under a POSIX shell
@@ -38,6 +39,17 @@ BIN_FILE="$BIN"
 # ASSET_NAME_TEMPLATE: $bin-$tag-$target
 BASE_URL="${NOTIGNORED_RELEASE_BASE_URL:-https://github.com/$REPO/releases/download}"
 API_URL="${NOTIGNORED_RELEASE_API_URL:-https://api.github.com}"
+
+# A mirror is an origin the user chose, not one we trust: bound it to an http(s)
+# URL so nothing else (a file path, a shell metacharacter, a `javascript:` string)
+# reaches the downloader.
+for override in "$BASE_URL" "$API_URL"; do
+    case "$override" in
+        http://*|https://*) ;;
+        *) printf 'error: %s\n' "release URL must start with http:// or https:// (got $override)" >&2
+           exit 1 ;;
+    esac
+done
 
 say() { printf '%s\n' "$*" >&2; }
 err() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -88,8 +100,15 @@ detect_target() {
 }
 
 fetch() {
-    if have curl; then curl -fsSL ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} "$1" -o "$2"
-    elif have wget; then wget -qO "$2" "$1"
+    # GITHUB_TOKEN exists only to lift api.github.com's rate limit, so it is sent
+    # to that host and nowhere else. Attaching it to whatever BASE_URL happens to
+    # be would hand the user's credential to any mirror they were talked into.
+    auth=""
+    case "$1" in
+        https://api.github.com/*) auth="${GITHUB_TOKEN:-}" ;;
+    esac
+    if have curl; then curl -fsSL ${auth:+-H "Authorization: Bearer $auth"} "$1" -o "$2"
+    elif have wget; then wget -qO "$2" ${auth:+--header="Authorization: Bearer $auth"} "$1"
     else err "neither curl nor wget is available; install one and re-run the installer"
     fi
 }
