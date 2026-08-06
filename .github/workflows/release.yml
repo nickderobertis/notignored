@@ -28,6 +28,8 @@ jobs:
   # here and expose its presence as an output the publish job gates on.
   guard:
     runs-on: ubuntu-latest
+    # Reads whether a secret is set and writes a job output — no repo access.
+    permissions: {}
     outputs:
       publish: ${{ steps.check.outputs.publish }}
     steps:

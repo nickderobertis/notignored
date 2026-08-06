@@ -39,6 +39,8 @@ env:
 jobs:
   guard:
     runs-on: ubuntu-latest
+    # Reads whether a secret is set and writes a job output — no repo access.
+    permissions: {}
     outputs:
       enabled: ${{ steps.check.outputs.enabled }}
     steps:
@@ -75,11 +77,12 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install release-plz
-        run: |
-          curl -fsSL "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C /usr/local/bin release-plz
-          release-plz --version
+      # taiki-e/install-action verifies the downloaded archive's checksum before
+      # unpacking it; a `curl | tar` pipeline would execute an unauthenticated
+      # download.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: release-plz@${{ env.RELEASE_PLZ_VERSION }}
 
       - name: Tag and publish a merged version bump
         env:

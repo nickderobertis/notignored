@@ -136,4 +136,5 @@ lint-llm-validate *args:
 # The blocking `llmlint` PR check; run it locally before pushing.
 # llmlint scoped to the files this branch changed since it forked from main.
 lint-llm-diff base="origin/main" *args:
+    @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     llmlint --diff --diff-base "{{base}}" {{args}}

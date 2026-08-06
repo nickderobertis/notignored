@@ -63,7 +63,9 @@ notignored [PATHS...] [--format human|json] [--tool NAME]... [--fail-if-found]
 | `2` | The scan could not complete — an unreadable path or file, or a bad argument. |
 
 Findings go to stdout; the summary and any errors go to stderr, so
-`notignored --format json > report.json` captures only the report.
+`notignored --format json > report.json` captures only the report. A downstream
+consumer that stops reading (`| head`, `| grep -q`) is not an error: the scan's
+own verdict still decides the exit code.
 
 ## Output
 

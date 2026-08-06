@@ -200,6 +200,49 @@ fn an_unreadable_source_file_exits_two_and_is_reported_not_panicked() {
     assert!(stderr.contains("notignored: error: broken.py"), "{stderr}");
 }
 
+/// A downstream consumer that stops reading must not turn a good scan into an
+/// operational failure — `notignored | grep -q` is how a CI job uses this.
+///
+/// The tree is large on purpose: the report has to exceed the pipe buffer, or
+/// the whole thing lands in the pipe before `grep -q` exits and no write ever
+/// hits a closed pipe. That is exactly why this bug reached CI on one platform
+/// and not another.
+#[cfg(unix)]
+#[test]
+fn a_consumer_that_stops_reading_does_not_fail_the_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    for index in 0..500 {
+        fs::write(
+            dir.path().join(format!("module_{index:04}.py")),
+            "VALUE = 1  # noqa: E501  # a reason long enough to fill the pipe buffer\n",
+        )
+        .unwrap();
+    }
+
+    let binary = assert_cmd::cargo::cargo_bin("notignored");
+    // bash, not sh: `pipefail` is what makes the pipeline report notignored's
+    // own exit code rather than grep's, and Debian's /bin/sh (dash) lacks it.
+    let script = format!(
+        "set -o pipefail; '{}' --format json | grep -q '\"E501\"'",
+        binary.display()
+    );
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(dir.path())
+        .output()
+        .expect("run the pipeline");
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains("cannot write report"), "{stderr}");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{:?}: {stderr}",
+        output.status
+    );
+}
+
 #[test]
 fn an_unknown_tool_name_is_rejected_before_any_scanning() {
     let dir = tempfile::tempdir().unwrap();

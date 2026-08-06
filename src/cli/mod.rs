@@ -5,7 +5,7 @@
 //! branch to `Cli::select_files` — asking git for the changed files instead of
 //! walking the tree — and touches nothing below it.
 
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
@@ -108,9 +108,14 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         Format::Human => render_human(&report, out, err),
         Format::Json => render_json(&report, out),
     };
+    // A downstream consumer that stops reading (`| head`, `| grep -q`) closes the
+    // pipe. That is its prerogative, not our failure — report the scan's verdict
+    // quietly, the way every other Unix filter does, instead of a write error.
     if let Err(error) = rendered {
-        let _ = writeln!(err, "notignored: cannot write report: {error}");
-        return EXIT_ERROR;
+        if error.kind() != io::ErrorKind::BrokenPipe {
+            let _ = writeln!(err, "notignored: cannot write report: {error}");
+            return EXIT_ERROR;
+        }
     }
     exit_code(&report, cli.fail_if_found)
 }
@@ -252,25 +257,50 @@ mod tests {
         assert!(err.contains("broken.py"), "{err}");
     }
 
+    /// A stdout that always fails with `kind`.
+    struct Failing(io::ErrorKind);
+
+    impl Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(self.0, "write failed"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(self.0, "flush failed"))
+        }
+    }
+
     #[test]
     fn a_failing_writer_exits_two() {
-        struct Broken;
-        impl Write for Broken {
-            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("no space left on device"))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
         let dir = fixture();
         let cli = parse(&[&dir.path().to_string_lossy(), "--format", "json"]);
         let mut err = Vec::new();
-        let code = run(&cli, &mut Broken, &mut err);
+        let code = run(&cli, &mut Failing(io::ErrorKind::StorageFull), &mut err);
         assert_eq!(code, EXIT_ERROR);
         assert!(String::from_utf8(err)
             .unwrap()
             .contains("cannot write report"));
+    }
+
+    #[test]
+    fn a_closed_pipe_is_not_an_error() {
+        let dir = fixture();
+        let mut err = Vec::new();
+        let cli = parse(&[&dir.path().to_string_lossy(), "--format", "json"]);
+        assert_eq!(
+            run(&cli, &mut Failing(io::ErrorKind::BrokenPipe), &mut err),
+            EXIT_OK
+        );
+        assert!(
+            String::from_utf8(err.clone()).unwrap().is_empty(),
+            "{err:?}"
+        );
+
+        // The scan's own verdict still stands: `--fail-if-found | head` exits 1.
+        let cli = parse(&[&dir.path().to_string_lossy(), "--fail-if-found"]);
+        assert_eq!(
+            run(&cli, &mut Failing(io::ErrorKind::BrokenPipe), &mut err),
+            EXIT_FOUND
+        );
     }
 
     #[test]

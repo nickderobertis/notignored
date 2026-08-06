@@ -100,8 +100,8 @@ will be misread as comments.
   surfaces suppressions — an unjustified `#[allow]` here is a self-own.)
 - Validate all external / IO inputs at trust boundaries. An unreadable file or a
   malformed directive becomes a report `error` entry — never a panic.
-- CI runs `just bootstrap` then `just check` and nothing else, so a routine step
-  belongs in a recipe rather than a one-off command.
+- A routine step belongs in a `just` recipe, not a one-off command: CI runs the
+  recipes, so anything outside them is unproven.
 - Keep the artifact portable across Linux, macOS, and Windows.
 - **Security is gate-level.** No secrets, credentials, or customer data in the
   tree; every grant least-privilege.
