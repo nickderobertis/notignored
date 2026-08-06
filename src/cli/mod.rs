@@ -85,6 +85,7 @@ pub struct Cli {
     /// where this branch forked, so later base-branch commits are never reported
     /// as this branch's own changes — while an explicit A..B range is passed to
     /// git as-is.
+    // llmlint: ignore[invalid_states_unrepresentable] a base without --diff is rejected at the boundary by `requires = "diff"` (exit 2, covered by an e2e), and this struct is a field-per-flag mirror of the command line: folding the pair into an enum would move flag parsing into a custom value parser, which is exactly what this layer keeps out.
     #[arg(long, value_name = "REF", requires = "diff")]
     pub diff_base: Option<String>,
 }

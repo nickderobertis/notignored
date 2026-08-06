@@ -145,13 +145,44 @@ impl AddedLines {
     }
 }
 
+/// What a diff is taken against.
+///
+/// The cases git accepts here are different decisions, not interchangeable
+/// strings, so each is spelled out: the default `HEAD`, the index (all a
+/// repository with no commit yet can be compared to), a revision this crate
+/// resolved (a `--diff-base` ref's merge base with `HEAD`, or the ref itself
+/// when there is no merge base), and a range the caller spelled, which is the
+/// one case passed to git untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Base {
+    /// The work tree against `HEAD`.
+    Head,
+    /// The index against the empty tree.
+    Index,
+    /// A resolved revision.
+    Revision(String),
+    /// An `A..B` range exactly as the caller wrote it.
+    Range(String),
+}
+
+impl Base {
+    /// The single argument this base becomes on a `git diff` command line.
+    fn arg(&self) -> &str {
+        match self {
+            Base::Head => "HEAD",
+            Base::Index => "--cached",
+            Base::Revision(rev) | Base::Range(rev) => rev,
+        }
+    }
+}
+
 /// A prepared `git diff` of one work tree against one base.
 #[derive(Debug, Clone)]
 pub struct Diff {
     /// Directory the diff is taken in; paths are reported relative to it.
     root: PathBuf,
-    /// The resolved base argument handed to `git diff`.
-    base: String,
+    /// What the work tree is compared against.
+    base: Base,
     /// The `git` binary. A field so tests can point it at one that is missing or
     /// cannot be started.
     git: String,
@@ -170,7 +201,7 @@ impl Diff {
     pub fn open(root: &Path, base: Option<&str>) -> Result<Self, DiffError> {
         let mut diff = Diff {
             root: root.to_path_buf(),
-            base: String::new(),
+            base: Base::Head,
             git: "git".to_string(),
         };
         // Validate the boundary once, so a bare repository or a directory
@@ -196,7 +227,7 @@ impl Diff {
         // `-z` makes the records NUL-separated, so a path holding a space or a
         // quote needs no unquoting; `--relative` reports paths the way this run's
         // report does — relative to the directory it was invoked from.
-        let output = self.git(&["diff", "--name-status", "-z", "--relative", &self.base])?;
+        let output = self.git(&["diff", "--name-status", "-z", "--relative", self.base.arg()])?;
         Ok(parse_name_status(&output))
     }
 
@@ -211,7 +242,7 @@ impl Diff {
             "--no-color",
             "--unified=0",
             "--relative",
-            &self.base,
+            self.base.arg(),
             "--",
             &path,
         ];
@@ -221,22 +252,22 @@ impl Diff {
         Ok(AddedLines::parse(&self.git(&args)?))
     }
 
-    /// The base argument to hand `git diff`.
-    fn resolve_base(&self, base: Option<&str>) -> String {
+    /// What `base` means as something to compare against.
+    fn resolve_base(&self, base: Option<&str>) -> Base {
         match base {
             // A range is the caller's own choice of semantics.
-            Some(range) if range.contains("..") => range.to_string(),
+            Some(range) if range.contains("..") => Base::Range(range.to_string()),
             // A plain ref gets three-dot semantics. When no merge base exists
             // (disjoint histories) or none can be computed, fall back to the ref
             // itself: an unrelated base stays diffable, and a ref that does not
             // resolve still surfaces git's own error at the diff step rather than
             // being swallowed into a silently different comparison.
-            Some(rev) => self.merge_base(rev).unwrap_or_else(|| rev.to_string()),
-            None if self.rev_exists("HEAD") => "HEAD".to_string(),
+            Some(rev) => Base::Revision(self.merge_base(rev).unwrap_or_else(|| rev.to_string())),
+            None if self.rev_exists("HEAD") => Base::Head,
             // A repository with no commit yet has no HEAD to diff against, so
             // compare the index with the empty tree instead of fataling: a staged
             // new file is still a change someone is about to review.
-            None => "--cached".to_string(),
+            None => Base::Index,
         }
     }
 
@@ -608,7 +639,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let diff = Diff {
             root: dir.path().to_path_buf(),
-            base: "HEAD".to_string(),
+            base: Base::Head,
             git: "notignored-no-such-git".to_string(),
         };
         let error = diff.changed_files().unwrap_err();
@@ -625,7 +656,7 @@ mod tests {
         fs::write(&fake, "#!/bin/sh\n").unwrap();
         let diff = Diff {
             root: dir.path().to_path_buf(),
-            base: "HEAD".to_string(),
+            base: Base::Head,
             git: fake.to_string_lossy().into_owned(),
         };
         let error = diff.changed_files().unwrap_err();
