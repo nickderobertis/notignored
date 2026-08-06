@@ -34,6 +34,7 @@ const CONTEXT_LINES: u32 = 2;
 ///
 /// Both parts are needed to build one; with either missing the location renders
 /// as plain `path:line` text, so a run without them still produces a usable body.
+// llmlint: ignore[invalid_states_unrepresentable] both fields are validated where they enter the process — clap's `github_repo` and `github_sha` value parsers reject anything but an owner/repo slug and a hex commit id, at the trust boundary the invariants call for — and this struct mirrors `Cli`'s public fields one for one, so a newtype here would move the crate's public surface without adding a check that is not already made.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MarkdownOptions {
     /// `owner/repo` the permalinks address.
