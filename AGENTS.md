@@ -71,19 +71,14 @@ will be misread as comments.
 
 ## Command surface
 
-Use the `just` recipes; do not hand-roll equivalent commands.
+`just --list` is the catalog; use the recipes rather than hand-rolling their
+commands. What the listing does not say:
 
-- `just bootstrap` — set up from a clean clone.
-- `just check` — full quality gate (format, clippy, tests + coverage, docs).
-  Must pass before any commit or PR.
-- `just test` / `just test-e2e` / `just lint` / `just format` — gate steps.
-- `just upgrade` — upgrade dependencies, then re-run `just check`.
-- `just deps-check` — `cargo deny` + `cargo machete` (own step: needs the
-  network advisory DB).
-- `just lint-llm` / `just lint-llm-diff` / `just lint-llm-validate` — the
-  LLM-judge tier (llmlint), separate from `check` and non-deterministic; config in
-  `llmlint.yml`. `just setup-llmlint` installs its toolchain; `just session-setup`
-  provisions a fresh session and is what the `SessionStart` hook runs.
+- `just check` is the gate and must pass before any commit or PR.
+- `just bootstrap` has to keep working from a clean clone, including the pinned
+  `ruff` the parity suite drives.
+- The `lint-llm*` recipes are the LLM-judge tier — non-deterministic and
+  credentialed, so deliberately outside `check`.
 
 ## Commits, releases, and merging
 

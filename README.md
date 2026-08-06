@@ -117,7 +117,7 @@ The `json` format emits the full report envelope:
 | `ty` | `# ty: ignore[unresolved-import]` | Planned |
 | `rust` | `#[allow(…)]`, `#[expect(…, reason = "…")]` | Planned |
 | `shellcheck` | `# shellcheck disable=SC2086` | Planned |
-| `llmlint` | `llmlint: ignore[rule] reason` | Planned |
+| `llmlint` | its inline `ignore[rule] reason` suppression directive | Planned |
 
 Adding one is three touch points: a module under `src/tools/`, one line in
 `src/tools/mod.rs::registry()`, and one row above.

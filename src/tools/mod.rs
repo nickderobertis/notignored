@@ -46,7 +46,7 @@ pub fn registry() -> Vec<Box<dyn ToolParser>> {
         // ty: planned — `# ty: ignore[unresolved-import]`
         // rust: planned — `#[allow(dead_code)]` / `#[expect(…, reason = "…")]`
         // shellcheck: planned — `# shellcheck disable=SC2086  # reason`
-        // llmlint: planned — `llmlint: ignore[rule] reason`
+        // llmlint: planned — its inline `ignore[rule] reason` directive
     ]
 }
 

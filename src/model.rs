@@ -58,7 +58,7 @@ pub enum Tool {
     Rust,
     /// ShellCheck (`# shellcheck disable=SC2086`).
     Shellcheck,
-    /// llmlint (`llmlint: ignore[rule] reason`).
+    /// llmlint (its inline `ignore[rule] reason` directive).
     Llmlint,
 }
 

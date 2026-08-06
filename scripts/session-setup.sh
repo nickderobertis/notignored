@@ -18,7 +18,7 @@
 # CI provisions the toolchain itself, so this no-ops there. Every step tolerates
 # failure and the script always exits 0 — a flaky install must never abort session
 # startup. Also safe to run by hand (`just session-setup`).
-# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): `set -e` is omitted so a flaky install can't abort the hook — the script owns its exit codes and always exits 0; success stays quiet while failures log-and-continue rather than block startup; and `just` is installed from PyPI (`uv tool install rust-just`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
+# llmlint: ignore-file[tool_output_is_signal, boundary_inputs_validated] a SessionStart hook must never abort a session, so failures log and continue instead of exiting non-zero; the only external input is a PyPI wheel fetched by uv, which validates it.
 set -uo pipefail
 
 # `just` floor. `rust-just` is the PyPI package that ships the `just` binary.

@@ -12,6 +12,13 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 nextest-version := "0.9.140"
 llvmcov-version := "0.8.7"
 
+# The MSRV has one source of truth — Cargo.toml's `rust-version` — so `just msrv`
+# cannot promise a floor the manifest no longer declares. CI reads the same field.
+msrv-version := `sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml`
+
+# Keep the gate's own output to signal: successes are silent, failures are not.
+export CARGO_TERM_QUIET := "true"
+
 # List available recipes.
 default:
     @just --list
@@ -20,17 +27,16 @@ default:
 # pinned ruff the e2e parity suite drives.
 # Set up the project from a clean clone.
 bootstrap:
-    rustup show active-toolchain
-    rustup component add rustfmt clippy llvm-tools
+    @rustup component add rustfmt clippy llvm-tools >/dev/null
     @just _ensure-tool cargo-nextest {{nextest-version}}
     @just _ensure-tool cargo-llvm-cov {{llvmcov-version}}
-    cargo fetch --locked
+    @cargo fetch --locked --quiet
     @bash scripts/setup-ruff.sh
 
 # Install a pinned cargo tool if it is missing. Quiet when already present.
 _ensure-tool tool version:
     @command -v {{tool}} >/dev/null 2>&1 \
-      || cargo install {{tool}} --version {{version}} --locked
+      || cargo install {{tool}} --version {{version}} --locked --quiet
 
 # Format check, lint, tests (unit + integration + e2e) with coverage enforced,
 # and docs. Fails on any issue; no warnings-only mode.
@@ -40,7 +46,7 @@ check: fmt-check lint test doc
 
 # Verify formatting without modifying files.
 fmt-check:
-    cargo fmt --all -- --check
+    @cargo fmt --all -- --check
 
 # Format the codebase in place.
 format:
@@ -48,22 +54,29 @@ format:
 
 # Lint with clippy; any warning is an error.
 lint:
-    cargo clippy --all-targets --locked -- -D warnings
+    @cargo clippy --all-targets --locked --quiet -- -D warnings
 
 # 95% line coverage is the gate; lower it only with a documented reason in
 # AGENTS.md.
 # Full test suite (unit + integration + e2e) with coverage enforced.
 test:
-    cargo llvm-cov nextest --locked --fail-under-lines 95
+    @cargo llvm-cov nextest --locked --fail-under-lines 95 \
+      --status-level fail --final-status-level fail
+
+# Coverage instrumentation is measured on Linux only, so the cross-platform CI
+# legs run the same suite through this instead of `test`.
+# Full test suite without coverage instrumentation.
+test-quick:
+    @cargo nextest run --locked --status-level fail
 
 # Drives the compiled binary and the real pinned ruff — never a stub.
 # The end-to-end binary journeys in isolation (also run by `test`/`check`).
 test-e2e:
-    cargo nextest run --locked -E 'binary(e2e)'
+    @cargo nextest run --locked -E 'binary(e2e)' --status-level fail
 
 # Build the docs with warnings denied (kept in the gate so doc links don't rot).
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+    @RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked --quiet
 
 # Run the CLI against a path, e.g. `just run src/ --format json`.
 run *ARGS:
@@ -81,7 +94,7 @@ bless:
 
 # Upgrade dependencies, then re-run the full gate.
 upgrade:
-    cargo update
+    @cargo update --quiet
     @just check
 
 # Separate from `check`: `cargo deny` needs a network-fetched advisory DB.
@@ -89,12 +102,16 @@ upgrade:
 deps-check:
     @command -v cargo-deny >/dev/null || { echo "cargo-deny not installed: cargo install cargo-deny --locked" >&2; exit 1; }
     @command -v cargo-machete >/dev/null || { echo "cargo-machete not installed: cargo install cargo-machete --locked" >&2; exit 1; }
-    cargo deny check
-    cargo machete
+    @cargo deny --log-level error check
+    @# machete prints the unused deps it finds on stdout, so keep it: hiding
+    @# them would leave a failing gate with no actionable detail.
+    @cargo machete
 
-# Build under the declared MSRV (needs the 1.88 toolchain installed).
+# Reads the floor from Cargo.toml's `rust-version`; that toolchain must be
+# installed (`rustup toolchain install <version>`). Warnings are errors here too.
+# Build under the declared MSRV.
 msrv:
-    cargo +1.88 check --locked --all-targets
+    @RUSTFLAGS="-D warnings" cargo +{{msrv-version}} check --locked --all-targets --quiet
 
 # Ensures `just`, verifies the rest, then runs setup-llmlint. Runs automatically
 # via the Claude Code SessionStart hook; this is the manual entry point.

@@ -66,9 +66,9 @@ jobs:
       - name: Format + lint
         run: just fmt-check && just lint
       - name: Install the pinned ruff the parity suite drives
-        run: bash scripts/setup-ruff.sh
+        run: just setup-ruff
       - name: Tests (unit + integration + e2e)
-        run: cargo nextest run --locked
+        run: just test-quick
 
   # The declared MSRV is a promise to consumers, so prove it rather than
   # document it: a floor that only lives in Cargo.toml drifts the first time a
@@ -87,7 +87,10 @@ jobs:
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --locked --all-targets
+      - uses: extractions/setup-just@v3
+      # `just msrv` reads the same `rust-version` field, so the recipe and the
+      # job can never disagree about which floor was proven.
+      - run: just msrv
 
   # Advisory + license audit and unused-dependency check. Its own Linux-only job:
   # it needs a network advisory DB and must not be duplicated across the matrix.
@@ -97,9 +100,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny,cargo-machete
-      - run: cargo deny check
-      - run: cargo machete
+          tool: just,cargo-deny,cargo-machete
+      - run: just deps-check
 
   # Prove the end-user install path on every platform: install the binary the
   # documented way and smoke-test the real artifact. `cargo install --path .` is
@@ -129,7 +131,9 @@ jobs:
           tmp="$(mktemp -d)"
           printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
           notignored "$tmp" --format json | grep -q '"E501"'
-          notignored "$tmp" --fail-if-found && exit 1 || [ $? -eq 1 ]
+          # --fail-if-found must exit 1 here; anything else is a broken artifact.
+          notignored "$tmp" --fail-if-found; code=$?
+          [ "$code" -eq 1 ] || { echo "::error::expected exit 1, got $code"; exit 1; }
 
   # Lint the PR title: under squash-merge it becomes the release-driving commit.
   pr-title:

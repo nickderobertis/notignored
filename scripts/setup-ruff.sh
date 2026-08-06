@@ -16,6 +16,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PIN="$(tr -d '[:space:]' < .ruff-version)"
+# `.ruff-version` feeds a package requirement, so validate its shape before use
+# rather than letting arbitrary file contents reach the resolver.
+case "$PIN" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *) echo "setup-ruff: .ruff-version must hold a version like 0.16.1 (got '$PIN')" >&2; exit 1 ;;
+esac
 VENV=".dev/ruff"
 if [ -x "$VENV/bin/ruff" ]; then
   BIN="$VENV/bin/ruff"

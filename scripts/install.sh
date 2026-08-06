@@ -111,8 +111,14 @@ trap 'rm -rf "$WORK"' EXIT
 detect_target
 [ -n "$VERSION" ] || resolve_latest
 
+# The tag becomes a URL path segment, so validate its shape at the boundary
+# instead of trusting the flag, the env var, or the API response.
+case "$VERSION" in
+    v[0-9]*.[0-9]*.[0-9]*) ;;
+    *) err "invalid release tag: $VERSION (expected vX.Y.Z)" ;;
+esac
+
 ARCHIVE="$BIN-$VERSION-$TARGET.$EXT"
-say "notignored: installing $VERSION ($TARGET) into $INSTALL_DIR"
 fetch "$BASE_URL/$VERSION/$ARCHIVE" "$WORK/$ARCHIVE" \
     || err "cannot download $ARCHIVE — check that release $VERSION publishes this target"
 fetch "$BASE_URL/$VERSION/$ARCHIVE.sha256" "$WORK/$ARCHIVE.sha256" \
@@ -135,8 +141,7 @@ mkdir -p "$INSTALL_DIR"
 install -m 755 "$extracted" "$INSTALL_DIR/$BIN_FILE" 2>/dev/null \
     || { cp "$extracted" "$INSTALL_DIR/$BIN_FILE" && chmod 755 "$INSTALL_DIR/$BIN_FILE"; }
 
-say "notignored: installed $INSTALL_DIR/$BIN_FILE"
 case ":$PATH:" in
-    *":$INSTALL_DIR:"*) ;;
-    *) say "notignored: add $INSTALL_DIR to your PATH to run it by name" ;;
+    *":$INSTALL_DIR:"*) say "notignored $VERSION installed: $INSTALL_DIR/$BIN_FILE" ;;
+    *) say "notignored $VERSION installed: $INSTALL_DIR/$BIN_FILE (not on PATH)" ;;
 esac

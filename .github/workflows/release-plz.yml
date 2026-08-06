@@ -27,9 +27,10 @@ on:
   push:
     branches: [main]
 
+# Read-only by default; only the release-plz job below widens it. The guard job
+# just reads a secret's presence and needs nothing more.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 env:
   # Pin release-plz so the release process is reproducible; bump deliberately.
@@ -58,6 +59,9 @@ jobs:
     needs: guard
     if: needs.guard.outputs.enabled == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     concurrency:
       group: release-plz
       cancel-in-progress: false
