@@ -1,6 +1,4 @@
 #!/bin/sh
-# notignored installer.
-#
 # Detect the host platform, download the matching prebuilt binary, verify it
 # against the SHA-256 checksum published beside it, and install it onto your
 # PATH.
