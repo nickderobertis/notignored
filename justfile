@@ -6,6 +6,12 @@
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
+# llmlint: ignore-file[tool_output_is_signal] recipes that hand straight to cargo,
+# clippy, rustdoc, or cargo-deny inherit those tools' diagnostics, which already
+# name the exact problem and its fix; a wrapper message would bury them. Recipes
+# whose failure needs project-level context (bootstrap, test, msrv, fmt-check) add
+# one explicitly.
+
 # The MSRV has one source of truth — Cargo.toml's `rust-version` — so `just msrv`
 # cannot promise a floor the manifest no longer declares. CI reads the same field.
 msrv-version := `sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml`
@@ -21,7 +27,8 @@ default:
 # pinned ruff the e2e parity suite drives.
 # Set up the project from a clean clone.
 bootstrap:
-    @rustup component add rustfmt clippy llvm-tools >/dev/null
+    @rustup component add rustfmt clippy llvm-tools >/dev/null \
+      || { echo "cannot add toolchain components — install rustup (https://rustup.rs/) and re-run" >&2; exit 1; }
     @just _ensure-tool cargo-nextest
     @just _ensure-tool cargo-llvm-cov
     @cargo fetch --locked --quiet
@@ -57,7 +64,8 @@ lint:
 # Full test suite (unit + integration + e2e) with coverage enforced.
 test:
     @cargo llvm-cov nextest --locked --fail-under-lines 95 \
-      --status-level fail --final-status-level fail
+      --status-level fail --final-status-level fail \
+      || { echo "tests failed, or coverage fell below 95% — cover the lines the table above counts as missed" >&2; exit 1; }
 
 # Coverage instrumentation is measured on Linux only, so the cross-platform CI
 # legs run the same suite through this instead of `test`.
@@ -107,7 +115,8 @@ deps-check:
 # installed (`rustup toolchain install <version>`). Warnings are errors here too.
 # Build under the declared MSRV.
 msrv:
-    @RUSTFLAGS="-D warnings" cargo +{{msrv-version}} check --locked --all-targets --quiet
+    @RUSTFLAGS="-D warnings" cargo +{{msrv-version}} check --locked --all-targets --quiet \
+      || { echo "the {{msrv-version}} floor no longer builds — install that toolchain, or raise rust-version in Cargo.toml (and clippy.toml)" >&2; exit 1; }
 
 # Ensures `just`, verifies the rest, then runs setup-llmlint. Runs automatically
 # via the Claude Code SessionStart hook; this is the manual entry point.

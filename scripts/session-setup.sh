@@ -30,7 +30,6 @@ readonly ORIG_PATH="${PATH}"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
 
-# CI has its own provisioning; skip there rather than racing it.
 # CI provisions the toolchain itself; skip there rather than racing it.
 { [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; } && exit 0
 
