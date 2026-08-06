@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "ignores": [
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "F401"
+      ],
+      "reason": "re-exported for the public API",
+      "path": "src/app.py",
+      "line": 3,
+      "end_line": 3,
+      "column": 12,
+      "raw": "# noqa: F401  # re-exported for the public API",
+      "suppressed": {
+        "start_line": 3,
+        "end_line": 3
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "E501"
+      ],
+      "reason": "long wrapped URL",
+      "path": "src/app.py",
+      "line": 5,
+      "end_line": 5,
+      "column": 58,
+      "raw": "# noqa: E501  # long wrapped URL",
+      "suppressed": {
+        "start_line": 5,
+        "end_line": 5
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [],
+      "reason": null,
+      "path": "src/app.py",
+      "line": 10,
+      "end_line": 10,
+      "column": 17,
+      "raw": "# noqa",
+      "suppressed": {
+        "start_line": 10,
+        "end_line": 10
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "file",
+      "rules": [
+        "E501"
+      ],
+      "reason": "vendored upstream, not ours to reformat",
+      "path": "src/vendored.py",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "raw": "# ruff: noqa: E501  # vendored upstream, not ours to reformat",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    }
+  ],
+  "errors": []
+}
