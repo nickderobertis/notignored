@@ -12,6 +12,7 @@ mod cli;
 mod diff;
 mod eslint_parity;
 mod installer;
+mod markdown;
 mod python_tools_setup;
 mod python_types_parity;
 mod ruff_grammar;
