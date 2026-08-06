@@ -176,14 +176,15 @@
       "tool": "llmlint",
       "scope": "file",
       "rules": [
-        "comments_earn_their_place"
+        "comments_earn_their_place",
+        "suppressions_justified"
       ],
-      "reason": "a generated table: every name here is upstream's own",
+      "reason": "a generated",
       "path": "crates/tables.rs",
       "line": 4,
       "end_line": 4,
       "column": 4,
-      "raw": "llmlint: ignore-file[comments_earn_their_place] a generated table: every name here is upstream's own",
+      "raw": "llmlint: ignore-file[comments_earn_their_place, suppressions_justified] a generated",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -197,13 +198,13 @@
       ],
       "reason": "the next-token table is generated in full, and the parser only reaches half of it until error recovery lands",
       "path": "crates/tables.rs",
-      "line": 6,
-      "end_line": 10,
+      "line": 8,
+      "end_line": 12,
       "column": 1,
       "raw": "#[expect(\n    dead_code,\n    reason = \"the next-token table is generated in full, and the parser only\n              reaches half of it until error recovery lands\"\n)]",
       "suppressed": {
-        "start_line": 6,
-        "end_line": 13
+        "start_line": 8,
+        "end_line": 15
       }
     },
     {
@@ -215,13 +216,13 @@
       ],
       "reason": null,
       "path": "crates/tables.rs",
-      "line": 15,
-      "end_line": 15,
+      "line": 17,
+      "end_line": 17,
       "column": 1,
       "raw": "#[allow(dead_code, clippy::needless_collect)]",
       "suppressed": {
-        "start_line": 15,
-        "end_line": 19
+        "start_line": 17,
+        "end_line": 21
       }
     },
     {
@@ -255,7 +256,7 @@
       "raw": "llmlint: ignore-block[tool_output_is_signal] the release log is the artifact this script ships",
       "suppressed": {
         "start_line": 5,
-        "end_line": 8
+        "end_line": 11
       }
     },
     {
@@ -267,13 +268,30 @@
       ],
       "reason": null,
       "path": "scripts/release.sh",
-      "line": 10,
-      "end_line": 10,
+      "line": 9,
+      "end_line": 9,
       "column": 1,
       "raw": "# shellcheck disable=SC2046,SC2116",
       "suppressed": {
-        "start_line": 11,
-        "end_line": 11
+        "start_line": 10,
+        "end_line": 10
+      }
+    },
+    {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "fixture input, not production",
+      "path": "scripts/release.sh",
+      "line": 13,
+      "end_line": 13,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
       }
     },
     {

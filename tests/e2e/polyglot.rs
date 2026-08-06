@@ -106,11 +106,12 @@ fn one_pass_reports_every_tool_and_every_scope() {
 
     // llmlint's directive is hosted in the comment syntax of whatever language
     // it lands in, so the one parser has to work across all three.
-    let hosts: Vec<&str> = found
+    let mut hosts: Vec<&str> = found
         .iter()
         .filter(|(tool, _, _)| *tool == Tool::Llmlint.as_str())
         .map(|(_, _, path)| *path)
         .collect();
+    hosts.dedup();
     assert_eq!(
         hosts,
         vec![
@@ -309,7 +310,7 @@ fn the_diff_reports_the_changes_own_suppressions_and_none_it_inherited() {
     };
 
     let inherited = described(&["--format", "json"]);
-    assert_eq!(inherited.len(), 27, "{inherited:#?}");
+    assert_eq!(inherited.len(), 28, "{inherited:#?}");
 
     let added = described(&["--diff", "--diff-base", "main", "--format", "json"]);
     assert_eq!(

@@ -409,19 +409,17 @@ fn parse_name_status(output: &[u8], command: &str) -> Result<Changed, DiffError>
             detail,
         };
         let status = String::from_utf8_lossy(status);
-        let paired = match status_kind(&status) {
-            Some(paired) => paired,
-            None => return Err(malformed(format!("unknown status {status:?}"))),
+        let Some(kind) = status_kind(&status) else {
+            return Err(malformed(format!("unknown status {status:?}")));
         };
         let truncated = || malformed(format!("record {status:?} names no path"));
         let first = decode_path(fields.next().ok_or_else(truncated)?);
-        let (path, renamed_from) = if paired {
-            (
+        let (path, renamed_from) = match kind {
+            StatusKind::OnePath => (first, None),
+            StatusKind::Paired => (
                 decode_path(fields.next().ok_or_else(truncated)?),
                 Some(first),
-            )
-        } else {
-            (first, None)
+            ),
         };
         match (path, renamed_from) {
             (Ok(path), None) => changed.files.push(ChangedFile {
@@ -448,12 +446,21 @@ fn decode_path(field: &[u8]) -> Result<PathBuf, String> {
         .map_err(|_| String::from_utf8_lossy(field).into_owned())
 }
 
-/// Whether a `--name-status` status field names a two-path (rename or copy)
-/// change, or `None` when git named a status this build does not know.
+/// How many paths a `--name-status` record carries after its status field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusKind {
+    /// The status applies to the one path that follows it.
+    OnePath,
+    /// A rename or copy: a source path, then a destination path.
+    Paired,
+}
+
+/// How many paths a `--name-status` status field introduces, or `None` when git
+/// named a status this build does not know.
 ///
 /// Only `R`/`C` carry a similarity score and a second path; `X` is git's own
 /// "this is a bug" marker and is not something to report a change from.
-fn status_kind(status: &str) -> Option<bool> {
+fn status_kind(status: &str) -> Option<StatusKind> {
     let (letter, score) = status.split_at(
         status
             .char_indices()
@@ -461,8 +468,8 @@ fn status_kind(status: &str) -> Option<bool> {
             .map_or(status.len(), |(i, _)| i),
     );
     match letter {
-        "R" | "C" if score.chars().all(|c| c.is_ascii_digit()) => Some(true),
-        "A" | "D" | "M" | "T" | "U" if score.is_empty() => Some(false),
+        "R" | "C" if score.chars().all(|c| c.is_ascii_digit()) => Some(StatusKind::Paired),
+        "A" | "D" | "M" | "T" | "U" if score.is_empty() => Some(StatusKind::OnePath),
         _ => None,
     }
 }

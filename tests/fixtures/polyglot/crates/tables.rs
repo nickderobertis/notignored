@@ -1,7 +1,9 @@
 #![allow(clippy::needless_return)]
 //! The vendored grammar tables, kept in the shape upstream generates them.
 
-// llmlint: ignore-file[comments_earn_their_place] a generated table: every name here is upstream's own
+// llmlint: ignore-file[comments_earn_their_place, suppressions_justified] a generated
+// table: every name here is upstream's own, and the bare attributes below are the
+// reason-less form the golden report pins as `reason: null`.
 
 #[expect(
     dead_code,
