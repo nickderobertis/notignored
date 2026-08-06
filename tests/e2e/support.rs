@@ -103,13 +103,13 @@ pub fn pinned_rustc_version() -> String {
         .expect("rust-toolchain.toml pins a channel")
 }
 
-/// Compile `file` as a library with `lint` denied, returning whether it built
+/// Compile `file` as a library with `lints` denied, returning whether it built
 /// clean.
 ///
 /// The compiler *is* the tool whose lint is being silenced, so parity is proved
 /// against the pinned toolchain rustup already resolves `rustc` to — a different
 /// compiler would prove a different claim.
-pub fn rustc_accepts(file: &Path, lint: &str) -> bool {
+pub fn rustc_accepts(file: &Path, lints: &[&str]) -> bool {
     let expected = pinned_rustc_version();
     let version = Command::new("rustc")
         .arg("--version")
@@ -123,17 +123,21 @@ pub fn rustc_accepts(file: &Path, lint: &str) -> bool {
     );
 
     let out_dir = tempfile::tempdir().expect("tempdir");
-    let output = Command::new("rustc")
-        .args([
-            "--edition",
-            "2021",
-            "--crate-type",
-            "lib",
-            "--emit",
-            "metadata",
-            "-D",
-        ])
-        .arg(lint)
+    let mut command = Command::new("rustc");
+    command.args([
+        "--edition",
+        "2021",
+        "--crate-type",
+        "lib",
+        "--emit",
+        "metadata",
+    ]);
+    // Denying exactly the lints under test makes the pass/fail flip attributable
+    // to the suppression and to nothing else the compiler happens to say.
+    for lint in lints {
+        command.arg("-D").arg(lint);
+    }
+    let output = command
         .arg("--out-dir")
         .arg(out_dir.path())
         .arg(file)

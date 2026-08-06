@@ -74,6 +74,7 @@ pub struct Cli {
     #[arg(long)]
     pub fail_if_found: bool,
 
+    // llmlint: ignore-block[invalid_states_unrepresentable] the pair is a field-per-flag mirror of the command line, and clap rejects a base without --diff at the boundary (`requires = "diff"`, exit 2, covered by an e2e); folding them into an enum would move flag parsing into a custom value parser, which is exactly what this layer keeps out.
     /// Report only the suppressions this change added: those on lines the diff
     /// added. Compares the work tree against HEAD unless --diff-base says
     /// otherwise, and parses only the files the change touched.
@@ -85,9 +86,9 @@ pub struct Cli {
     /// where this branch forked, so later base-branch commits are never reported
     /// as this branch's own changes — while an explicit A..B range is passed to
     /// git as-is.
-    // llmlint: ignore[invalid_states_unrepresentable] a base without --diff is rejected at the boundary by `requires = "diff"` (exit 2, covered by an e2e), and this struct is a field-per-flag mirror of the command line: folding the pair into an enum would move flag parsing into a custom value parser, which is exactly what this layer keeps out.
     #[arg(long, value_name = "REF", requires = "diff")]
     pub diff_base: Option<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 /// What a run decided to look at.

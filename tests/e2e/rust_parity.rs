@@ -28,7 +28,7 @@ fn report_for(file: &str) -> serde_json::Value {
 fn real_rustc_rejects_the_unsuppressed_fixture_and_notignored_reports_nothing() {
     let file = parity_dir().join("violation.rs");
     assert!(
-        !rustc_accepts(&file, LINT),
+        !rustc_accepts(&file, &[LINT]),
         "the fixture is supposed to violate {LINT}; parity proves nothing otherwise"
     );
 
@@ -43,7 +43,7 @@ fn real_rustc_rejects_the_unsuppressed_fixture_and_notignored_reports_nothing() 
 fn an_expect_attribute_makes_real_rustc_accept_it_and_notignored_describes_it_exactly() {
     let file = parity_dir().join("suppressed.rs");
     assert!(
-        rustc_accepts(&file, LINT),
+        rustc_accepts(&file, &[LINT]),
         "the `#[expect({LINT}, …)]` should make rustc accept the file; the fixture drifted"
     );
 
@@ -78,7 +78,7 @@ fn an_expect_attribute_makes_real_rustc_accept_it_and_notignored_describes_it_ex
 fn a_directive_written_across_lines_is_accepted_by_rustc_and_reported_as_one_span() {
     let file = parity_dir().join("multiline.rs");
     assert!(
-        rustc_accepts(&file, LINT),
+        rustc_accepts(&file, &[LINT]),
         "a multi-line `#[expect({LINT}, …)]` suppresses just as the one-line form does"
     );
 
@@ -117,7 +117,7 @@ fn removing_the_suppression_flips_real_rustc_back_to_rejecting() {
     std::fs::write(&stripped, &without_directive).unwrap();
 
     assert!(
-        !rustc_accepts(&stripped, LINT),
+        !rustc_accepts(&stripped, &[LINT]),
         "stripping the attribute must reinstate the violation"
     );
 
@@ -129,4 +129,52 @@ fn removing_the_suppression_flips_real_rustc_back_to_rejecting() {
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn an_allow_of_several_lints_suppresses_them_all_and_is_reported_verbatim() {
+    let file = parity_dir().join("allow_list.rs");
+    assert!(
+        rustc_accepts(&file, &[LINT, "unused_variables"]),
+        "one `#[allow(…)]` covers every lint it names"
+    );
+
+    let report = report_for("allow_list.rs");
+    let ignores = report["ignores"].as_array().unwrap();
+    assert_eq!(ignores.len(), 1, "{report:#}");
+
+    let directive = &ignores[0];
+    assert_eq!(directive["scope"], "block");
+    // Every lint path is kept exactly as written, tool prefix and all.
+    assert_eq!(
+        directive["rules"],
+        serde_json::json!([LINT, "unused_variables", "clippy::needless_return"])
+    );
+    assert!(
+        directive["reason"].is_null(),
+        "none was given: {directive:#}"
+    );
+}
+
+#[test]
+fn an_inner_attribute_suppresses_the_whole_file_and_is_reported_as_file_scope() {
+    let file = parity_dir().join("inner.rs");
+    assert!(
+        rustc_accepts(&file, &[LINT]),
+        "the inner `#![allow({LINT})]` exempts the whole crate"
+    );
+
+    let report = report_for("inner.rs");
+    let ignores = report["ignores"].as_array().unwrap();
+    assert_eq!(ignores.len(), 1, "{report:#}");
+
+    let directive = &ignores[0];
+    assert_eq!(directive["scope"], "file");
+    assert_eq!(directive["rules"], serde_json::json!([LINT]));
+    assert_eq!(directive["raw"], "#![allow(dead_code)]");
+    assert_eq!(directive["suppressed"]["start_line"], 1);
+    assert!(
+        directive["suppressed"]["end_line"].is_null(),
+        "a file-wide exemption runs to end-of-file"
+    );
 }

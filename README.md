@@ -154,7 +154,9 @@ The `json` format emits the full report envelope:
 | `llmlint` | its inline `ignore[rule] reason` suppression directive | Planned |
 
 Adding one is three touch points: a module under `src/tools/`, one line in
-`src/tools/mod.rs::registry()`, and one row above.
+`src/tools/mod.rs::registry()`, and one row above. The registry is the single
+source of truth for the Status column: `tests/tools_contract.rs` fails the build
+if a row here and the registered parsers disagree.
 
 ## How it works
 

@@ -52,6 +52,17 @@ pub enum DiffError {
         /// git's stderr, trimmed.
         message: String,
     },
+    /// git succeeded but printed something this build cannot read.
+    ///
+    /// Skipping the unreadable part would answer "this change added no
+    /// suppression" without having looked, so it is a failure instead.
+    #[error("cannot read `{command}` output: {detail}")]
+    Malformed {
+        /// The command whose output could not be read.
+        command: String,
+        /// What could not be read, quoted.
+        detail: String,
+    },
 }
 
 impl DiffError {
@@ -67,6 +78,10 @@ impl DiffError {
             }
             DiffError::Git { .. } => {
                 "pass a --diff-base this repository can resolve: a branch, tag, commit, or A..B range"
+            }
+            DiffError::Malformed { .. } => {
+                "this git speaks a diff format notignored cannot read — report it, \
+                 or drop --diff to scan the whole tree"
             }
         }
     }
@@ -116,32 +131,35 @@ impl AddedLines {
     /// numbers refer to. Body lines are ignored, so a source line that itself
     /// looks like a header (it arrives prefixed with `+`, `-`, or a space) can
     /// never be mistaken for one.
-    fn parse(patch: &str) -> Self {
+    /// A header that *is* one and cannot be read is an error, not a skip: the
+    /// lines it covers would otherwise be silently treated as unchanged.
+    fn parse(patch: &str, command: &str) -> Result<Self, DiffError> {
         let mut runs = Vec::new();
         for line in patch.lines() {
             let Some(header) = line.strip_prefix("@@ ") else {
                 continue;
             };
-            let Some(new_side) = header
+            let malformed = || DiffError::Malformed {
+                command: command.to_string(),
+                detail: format!("unreadable hunk header {line:?}"),
+            };
+            let new_side = header
                 .split_whitespace()
                 .find_map(|field| field.strip_prefix('+'))
-            else {
-                continue;
-            };
+                .ok_or_else(malformed)?;
             // A missing count means one line; a zero count is a pure deletion,
             // which adds nothing.
             let (first, count) = match new_side.split_once(',') {
-                Some((first, count)) => (first.parse::<u32>(), count.parse::<u32>()),
-                None => (new_side.parse::<u32>(), Ok(1)),
+                Some((first, count)) => (first, count),
+                None => (new_side, "1"),
             };
-            let (Ok(first), Ok(count)) = (first, count) else {
-                continue;
-            };
+            let first: u32 = first.parse().map_err(|_| malformed())?;
+            let count: u32 = count.parse().map_err(|_| malformed())?;
             if count > 0 {
                 runs.push((first, first.saturating_add(count - 1)));
             }
         }
-        AddedLines { runs }
+        Ok(AddedLines { runs })
     }
 }
 
@@ -227,8 +245,9 @@ impl Diff {
         // `-z` makes the records NUL-separated, so a path holding a space or a
         // quote needs no unquoting; `--relative` reports paths the way this run's
         // report does — relative to the directory it was invoked from.
-        let output = self.git(&["diff", "--name-status", "-z", "--relative", self.base.arg()])?;
-        Ok(parse_name_status(&output))
+        let args = ["diff", "--name-status", "-z", "--relative", self.base.arg()];
+        let output = self.git(&args)?;
+        parse_name_status(&output, &format!("git {}", args.join(" ")))
     }
 
     /// The lines this change added to `file`.
@@ -249,7 +268,8 @@ impl Diff {
         if let Some(source) = &renamed_from {
             args.push(source);
         }
-        Ok(AddedLines::parse(&self.git(&args)?))
+        let patch = self.git(&args)?;
+        AddedLines::parse(&patch, &format!("git {}", args.join(" ")))
     }
 
     /// What `base` means as something to compare against.
@@ -316,12 +336,19 @@ impl Diff {
 ///
 /// Records are NUL-separated: a status field, then the path it applies to — or
 /// two paths, source then destination, when the status is a rename or a copy.
-fn parse_name_status(output: &str) -> Vec<ChangedFile> {
+fn parse_name_status(output: &str, command: &str) -> Result<Vec<ChangedFile>, DiffError> {
     let mut fields = output.split('\0').filter(|field| !field.is_empty());
     let mut files = Vec::new();
     while let Some(status) = fields.next() {
         let paired = status.starts_with('R') || status.starts_with('C');
-        let Some(first) = fields.next() else { break };
+        // A record cut short means git named a change without naming its file.
+        // Answering from the records that did arrive would report on a change we
+        // only partly know, so it is a failure instead.
+        let truncated = || DiffError::Malformed {
+            command: command.to_string(),
+            detail: format!("record {status:?} names no path"),
+        };
+        let first = fields.next().ok_or_else(truncated)?;
         if !paired {
             files.push(ChangedFile {
                 path: PathBuf::from(first),
@@ -329,17 +356,13 @@ fn parse_name_status(output: &str) -> Vec<ChangedFile> {
             });
             continue;
         }
-        // A paired status whose destination is missing is truncated output;
-        // there is nothing to report about a path we do not have.
-        let Some(destination) = fields.next() else {
-            break;
-        };
+        let destination = fields.next().ok_or_else(truncated)?;
         files.push(ChangedFile {
             path: PathBuf::from(destination),
             renamed_from: Some(PathBuf::from(first)),
         });
     }
-    files
+    Ok(files)
 }
 
 /// Whether `selector` names `candidate` or a directory holding it.
@@ -446,6 +469,11 @@ mod tests {
         git(dir, &["commit", "-q", "-m", message]);
     }
 
+    /// The added lines of a patch git is standing in for.
+    fn added_lines(patch: &str) -> AddedLines {
+        AddedLines::parse(patch, "git diff").expect("a readable patch")
+    }
+
     fn changed(diff: &Diff) -> Vec<(String, Option<String>)> {
         diff.changed_files()
             .expect("changed files")
@@ -482,7 +510,7 @@ mod tests {
             "@@ -20,2 +24,0 @@\n",
             "-gone\n-gone\n",
         );
-        let added = AddedLines::parse(patch);
+        let added = added_lines(patch);
         assert!(added.intersects(2, 2) && added.intersects(4, 4));
         assert!(!added.intersects(1, 1) && !added.intersects(5, 11));
         assert!(added.intersects(12, 12));
@@ -493,7 +521,7 @@ mod tests {
 
     #[test]
     fn a_span_counts_when_any_of_its_lines_was_added() {
-        let added = AddedLines::parse("@@ -1,0 +5,2 @@\n+a\n+b\n");
+        let added = added_lines("@@ -1,0 +5,2 @@\n+a\n+b\n");
         // Straddling the run from either side, and containing it whole.
         assert!(added.intersects(3, 5));
         assert!(added.intersects(6, 9));
@@ -503,15 +531,22 @@ mod tests {
     }
 
     #[test]
-    fn malformed_hunk_headers_are_ignored_rather_than_guessed_at() {
-        let added = AddedLines::parse(concat!(
+    fn an_unreadable_hunk_header_is_an_error_rather_than_a_guess() {
+        for patch in [
             "@@ no plus side @@\n",
             "@@ -1,0 +not-a-number,2 @@\n",
             "@@ -1,0 +5,not-a-number @@\n",
-            "+@@ -1,0 +9,9 @@\n",
-            " @@ -1,0 +9,9 @@\n",
-        ));
-        assert!(added.is_empty());
+        ] {
+            let error = AddedLines::parse(patch, "git diff").unwrap_err();
+            assert!(matches!(error, DiffError::Malformed { .. }), "{error:?}");
+            assert!(error.to_string().contains("hunk header"), "{error}");
+            assert!(error.hint().contains("--diff"), "{}", error.hint());
+        }
+
+        // A body line that merely looks like a header is body, not a header: a
+        // patch of a patch still reads as one hunk of added text.
+        let added = added_lines("@@ -1,0 +9,2 @@\n+@@ -1,0 +3,3 @@\n+ @@ -1,0 +3,3 @@\n");
+        assert!(added.intersects(9, 10) && !added.intersects(3, 3));
         assert!(AddedLines::default().is_empty());
     }
 
@@ -665,16 +700,16 @@ mod tests {
     }
 
     #[test]
-    fn truncated_name_status_output_is_read_as_far_as_it_goes() {
-        assert!(parse_name_status("").is_empty());
-        assert!(parse_name_status("M\0").is_empty());
+    fn truncated_name_status_output_is_an_error_not_a_shorter_answer() {
+        let command = "git diff --name-status";
+        assert!(parse_name_status("", command).unwrap().is_empty());
+        for truncated in ["M\0", "R100\0old.py\0"] {
+            let error = parse_name_status(truncated, command).unwrap_err();
+            assert!(matches!(error, DiffError::Malformed { .. }), "{error:?}");
+            assert!(error.to_string().contains("names no path"), "{error}");
+        }
         assert_eq!(
-            parse_name_status("R100\0old.py\0"),
-            Vec::new(),
-            "a rename with no destination has no path to report"
-        );
-        assert_eq!(
-            parse_name_status("M\0a.py\0A\0b.py\0"),
+            parse_name_status("M\0a.py\0A\0b.py\0", command).unwrap(),
             vec![
                 ChangedFile {
                     path: PathBuf::from("a.py"),
@@ -748,10 +783,7 @@ mod tests {
         });
 
         let mut added = BTreeMap::new();
-        added.insert(
-            "a.py".to_string(),
-            AddedLines::parse("@@ -6,0 +7,1 @@\n+x\n"),
-        );
+        added.insert("a.py".to_string(), added_lines("@@ -6,0 +7,1 @@\n+x\n"));
         retain_new(&mut report, &added);
 
         assert_eq!(
@@ -776,7 +808,7 @@ mod tests {
         let mut added = BTreeMap::new();
         added.insert(
             "a.py".to_string(),
-            AddedLines::parse("@@ -7,0 +8,1 @@\n+  reason\n"),
+            added_lines("@@ -7,0 +8,1 @@\n+  reason\n"),
         );
         retain_new(&mut report, &added);
         assert_eq!(report.ignores.len(), 1, "{report:#?}");
