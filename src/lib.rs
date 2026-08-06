@@ -27,6 +27,7 @@
 
 pub mod cli;
 pub mod comments;
+pub mod diff;
 pub mod model;
 pub mod scan;
 pub mod source;

@@ -46,6 +46,7 @@ tagged release attaches per-platform archives built on native runners.
 
 ```
 notignored [PATHS...] [--format human|json] [--tool NAME]... [--fail-if-found]
+           [--diff [--diff-base REF]]
 ```
 
 - `PATHS` — files and/or directories. Directories are walked recursively,
@@ -53,6 +54,37 @@ notignored [PATHS...] [--format human|json] [--tool NAME]... [--fail-if-found]
 - `--format` — `human` (default) or `json`.
 - `--tool` — only report this tool; repeat to allow several. Omit for all.
 - `--fail-if-found` — exit 1 when any suppression is reported.
+- `--diff` — report only the suppressions the change added (see below).
+- `--diff-base` — the git revision or range `--diff` compares against.
+
+### Reviewing a pull request
+
+A reviewer cares about the suppressions a change *introduces*, not the
+inventory it inherited. `--diff` reports only those: a directive is new when the
+diff added at least one of the lines it occupies.
+
+```console
+$ notignored --diff --diff-base main --fail-if-found
+src/app.py:42:20 ruff E501 (line) -- long wrapped URL
+notignored: 1 ignore in 1 file
+```
+
+- Bare `--diff` compares the work tree — staged *and* unstaged — against `HEAD`.
+- `--diff-base REF` takes any git revision or range. A **plain ref** is compared
+  from the **merge base**, the way a pull request's "Files changed" is, so
+  commits that landed on the base branch after this one forked are never
+  reported as this branch's own. An explicit `A..B` **range** is passed to git
+  as-is, two-dot semantics and all. These are llmlint's `--diff` / `--diff-base`
+  semantics exactly.
+- `PATHS` still narrow the result: `notignored --diff --diff-base main src/`
+  reports the new suppressions under `src/` only. An empty intersection is a
+  clean exit 0.
+- Only the files the change touched are read, so a diff run stays fast on a
+  large repository. Files the change deleted are skipped; a renamed file reports
+  what the change added to it, not the lines that merely moved.
+
+`--diff` shells out to `git` — infrastructure, not one of the linters whose
+directives are parsed natively — so it needs `git` on `PATH` and a work tree.
 
 ### Exit codes
 

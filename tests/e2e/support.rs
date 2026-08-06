@@ -91,6 +91,56 @@ pub fn ruff_passes(file: &Path, rule: &str) -> bool {
     output.status.success()
 }
 
+/// Run `git` in `dir`, failing with the command that broke and git's own reason.
+///
+/// The diff journeys drive a **real** repository: a stubbed git would prove
+/// nothing about the semantics `--diff-base` promises.
+pub fn git(dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| {
+            panic!("cannot run git {args:?}: {error}\nACTION: install git and re-run")
+        });
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A repository on `main` with no commits yet, configured so the developer's own
+/// git settings (signing keys, default branch, identity) cannot change what the
+/// journeys see.
+pub fn git_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    git(dir.path(), &["init", "-q"]);
+    git(dir.path(), &["config", "user.email", "tester@example.com"]);
+    git(dir.path(), &["config", "user.name", "Tester"]);
+    git(dir.path(), &["config", "commit.gpgsign", "false"]);
+    git(dir.path(), &["checkout", "-q", "-b", "main"]);
+    dir
+}
+
+/// Stage everything and commit it.
+pub fn commit(dir: &Path, message: &str) {
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", message]);
+}
+
+/// Write a file, creating any parent directories it names.
+pub fn write(dir: &Path, name: &str, contents: &str) {
+    let path = dir.join(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create parent directory");
+    }
+    std::fs::write(&path, contents).unwrap_or_else(|error| {
+        panic!("cannot write {}: {error}", path.display());
+    });
+}
+
 /// Parse a JSON report emitted by the binary.
 pub fn parse_report(stdout: &[u8]) -> serde_json::Value {
     serde_json::from_slice(stdout).unwrap_or_else(|error| {

@@ -1,17 +1,21 @@
 //! The `notignored` command line.
 //!
 //! Kept free of parsing logic: this layer selects files, calls
-//! [`crate::scan`], and renders. A future `--diff [--diff-base REF]` adds one
-//! branch to `Cli::select_files` — asking git for the changed files instead of
-//! walking the tree — and touches nothing below it.
+//! [`crate::scan`], and renders. `--diff` is one branch in `Cli::select` —
+//! asking git for the changed files instead of walking the tree, and narrowing
+//! the finished report to the directives the change added — and touches nothing
+//! below it.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, ValueEnum};
 
+use crate::diff::{self, AddedLines, Diff, DiffError};
 use crate::model::{Report, Tool};
 use crate::scan::{self, ScanError, ScanOptions};
+use crate::source::{display_path, Language};
 
 mod render;
 
@@ -44,6 +48,8 @@ pub enum Format {
     long_about = "Report every lint and type-check suppression comment in a source tree.\n\n\
                   Suppressions are parsed natively — the tools whose rules are being silenced are \
                   never invoked — so this is fast enough to run on every pull request.\n\n\
+                  With --diff, only the suppressions the change added are reported, which is the \
+                  review case: `notignored --diff --diff-base main`.\n\n\
                   Exit codes:\n  \
                   0  the scan completed\n  \
                   1  --fail-if-found was given and at least one suppression was reported\n  \
@@ -67,15 +73,127 @@ pub struct Cli {
     /// Exit 1 when any suppression is reported.
     #[arg(long)]
     pub fail_if_found: bool,
+
+    /// Report only the suppressions this change added: those on lines the diff
+    /// added. Compares the work tree against HEAD unless --diff-base says
+    /// otherwise, and parses only the files the change touched.
+    #[arg(long)]
+    pub diff: bool,
+
+    /// Base the --diff comparison is taken from: any git revision or range. A
+    /// plain ref uses three-dot / merge-base semantics — the comparison starts
+    /// where this branch forked, so later base-branch commits are never reported
+    /// as this branch's own changes — while an explicit A..B range is passed to
+    /// git as-is.
+    #[arg(long, value_name = "REF", requires = "diff")]
+    pub diff_base: Option<String>,
+}
+
+/// What a run decided to look at.
+struct Selection {
+    /// The files to parse, in report order.
+    files: Vec<PathBuf>,
+    /// In `--diff` mode, the lines the change added to each selected file, keyed
+    /// by the path the report uses. `None` when every directive is reported.
+    added: Option<BTreeMap<String, AddedLines>>,
+}
+
+/// Why a run could not decide what to look at.
+#[derive(Debug, thiserror::Error)]
+enum SelectError {
+    /// A path could not be walked.
+    #[error(transparent)]
+    Scan(#[from] ScanError),
+    /// The change itself could not be determined.
+    #[error("cannot diff: {0}")]
+    Diff(#[from] DiffError),
+}
+
+impl SelectError {
+    /// The concrete next action for this failure.
+    fn hint(&self) -> &'static str {
+        match self {
+            SelectError::Scan(_) => {
+                "pass paths that exist, or omit them to scan the current directory"
+            }
+            SelectError::Diff(error) => error.hint(),
+        }
+    }
 }
 
 impl Cli {
-    /// The files this invocation should scan.
+    /// What this invocation should scan, and how to tell which directives are
+    /// new.
     ///
-    /// The single seam where file selection is decided; `--diff` will branch
-    /// here.
-    fn select_files(&self) -> Result<Vec<PathBuf>, ScanError> {
-        scan::discover(&self.paths)
+    /// The single seam where file selection is decided: without `--diff` the
+    /// tree is walked, with it git names the changed files.
+    fn select(&self) -> Result<Selection, SelectError> {
+        if !self.diff {
+            return Ok(Selection {
+                files: scan::discover(&self.paths)?,
+                added: None,
+            });
+        }
+        // The diff is taken where the command was run, so its paths line up with
+        // the ones the report prints.
+        let diff = Diff::open(Path::new("."), self.diff_base.as_deref())?;
+        let changed = diff.changed_files()?;
+
+        let mut files = Vec::new();
+        let mut added = BTreeMap::new();
+        for file in self.narrow_to_paths(&changed)? {
+            // A file the change deleted is part of the diff but has no source
+            // left to read; skipping it is the answer, not an error.
+            if !file.path.exists() {
+                continue;
+            }
+            // Asking git for the lines of a file no parser could read would
+            // spend a process on a file the scan skips anyway.
+            if !Language::from_path(&file.path).is_scannable() {
+                continue;
+            }
+            let lines = diff.added_lines(file)?;
+            // Nothing added means nothing new to find, so the file is never read.
+            if lines.is_empty() {
+                continue;
+            }
+            added.insert(display_path(&file.path), lines);
+            files.push(file.path.clone());
+        }
+        Ok(Selection {
+            files,
+            added: Some(added),
+        })
+    }
+
+    /// The changed files this run's `PATHS` select.
+    ///
+    /// `PATHS` narrow a change the same way they narrow a tree scan, and an
+    /// empty intersection is simply an empty report. A path that neither exists
+    /// nor appears in the change is a typo rather than a smaller run, and gets
+    /// the same error a tree scan gives it.
+    fn narrow_to_paths<'a>(
+        &self,
+        changed: &'a [diff::ChangedFile],
+    ) -> Result<Vec<&'a diff::ChangedFile>, ScanError> {
+        let mut selected: Vec<&diff::ChangedFile> = Vec::new();
+        for path in &self.paths {
+            let mut matched = changed
+                .iter()
+                .filter(|file| diff::path_selects(path, &file.path))
+                .peekable();
+            if matched.peek().is_none() && !path.exists() {
+                return Err(ScanError::Path {
+                    path: display_path(path),
+                    message: "no such file or directory".to_string(),
+                });
+            }
+            selected.extend(matched);
+        }
+        // Two overlapping inputs must not report the same file twice.
+        selected.sort_by(|a, b| a.path.cmp(&b.path));
+        selected.dedup_by(|a, b| a.path == b.path);
+        Ok(selected)
     }
 
     /// The scan configuration this invocation implies.
@@ -90,19 +208,19 @@ impl Cli {
 ///
 /// Returns the process exit code rather than exiting, so tests can drive it.
 pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let files = match cli.select_files() {
-        Ok(files) => files,
+    let selection = match cli.select() {
+        Ok(selection) => selection,
         Err(error) => {
             let _ = writeln!(err, "notignored: {error}");
-            let _ = writeln!(
-                err,
-                "hint: pass paths that exist, or omit them to scan the current directory"
-            );
+            let _ = writeln!(err, "hint: {}", error.hint());
             return EXIT_ERROR;
         }
     };
 
-    let report = scan::scan_files(&files, &cli.scan_options());
+    let mut report = scan::scan_files(&selection.files, &cli.scan_options());
+    if let Some(added) = &selection.added {
+        diff::retain_new(&mut report, added);
+    }
     // Errors first, so a human sees what went wrong above the summary and a JSON
     // run still gets them on the terminal when stdout is redirected.
     let _ = narrate_errors(&report, err);
@@ -197,6 +315,20 @@ mod tests {
         assert_eq!(cli.tools, vec![Tool::Ruff, Tool::Mypy]);
         assert!(cli.fail_if_found);
         assert_eq!(cli.scan_options().tools, vec![Tool::Ruff, Tool::Mypy]);
+    }
+
+    #[test]
+    fn diff_flags_are_parsed_and_diff_base_requires_diff() {
+        let cli = parse(&["--diff", "--diff-base", "origin/main"]);
+        assert!(cli.diff);
+        assert_eq!(cli.diff_base.as_deref(), Some("origin/main"));
+
+        let bare = parse(&["--diff"]);
+        assert!(bare.diff && bare.diff_base.is_none());
+
+        // A base with nothing to compare is a mistake, not a whole-tree scan.
+        let error = Cli::try_parse_from(["notignored", "--diff-base", "main"]).unwrap_err();
+        assert!(error.to_string().contains("--diff"), "{error}");
     }
 
     #[test]

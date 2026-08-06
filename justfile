@@ -93,9 +93,9 @@ setup-ruff:
 
 # Only after reviewing the diff — and bump REPORT_VERSION when the shape, not
 # just the data, moved.
-# Rewrite the checked-in golden report from the current output.
+# Rewrite the checked-in golden reports from the current output.
 bless:
-    @NOTIGNORED_BLESS=1 cargo test --quiet --locked --test e2e json_format
+    @NOTIGNORED_BLESS=1 cargo test --quiet --locked --test e2e golden
 
 # Upgrade dependencies, then re-run the full gate.
 upgrade:

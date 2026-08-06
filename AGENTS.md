@@ -142,3 +142,7 @@ recipe to `.claude/settings.json` rather than re-approving it every session.
   so `--diff` and other modes slot in without touching parsers.
 - Rule codes and reasons are captured **verbatim** as written in the source; do
   not normalize case, expand aliases, or re-order.
+- `--diff` (`src/diff.rs`) shells out to real `git`: the no-shell-out rule is
+  about the linters whose directives we parse, not infrastructure. Its semantics
+  mirror llmlint's exactly, so a project running both can predict either — keep
+  them in step.

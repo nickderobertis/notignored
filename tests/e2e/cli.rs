@@ -286,7 +286,14 @@ fn help_documents_the_flags_the_exit_codes_and_every_tool() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
 
-    for flag in ["--format", "--tool", "--fail-if-found", "PATHS"] {
+    for flag in [
+        "--format",
+        "--tool",
+        "--fail-if-found",
+        "--diff",
+        "--diff-base",
+        "PATHS",
+    ] {
         assert!(help.contains(flag), "--help is missing {flag}:\n{help}");
     }
     assert!(help.contains("Exit codes:"), "{help}");
