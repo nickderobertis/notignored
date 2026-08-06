@@ -46,7 +46,7 @@ In CI there is nothing to install: the [GitHub Action](#on-a-pull-request-the-gi
 fetches the release binary itself and posts what the pull request added.
 
 ```yaml
-      - uses: nickderobertis/notignored@main
+- uses: nickderobertis/notignored@main
 ```
 
 ## Usage
@@ -240,9 +240,9 @@ Scope follows each tool's own rules, not a house convention:
 - **typescript** — the parity claim is pinned to one compiler: the `typescript`
   version in `tests/js-toolchain/package.json` — **7.0.2**, the Go port — which
   is what `tests/e2e/typescript_parity.rs` drives. The 5.x compiler is a
-  different implementation of the same directives, and matches some of them more
-  strictly, so this repo claims parity with the pinned one rather than with
-  every `tsc` ever shipped.
+  separate implementation of the same directives and is not guaranteed to read
+  every form the same way, so the claim here is parity with the pinned compiler
+  rather than with every `tsc` ever shipped.
 - **llmlint** — `ignore` is `line`, `ignore-file` is `file`, and
   `ignore-block` … `ignore-end` is one `block` record spanning both directives.
   A block left unclosed keeps a null `suppressed.end_line` and adds an `errors`
