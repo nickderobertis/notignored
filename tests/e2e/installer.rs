@@ -99,9 +99,15 @@ fn serve(root: &Path) -> (Server, String) {
 
 /// Answer one request: 200 with the file's bytes, or 404.
 fn serve_one(mut stream: TcpStream, root: &Path) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    // On BSD-derived systems (macOS) an accepted socket inherits the listener's
+    // O_NONBLOCK, so the read below would return WouldBlock and answer nothing;
+    // on Linux it would not. Set it explicitly rather than depend on which.
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut request = String::new();
-    if BufReader::new(&stream).read_line(&mut request).is_err() {
+    if !matches!(BufReader::new(&stream).read_line(&mut request), Ok(n) if n > 0) {
         return;
     }
     let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
