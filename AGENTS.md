@@ -136,6 +136,13 @@ Two pins, two installers, both run by `just bootstrap`: `.ruff-version` +
 ` -- ` description, in `suppressedMessages[].suppressions[].justification` — the
 e2e asserts our extraction against *its* reading, not against a literal.
 
+Not every parity proof can be a pass/fail flip. A mismatched or unclosed
+`biome-ignore-start` is only a *warning* in biome, which still exits 0 and still
+honours the range to end-of-file, so exit status cannot discriminate it. Those
+journeys assert on biome's own diagnostic text via `--reporter=json`
+(`support::biome_diagnostics`) instead. Reach for that shape only where the tool
+genuinely has no failing exit to offer.
+
 ## Keeping the allowlist current
 
 Grant `just` recipes, not raw `cargo`/`uv` wildcards: a wildcard on a build tool

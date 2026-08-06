@@ -8,7 +8,10 @@
 //! directives worth surfacing in a review — so these journeys check the reason as
 //! closely as the span, including one that spans two lines of a block comment.
 
-use crate::support::{biome_passes, fixture, notignored, parse_report};
+use crate::support::{biome_diagnostics, biome_passes, fixture, notignored, parse_report};
+
+/// Biome's category for every complaint about a suppression comment itself.
+const PAIRING: &str = "suppressions/incorrect";
 
 /// The rule every fixture hinges on.
 const RULE: &str = "lint/suspicious/noDebugger";
@@ -161,6 +164,98 @@ fn every_grammar_form_passes_real_biome_and_is_reported_with_its_span() {
         assert_eq!(directive["rules"], serde_json::json!([RULE]));
         assert_eq!(directive["tool"], "biome");
     }
+}
+
+/// The control for the two pairing journeys below: a range biome accepts draws
+/// no complaint at all, so a `suppressions/incorrect` diagnostic there really is
+/// the pairing rule firing and not background noise from the fixture or config.
+#[test]
+fn a_matched_range_draws_no_pairing_complaint_from_real_biome() {
+    assert_eq!(
+        biome_diagnostics(&parity_dir().join("grammar.js"), RULE),
+        vec![],
+        "the `-start` … `-end` pair in grammar.js is the one biome accepts"
+    );
+}
+
+#[test]
+fn real_biome_leaves_an_unclosed_range_open_and_notignored_reports_it_that_way() {
+    let file = parity_dir().join("unclosed_range.js");
+
+    // Biome's verdict on an unclosed range is a *warning*, so it still exits 0.
+    // That is why this journey asserts on the diagnostic rather than the status:
+    // the exit code cannot tell an unclosed range from a well-formed one.
+    assert_eq!(
+        biome_diagnostics(&file, RULE),
+        vec![(
+            PAIRING.to_string(),
+            "Range suppressions must have a matching biome-ignore-end".to_string(),
+            1,
+        )],
+        "real biome no longer complains the way this parser assumes; the pin drifted"
+    );
+    // The complaint does not withdraw the suppression: both `debugger;` lines
+    // stay silenced, which is what makes end-of-file the honest end of the range.
+    assert!(
+        biome_passes(&file, RULE),
+        "biome honours an unclosed range to end-of-file while warning about it"
+    );
+
+    let report = report_for("unclosed_range.js");
+    let ignores = report["ignores"].as_array().unwrap();
+    assert_eq!(ignores.len(), 1, "{report:#}");
+    assert_eq!(ignores[0]["scope"], "block");
+    assert_eq!(ignores[0]["reason"], "opened and never closed");
+    assert_eq!(ignores[0]["suppressed"]["start_line"], 1);
+    assert!(
+        ignores[0]["suppressed"]["end_line"].is_null(),
+        "an unclosed range runs to end-of-file: {report:#}"
+    );
+}
+
+#[test]
+fn real_biome_rejects_a_mismatched_end_and_notignored_leaves_the_range_open() {
+    let file = parity_dir().join("mismatched_range.js");
+
+    // A `-end` naming a different selector does not close the range: biome
+    // reports the end as having no start *and* the start as never closed.
+    assert_eq!(
+        biome_diagnostics(&file, RULE),
+        vec![
+            (
+                PAIRING.to_string(),
+                "Found a biome-ignore-end suppression without a biome-ignore-start suppression. \
+                 This is invalid"
+                    .to_string(),
+                3,
+            ),
+            (
+                PAIRING.to_string(),
+                "Range suppressions must have a matching biome-ignore-end".to_string(),
+                1,
+            ),
+        ],
+        "real biome no longer matches ranges by selector; the pin or the parser drifted"
+    );
+    // Warnings only, again — and the `debugger;` *after* the rejected end is
+    // still silenced, so the range really did run past it to end-of-file.
+    assert!(
+        biome_passes(&file, RULE),
+        "the range outlives the end that failed to close it"
+    );
+
+    let report = report_for("mismatched_range.js");
+    let ignores = report["ignores"].as_array().unwrap();
+    // The `-end` closes a range rather than opening one, so it is never itself a
+    // suppression — matched or not.
+    assert_eq!(ignores.len(), 1, "{report:#}");
+    assert_eq!(ignores[0]["scope"], "block");
+    assert_eq!(ignores[0]["reason"], "opened at the rule level");
+    assert_eq!(ignores[0]["suppressed"]["start_line"], 1);
+    assert!(
+        ignores[0]["suppressed"]["end_line"].is_null(),
+        "a mismatched end leaves the range open: {report:#}"
+    );
 }
 
 #[test]
