@@ -135,8 +135,9 @@ gate on a threshold:
         run: echo "this change adds ${{ steps.notignored.outputs.count }} suppression(s)"
 ```
 
-The runner needs `bash`, `jq`, and the `gh` CLI — every GitHub-hosted runner
-ships all three — plus `cargo` when `version: local`.
+The steps are `bash`, so the action runs on the Linux and macOS runners; it needs
+`jq` and the `gh` CLI (both preinstalled there), plus `cargo` when
+`version: local`.
 
 `--format markdown` renders exactly the body the action posts, so it can be
 previewed locally:
