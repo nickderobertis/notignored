@@ -1,4 +1,4 @@
-//! Language-aware comment and attribute extraction.
+//! Language-aware comment, attribute, and item-punctuation extraction.
 //!
 //! Tool parsers consume the output of this module rather than regexing raw
 //! lines, so a `# noqa` *inside a string literal* is never mistaken for a
@@ -74,6 +74,26 @@ pub struct Attribute {
     pub end_column: u32,
 }
 
+/// One structural punctuation character found in Rust **code** — outside every
+/// string, char literal, comment, and attribute.
+///
+/// Rust's suppressions annotate an item, so reporting what `#[allow(…)]`
+/// silences means finding where that item ends. These marks are what the Rust
+/// parser walks to do it: a `}` inside a string literal is not one of them, so
+/// the parser never has to re-scan raw source and never ends an item early.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodePunctuation {
+    /// One of `(`, `)`, `[`, `]`, `{`, `}`, `;`.
+    pub character: char,
+    /// 1-based line.
+    pub line: u32,
+    /// 1-based column.
+    pub column: u32,
+}
+
+/// The characters [`CodePunctuation`] records.
+const PUNCTUATION: [char; 7] = ['(', ')', '[', ']', '{', '}', ';'];
+
 /// Everything one scan of a file produced.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Extracted {
@@ -81,6 +101,9 @@ pub struct Extracted {
     pub comments: Vec<Comment>,
     /// Rust attributes, in source order. Empty for every other language.
     pub attributes: Vec<Attribute>,
+    /// Item-delimiting punctuation, in source order. Empty for every language
+    /// but Rust, which is the only one whose directives annotate an item.
+    pub punctuation: Vec<CodePunctuation>,
 }
 
 /// Extract every comment (and, for Rust, every attribute) from `source`.
@@ -136,6 +159,8 @@ struct CSyntax {
     char_literals: bool,
     /// `#[…]` / `#![…]` attributes exist (Rust).
     attributes: bool,
+    /// Record item-delimiting punctuation (Rust; see [`CodePunctuation`]).
+    punctuation: bool,
 }
 
 const C_RUST: CSyntax = CSyntax {
@@ -144,6 +169,7 @@ const C_RUST: CSyntax = CSyntax {
     raw_strings: true,
     char_literals: true,
     attributes: true,
+    punctuation: true,
 };
 
 const C_SCRIPT: CSyntax = CSyntax {
@@ -152,6 +178,7 @@ const C_SCRIPT: CSyntax = CSyntax {
     raw_strings: false,
     char_literals: false,
     attributes: false,
+    punctuation: false,
 };
 
 /// A character cursor that tracks the 1-based line and column as it advances.
@@ -435,6 +462,13 @@ fn scan_c_style(chars: &[char], syntax: CSyntax) -> Extracted {
         }
         if !ch.is_whitespace() {
             line_has_content = true;
+        }
+        if syntax.punctuation && PUNCTUATION.contains(&ch) {
+            out.punctuation.push(CodePunctuation {
+                character: ch,
+                line: cursor.line,
+                column: cursor.column,
+            });
         }
         previous = cursor.bump();
     }
@@ -759,6 +793,68 @@ mod tests {
         let extracted = extract("#[allow(dead_code)\n", Language::Rust);
         assert_eq!(extracted.attributes.len(), 1);
         assert_eq!(extracted.attributes[0].raw, "#[allow(dead_code)\n");
+    }
+
+    #[test]
+    fn rust_item_punctuation_is_recorded_with_spans() {
+        let extracted = extract("fn f() {\n    g();\n}\n", Language::Rust);
+        let marks: Vec<(char, u32, u32)> = extracted
+            .punctuation
+            .iter()
+            .map(|p| (p.character, p.line, p.column))
+            .collect();
+        assert_eq!(
+            marks,
+            vec![
+                ('(', 1, 5),
+                (')', 1, 6),
+                ('{', 1, 8),
+                ('(', 2, 6),
+                (')', 2, 7),
+                (';', 2, 8),
+                ('}', 3, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn punctuation_inside_strings_comments_and_attributes_is_not_recorded() {
+        let source = concat!(
+            "#[allow(dead_code)]\n",
+            "fn f() {\n",
+            "    let a = \"} ; )\"; // } ; )\n",
+            "    let b = r#\"} ; )\"#;\n",
+            "    let c = '}';\n",
+            "    /* } ; ) */\n",
+            "}\n",
+        );
+        let extracted = extract(source, Language::Rust);
+        let by_line: Vec<(char, u32)> = extracted
+            .punctuation
+            .iter()
+            .map(|p| (p.character, p.line))
+            .collect();
+        assert_eq!(
+            by_line,
+            vec![
+                ('(', 2),
+                (')', 2),
+                ('{', 2),
+                (';', 3),
+                (';', 4),
+                (';', 5),
+                ('}', 7),
+            ],
+            "{by_line:?}"
+        );
+    }
+
+    #[test]
+    fn only_rust_records_punctuation() {
+        assert!(extract("f();\n", Language::JavaScript)
+            .punctuation
+            .is_empty());
+        assert!(extract("f()\n", Language::Python).punctuation.is_empty());
     }
 
     #[test]

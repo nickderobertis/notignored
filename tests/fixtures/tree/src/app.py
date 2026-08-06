@@ -9,7 +9,3 @@ MESSAGE = "# noqa: E722"
 
 def handler():  # noqa
     return os.getcwd()
-
-# llmlint: ignore-file[suppressions_justified] fixture data, not production code: the
-# bare directive on line 10 is the input that proves a blanket, reason-less
-# suppression is reported with empty rules and a null reason (tests/golden/report.json).

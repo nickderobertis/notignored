@@ -1,4 +1,4 @@
-//! End-to-end journeys: the compiled binary, real files, and the real ruff.
+//! End-to-end journeys: the compiled binary, real files, and the real linters.
 //!
 //! Split into its own test target so `just test-e2e` can run the slow binary
 //! journeys alone — but `just check` runs them either way. Nothing here is
@@ -8,5 +8,8 @@ mod support;
 
 mod cli;
 mod installer;
+mod llmlint_parity;
 mod ruff_grammar;
 mod ruff_parity;
+mod rust_parity;
+mod shellcheck_parity;

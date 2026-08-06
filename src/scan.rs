@@ -73,7 +73,8 @@ pub fn discover(paths: &[PathBuf]) -> Result<Vec<PathBuf>, ScanError> {
 /// Parse every directive out of `files`.
 ///
 /// Files in a language we have no grammar for are skipped; files that cannot be
-/// read become [`Report::errors`] entries.
+/// read — and directives a parser recognized but could not resolve — become
+/// [`Report::errors`] entries.
 pub fn scan_files(files: &[PathBuf], options: &ScanOptions) -> Report {
     let parsers = registry_for(&options.tools);
     let mut report = Report::new();
@@ -85,7 +86,9 @@ pub fn scan_files(files: &[PathBuf], options: &ScanOptions) -> Report {
             Ok(file) => {
                 for parser in &parsers {
                     if parser.applies_to(&file) {
-                        report.ignores.extend(parser.parse(&file));
+                        let parsed = parser.parse_all(&file);
+                        report.ignores.extend(parsed.directives);
+                        report.errors.extend(parsed.errors);
                     }
                 }
             }

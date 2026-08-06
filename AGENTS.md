@@ -75,9 +75,12 @@ boundary — an envelope from a newer build — is rejected on deserialization.
 
 One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
 row in the README supported-tools table. Keep it to those three touch points so
-parallel branches don't conflict. Parsers consume the extracted comments and
-attributes from `src/comments.rs` — never re-scan raw lines, or string literals
-will be misread as comments.
+parallel branches don't conflict. Parsers consume the comments, attributes, and
+item punctuation `src/comments.rs` extracted — never re-scan raw lines, or string
+literals will be misread as comments. A directive that can be *malformed* in a
+way the record cannot express (an unclosed llmlint block) overrides
+`ToolParser::parse_all` to report it alongside the directive; the default
+reports no errors.
 
 ## Commits, releases, and merging
 
@@ -125,9 +128,16 @@ will be misread as comments.
 A parser is unproven until an e2e drives the **real** tool over a fixture and
 shows it *fails* without the suppression and *passes* with it, while notignored
 reports exactly that suppression. `tests/e2e/ruff_parity.rs` is the shape to
-copy; the tool is pinned so the proof is reproducible. Coverage (95%, enforced)
-is a floor that a mocked suite could also clear — parity is what makes the claim
-true.
+copy; every tool is pinned (`.<tool>-version` +
+`scripts/setup-parity-tools.sh`, or `rust-toolchain.toml` for clippy) so the
+proof is reproducible. Coverage (95%, enforced) is a floor that a mocked suite
+could also clear — parity is what makes the claim true.
+
+A tool with no pass/fail verdict to compare against still owes agreement on the
+directive set: llmlint's parity runs `llmlint check-ignores`, its deterministic
+model-free validator, and asserts the same files, lines, and rules. **Never
+reach for llmlint's judge tier from a test** — it is a paid model call, so a
+suite that used it would be neither free nor deterministic.
 
 ## Keeping the allowlist current
 

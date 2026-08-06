@@ -117,9 +117,22 @@ The `json` format emits the full report envelope:
 | `mypy` | `# type: ignore`, `# type: ignore[arg-type]` | Planned |
 | `pyright` | `# pyright: ignore[reportAny]` | Planned |
 | `ty` | `# ty: ignore[unresolved-import]` | Planned |
-| `rust` | `#[allow(…)]`, `#[expect(…, reason = "…")]` | Planned |
-| `shellcheck` | `# shellcheck disable=SC2086` | Planned |
-| `llmlint` | its inline `ignore[rule] reason` suppression directive | Planned |
+| `rust` | `#[allow(dead_code)]`, `#[allow(clippy::needless_collect, dead_code)]`, `#[expect(dead_code, reason = "…")]`, `#![allow(…)]`, `#![expect(…, reason = "…")]` | **Supported** |
+| `shellcheck` | `# shellcheck disable=SC2086`, `# shellcheck disable=SC2086,SC2046`, `# shellcheck disable=SC2000-SC2100`, `# shellcheck disable=all`, `# shellcheck disable=SC2086  # reason` | **Supported** |
+| `llmlint` | `ignore[rule, …] reason`, `ignore-file[rule, …] reason`, `ignore-block[rule, …] reason` … `ignore-end[rule, …]` — each written after the `llmlint` keyword and a colon, in the host language's comment syntax | **Supported** |
+
+Scope follows each tool's own rules, not a house convention:
+
+- **rust** — an outer attribute is `next-line` and its `suppressed` range runs
+  through the end of the item it annotates; an inner `#![…]` is `file`. A
+  `reason = "…"` is the record's reason, even when the string wraps.
+- **shellcheck** — a directive above the first command is `file`; anywhere else
+  it is `next-line`. A directive ShellCheck itself rejects (trailing prose with
+  no `#`, or one placed after a command) is reported by neither tool.
+- **llmlint** — `ignore` is `line`, `ignore-file` is `file`, and
+  `ignore-block` … `ignore-end` is one `block` record spanning both directives.
+  A block left unclosed keeps a null `suppressed.end_line` and adds an `errors`
+  entry.
 
 Adding one is three touch points: a module under `src/tools/`, one line in
 `src/tools/mod.rs::registry()`, and one row above.
@@ -128,9 +141,10 @@ Adding one is three touch points: a module under `src/tools/`, one line in
 
 Source is scanned once per file by a language-aware comment extractor
 (`src/comments.rs`) that understands `#` comments, `//` line comments, multi-line
-`/* … */` blocks (nested, for Rust), and Rust attributes — and that knows a string
-literal when it sees one, so `MESSAGE = "# noqa: E501"` is never reported. Tool
-parsers consume those extracted comments; they never re-scan raw lines.
+`/* … */` blocks (nested, for Rust), Rust attributes, and the punctuation that
+delimits a Rust item — and that knows a string literal when it sees one, so
+`MESSAGE = "# noqa: E501"` is never reported. Tool parsers consume that
+extraction; they never re-scan raw lines.
 
 ## Development
 
@@ -141,8 +155,9 @@ just --list      # everything else
 ```
 
 `just check` runs the end-to-end suite, which drives the compiled binary as a
-subprocess and the **real, pinned** `ruff` (see `.ruff-version`) to prove that
-what `notignored` reports is what `ruff` actually suppresses.
+subprocess and the **real, pinned** tools — `ruff`, `shellcheck`, `llmlint`
+(see the `.<tool>-version` files) and the toolchain's own `clippy-driver` — to
+prove that what `notignored` reports is what those tools actually suppress.
 
 ## License
 

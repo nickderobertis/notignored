@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "ignores": [
+    {
+      "tool": "shellcheck",
+      "scope": "file",
+      "rules": [
+        "SC2086"
+      ],
+      "reason": "every expansion here is a pre-split argument list",
+      "path": "scripts/deploy.sh",
+      "line": 2,
+      "end_line": 2,
+      "column": 1,
+      "raw": "# shellcheck disable=SC2086  # every expansion here is a pre-split argument list",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "shellcheck",
+      "scope": "next-line",
+      "rules": [
+        "SC2046",
+        "SC2000-SC2100"
+      ],
+      "reason": null,
+      "path": "scripts/deploy.sh",
+      "line": 5,
+      "end_line": 5,
+      "column": 1,
+      "raw": "# shellcheck disable=SC2046,SC2000-SC2100",
+      "suppressed": {
+        "start_line": 6,
+        "end_line": 6
+      }
+    },
+    {
+      "tool": "shellcheck",
+      "scope": "next-line",
+      "rules": [],
+      "reason": null,
+      "path": "scripts/deploy.sh",
+      "line": 7,
+      "end_line": 7,
+      "column": 1,
+      "raw": "# shellcheck disable=all",
+      "suppressed": {
+        "start_line": 8,
+        "end_line": 8
+      }
+    },
+    {
+      "tool": "rust",
+      "scope": "file",
+      "rules": [
+        "clippy::needless_return"
+      ],
+      "reason": null,
+      "path": "src/lints.rs",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "raw": "#![allow(clippy::needless_return)]",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "rust",
+      "scope": "next-line",
+      "rules": [
+        "dead_code",
+        "clippy::needless_collect"
+      ],
+      "reason": null,
+      "path": "src/lints.rs",
+      "line": 4,
+      "end_line": 4,
+      "column": 1,
+      "raw": "#[allow(dead_code, clippy::needless_collect)]",
+      "suppressed": {
+        "start_line": 4,
+        "end_line": 8
+      }
+    },
+    {
+      "tool": "rust",
+      "scope": "next-line",
+      "rules": [
+        "dead_code"
+      ],
+      "reason": "a justification long enough that it wraps across two lines of the attribute",
+      "path": "src/lints.rs",
+      "line": 10,
+      "end_line": 14,
+      "column": 1,
+      "raw": "#[expect(\n    dead_code,\n    reason = \"a justification long enough that it wraps\n              across two lines of the attribute\"\n)]",
+      "suppressed": {
+        "start_line": 10,
+        "end_line": 17
+      }
+    },
+    {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "errors_are_contextualized"
+      ],
+      "reason": "a transport shim: the caller adds context",
+      "path": "src/service.py",
+      "line": 1,
+      "end_line": 1,
+      "column": 3,
+      "raw": "llmlint: ignore-file[errors_are_contextualized] a transport shim: the caller adds context",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "F401"
+      ],
+      "reason": "re-exported for the public API",
+      "path": "src/service.py",
+      "line": 2,
+      "end_line": 2,
+      "column": 12,
+      "raw": "# noqa: F401  # re-exported for the public API",
+      "suppressed": {
+        "start_line": 2,
+        "end_line": 2
+      }
+    },
+    {
+      "tool": "llmlint",
+      "scope": "block",
+      "rules": [
+        "no_debug_prints"
+      ],
+      "reason": "the trace is this module's whole job",
+      "path": "src/service.py",
+      "line": 4,
+      "end_line": 4,
+      "column": 3,
+      "raw": "llmlint: ignore-block[no_debug_prints] the trace is this module's whole job",
+      "suppressed": {
+        "start_line": 4,
+        "end_line": 7
+      }
+    }
+  ],
+  "errors": []
+}

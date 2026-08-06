@@ -54,6 +54,54 @@ fn json_format_matches_the_checked_in_golden_report() {
     );
 }
 
+/// The multi-tool tree: one file per newly supported tool, every scope in play.
+fn tools_tree() -> std::path::PathBuf {
+    fixture("tools-tree")
+}
+
+#[test]
+fn json_format_over_the_multi_tool_tree_matches_its_checked_in_golden() {
+    let output = notignored(&tools_tree())
+        .args(["--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+
+    let golden_path = repo_root().join("tests/golden/tools-report.json");
+    let actual = String::from_utf8(output.stdout).unwrap();
+    if std::env::var_os("NOTIGNORED_BLESS").is_some() {
+        fs::write(&golden_path, &actual).expect("write golden report");
+    }
+    let expected = fs::read_to_string(&golden_path).expect("read golden report");
+    assert_eq!(
+        actual, expected,
+        "the JSON report changed. If the change is intended, re-run with NOTIGNORED_BLESS=1 \
+         and bump REPORT_VERSION when the shape (not just the data) moved."
+    );
+}
+
+#[test]
+fn the_multi_tool_tree_renders_every_tool_and_scope_readably() {
+    let output = notignored(&tools_tree()).output().expect("run notignored");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        concat!(
+            "scripts/deploy.sh:2:1 shellcheck SC2086 (file) -- every expansion here is a pre-split argument list\n",
+            "scripts/deploy.sh:5:1 shellcheck SC2046,SC2000-SC2100 (next-line)\n",
+            "scripts/deploy.sh:7:1 shellcheck * (next-line)\n",
+            "src/lints.rs:1:1 rust clippy::needless_return (file)\n",
+            "src/lints.rs:4:1 rust dead_code,clippy::needless_collect (next-line)\n",
+            "src/lints.rs:10:1 rust dead_code (next-line) -- a justification long enough that it wraps across two lines of the attribute\n",
+            "src/service.py:1:3 llmlint errors_are_contextualized (file) -- a transport shim: the caller adds context\n",
+            "src/service.py:2:12 ruff F401 (line) -- re-exported for the public API\n",
+            "src/service.py:4:3 llmlint no_debug_prints (block) -- the trace is this module's whole job\n",
+        ),
+        "{stdout}"
+    );
+}
+
 #[test]
 fn string_literals_and_unparsed_languages_are_never_reported() {
     let output = notignored(&tree())
