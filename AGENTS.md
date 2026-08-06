@@ -141,6 +141,12 @@ copy; the tool is pinned so the proof is reproducible. Coverage (95%, enforced)
 is a floor that a mocked suite could also clear — parity is what makes the claim
 true.
 
+Never compare a path a checker reported against an expected one directly — send
+it through `support::relative_to`. Tools disagree about absolute vs relative, and
+on Windows two spellings of the same path (`d:/a/…` vs the verbatim `\\?\D:\a\…`
+`canonicalize` returns) match on neither case, separator, nor prefix. The Linux
+gate cannot see any of that; `support::paths` proves it with hand-written paths.
+
 For a family of forms, `tests/e2e/python_types_parity.rs` scales it: every
 fixture is the *same* program with a directive in a different slot, one test
 asserts they differ only in comments, and one checker run per tool decides the
