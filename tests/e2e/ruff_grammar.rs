@@ -26,7 +26,6 @@ struct Expected {
 }
 
 const EXPECTED: &[Expected] = &[
-    // Uppercase keyword.
     Expected {
         line: 1,
         column: 12,
@@ -34,7 +33,6 @@ const EXPECTED: &[Expected] = &[
         reason: None,
         raw: "# NOQA: F401",
     },
-    // No space after the colon, comma-separated codes.
     Expected {
         line: 2,
         column: 13,
@@ -42,7 +40,6 @@ const EXPECTED: &[Expected] = &[
         reason: None,
         raw: "# noqa:F401,E402",
     },
-    // Whitespace-separated codes.
     Expected {
         line: 3,
         column: 14,
@@ -50,7 +47,7 @@ const EXPECTED: &[Expected] = &[
         reason: None,
         raw: "# noqa: F401 E402",
     },
-    // A directive that does not open the comment, with a trailing reason.
+    // Ruff honours a directive that does not open the comment, so we do too.
     Expected {
         line: 4,
         column: 28,
@@ -58,7 +55,8 @@ const EXPECTED: &[Expected] = &[
         reason: Some("embedded after another directive"),
         raw: "# noqa: F401  # embedded after another directive",
     },
-    // An unparseable trailing token ends the code list rather than the directive.
+    // An unparseable token ends the code list, not the directive: ruff still
+    // applies F401 here, so dropping the whole record would under-report.
     Expected {
         line: 5,
         column: 12,
@@ -66,7 +64,6 @@ const EXPECTED: &[Expected] = &[
         reason: None,
         raw: "# noqa: F401, oops",
     },
-    // Blanket.
     Expected {
         line: 6,
         column: 13,

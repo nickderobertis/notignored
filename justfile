@@ -27,6 +27,7 @@ default:
 # pinned ruff the e2e parity suite drives.
 # Set up the project from a clean clone.
 bootstrap:
+    @rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
     @rustup component add rustfmt clippy llvm-tools >/dev/null \
       || { echo "cannot add toolchain components — install rustup (https://rustup.rs/) and re-run" >&2; exit 1; }
     @just _ensure-tool cargo-nextest

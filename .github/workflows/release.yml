@@ -50,8 +50,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install the toolchain pinned in rust-toolchain.toml
-        run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v6
       - uses: taiki-e/install-action@v2
@@ -107,8 +105,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install the toolchain pinned in rust-toolchain.toml
-        run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       # Idempotent: a version already live on crates.io is skipped rather than
       # failing the release, so re-running after a partial failure is safe.

@@ -24,7 +24,7 @@ justification, visible without reading the whole diff.
 The user drives product features and their request is the priority — but carry
 two goals into *every* task. When either is the lowest-error path to what the
 user asked, fold it into the same task without asking first; surface the rest as
-follow-ups (see "After the main task").
+follow-ups.
 
 1. **Engineer the context for next time.** Realistic end-to-end tests that
    exercise what the user actually sees — especially when they report a bug
@@ -42,16 +42,16 @@ follow-ups (see "After the main task").
 - **Language(s):** rust
 - **References composed:** base.md, shapes/cli.md, languages/rust.md,
   intersections/rust-cli.md, ci.md, llmlint.md, releasing.md
-- **Excluded, and why:**
-  - *crates.io publication* — `publish = false`; a binary-only tool ships via
-    GitHub Releases, `install.sh`, and `cargo install --git`. The library crate
-    is public API for in-repo consumers, not a registry product (yet).
-  - *asdf / direnv* — `rust-toolchain.toml` already pins the toolchain and
-    rustup reads it automatically; a second pin would drift.
-  - *Informational bench tier (Criterion/hyperfine)* — deferred until the parser
-    set is broad enough for the numbers to mean something. Speed is a product
-    claim, so this is a tracked follow-up, not a permanent exclusion.
-  - *Monorepo orchestration* — one crate, one deliverable.
+- **Excluded, and why:** *asdf / direnv* — `rust-toolchain.toml` already pins the
+  toolchain and rustup reads it, so a second pin would only drift. *Monorepo
+  orchestration* — one crate, one deliverable. *Bench tier* — deferred, not
+  dropped: speed is a product claim, so it lands once the parser set makes the
+  numbers meaningful.
+- **crates.io is dormant, not excluded:** `release-plz.toml` sets
+  `publish = false` so versioning stays decoupled from the registry, and
+  `release.yml`'s `publish-crate` job self-activates the day
+  `CARGO_REGISTRY_TOKEN` is set. Until then the artifact ships via GitHub
+  Releases, `install.sh`, and `cargo install --git`.
 
 ## The ignore-record contract (fixed)
 

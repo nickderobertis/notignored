@@ -73,8 +73,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
 
-      - name: Install the toolchain pinned in rust-toolchain.toml
-        run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
 
       # taiki-e/install-action verifies the downloaded archive's checksum before
