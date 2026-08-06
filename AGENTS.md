@@ -77,7 +77,14 @@ One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
 row in the README supported-tools table. Keep it to those three touch points so
 parallel branches don't conflict. Parsers consume the extracted comments and
 attributes from `src/comments.rs` — never re-scan raw lines, or string literals
-will be misread as comments.
+will be misread as comments. Grammar shared by a *family* of tools lives in a
+private sibling module (`src/tools/python.rs` serves mypy/pyright/ty); it is not
+a tool and stays out of the registry.
+
+A tool's scope is what it honours, not what its docs headline: the same
+`# type: ignore` is line-scoped mid-file and file-scoped above all code, and ty
+reads an own-line directive as covering the line below. Derive each from the real
+tool before writing the parser.
 
 ## Commits, releases, and merging
 
@@ -128,6 +135,14 @@ reports exactly that suppression. `tests/e2e/ruff_parity.rs` is the shape to
 copy; the tool is pinned so the proof is reproducible. Coverage (95%, enforced)
 is a floor that a mocked suite could also clear — parity is what makes the claim
 true.
+
+For a family of forms, `tests/e2e/python_types_parity.rs` scales it: every
+fixture is the *same* program with a directive in a different slot, one test
+asserts they differ only in comments, and one checker run per tool decides the
+whole family. That keeps a slow checker (pyright) to a single invocation and
+makes `violation.py` a control rather than a separate program.
+
+Pin each checker in `.<tool>-version` and add it to `scripts/setup-python-tools.sh`.
 
 ## Keeping the allowlist current
 

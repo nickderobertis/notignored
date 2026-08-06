@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "ignores": [
+    {
+      "tool": "mypy",
+      "scope": "line",
+      "rules": [
+        "import-not-found"
+      ],
+      "reason": "noqa: F401",
+      "path": "mixed/suppressed.py",
+      "line": 3,
+      "end_line": 3,
+      "column": 35,
+      "raw": "# type: ignore[import-not-found]  # noqa: F401",
+      "suppressed": {
+        "start_line": 3,
+        "end_line": 3
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "F401"
+      ],
+      "reason": null,
+      "path": "mixed/suppressed.py",
+      "line": 3,
+      "end_line": 3,
+      "column": 69,
+      "raw": "# noqa: F401",
+      "suppressed": {
+        "start_line": 3,
+        "end_line": 3
+      }
+    },
+    {
+      "tool": "mypy",
+      "scope": "file",
+      "rules": [
+        "arg-type",
+        "index"
+      ],
+      "reason": null,
+      "path": "mypy/disable_error_code.py",
+      "line": 6,
+      "end_line": 6,
+      "column": 1,
+      "raw": "# mypy: disable-error-code=\"arg-type, index\"",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "mypy",
+      "scope": "file",
+      "rules": [],
+      "reason": null,
+      "path": "mypy/ignore_errors.py",
+      "line": 6,
+      "end_line": 6,
+      "column": 1,
+      "raw": "# mypy: ignore-errors",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "mypy",
+      "scope": "line",
+      "rules": [],
+      "reason": null,
+      "path": "mypy/line_blanket.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 16,
+      "raw": "# type: ignore",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "mypy",
+      "scope": "line",
+      "rules": [
+        "arg-type"
+      ],
+      "reason": "upstream stub is wrong",
+      "path": "mypy/line_codes.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 16,
+      "raw": "# type: ignore[arg-type]  # upstream stub is wrong",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "mypy",
+      "scope": "file",
+      "rules": [],
+      "reason": "the whole module is generated from protobuf",
+      "path": "mypy/module_ignore.py",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "raw": "# type: ignore  # the whole module is generated from protobuf",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "pyright",
+      "scope": "line",
+      "rules": [],
+      "reason": "legacy call site, tracked upstream",
+      "path": "pyright/blanket.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 16,
+      "raw": "# pyright: ignore  # legacy call site, tracked upstream",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "pyright",
+      "scope": "line",
+      "rules": [
+        "reportArgumentType"
+      ],
+      "reason": "upstream stub is wrong",
+      "path": "pyright/codes.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 16,
+      "raw": "# pyright: ignore[reportArgumentType]  # upstream stub is wrong",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "ty",
+      "scope": "file",
+      "rules": [],
+      "reason": "the whole module is generated from protobuf",
+      "path": "ty/file_header.py",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "raw": "# ty: ignore  # the whole module is generated from protobuf",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "ty",
+      "scope": "line",
+      "rules": [],
+      "reason": null,
+      "path": "ty/line_blanket.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 16,
+      "raw": "# ty: ignore",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "ty",
+      "scope": "line",
+      "rules": [
+        "invalid-argument-type"
+      ],
+      "reason": "upstream stub is wrong",
+      "path": "ty/line_codes.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 16,
+      "raw": "# ty: ignore[invalid-argument-type]  # upstream stub is wrong",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "ty",
+      "scope": "next-line",
+      "rules": [
+        "invalid-argument-type"
+      ],
+      "reason": "the call below is deliberately wrong",
+      "path": "ty/next_line.py",
+      "line": 6,
+      "end_line": 6,
+      "column": 1,
+      "raw": "# ty: ignore[invalid-argument-type]  # the call below is deliberately wrong",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    }
+  ],
+  "errors": []
+}

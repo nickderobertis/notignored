@@ -1,0 +1,428 @@
+//! Parity with the real mypy, pyright, and ty.
+//!
+//! The product claim is that notignored reports exactly what each type checker
+//! would have suppressed, without running it. These journeys prove it by running
+//! **both**: the pinned checker decides whether a fixture actually passes, and
+//! the CLI has to describe the directive that made the difference. Neither side
+//! is stubbed — a mocked checker here would prove the mock and nothing else.
+//!
+//! Every fixture under `tests/fixtures/python-types/{mypy,pyright,ty}/` is the
+//! *same seven-line program*; they differ only in which comment slot holds a
+//! directive. [`fixtures_differ_only_in_their_comments`] pins that down, which is
+//! what makes `violation.py` a true control: when the checker flags it and passes
+//! its siblings, the directive is the only thing that can account for the flip.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use crate::support::{
+    fixture, mypy_failures, notignored, parse_report, pyright_failures, ruff_passes, ty_failures,
+};
+
+fn family_dir() -> PathBuf {
+    fixture("python-types")
+}
+
+/// The CLI's JSON report for one fixture, with paths relative to the family root.
+fn report_for(path: &str) -> serde_json::Value {
+    let output = notignored(&family_dir())
+        .args([path, "--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+    parse_report(&output.stdout)
+}
+
+/// Every directive the CLI reports for one fixture, as
+/// `(tool, scope, rules, reason, (line, column), raw, suppressed-end)`.
+type Record = (
+    String,
+    String,
+    Vec<String>,
+    Option<String>,
+    (u64, u64),
+    String,
+    Option<u64>,
+);
+
+fn records_for(path: &str) -> Vec<Record> {
+    let report = report_for(path);
+    report["ignores"]
+        .as_array()
+        .expect("an ignores array")
+        .iter()
+        .map(|directive| {
+            assert_eq!(directive["path"], path, "{directive:#}");
+            (
+                directive["tool"].as_str().expect("a tool").to_string(),
+                directive["scope"].as_str().expect("a scope").to_string(),
+                directive["rules"]
+                    .as_array()
+                    .expect("a rules array")
+                    .iter()
+                    .map(|rule| rule.as_str().expect("a rule name").to_string())
+                    .collect(),
+                directive["reason"].as_str().map(str::to_string),
+                (
+                    directive["line"].as_u64().expect("a line"),
+                    directive["column"].as_u64().expect("a column"),
+                ),
+                directive["raw"].as_str().expect("a raw span").to_string(),
+                directive["suppressed"]["end_line"].as_u64(),
+            )
+        })
+        .collect()
+}
+
+/// One expected record, spelled the way the assertions read best.
+fn record(
+    tool: &str,
+    scope: &str,
+    rules: &[&str],
+    reason: Option<&str>,
+    at: (u64, u64),
+    raw: &str,
+    suppressed_end: Option<u64>,
+) -> Record {
+    (
+        tool.to_string(),
+        scope.to_string(),
+        rules.iter().map(|rule| (*rule).to_string()).collect(),
+        reason.map(str::to_string),
+        at,
+        raw.to_string(),
+        suppressed_end,
+    )
+}
+
+/// `source` with every comment removed, so two fixtures can be compared on the
+/// code alone. The fixtures keep no `#` inside a string literal, which is what
+/// lets a cut at the first `#` stand in for a parse.
+fn without_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| match line.find('#') {
+            Some(hash) => line[..hash].trim_end(),
+            None => line.trim_end(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn read_fixture(path: &str) -> String {
+    let full = family_dir().join(path);
+    std::fs::read_to_string(&full)
+        .unwrap_or_else(|error| panic!("read {}: {error}", full.display()))
+}
+
+const MYPY_FIXTURES: &[&str] = &[
+    "mypy/violation.py",
+    "mypy/line_blanket.py",
+    "mypy/line_codes.py",
+    "mypy/module_ignore.py",
+    "mypy/ignore_errors.py",
+    "mypy/disable_error_code.py",
+];
+
+const PYRIGHT_FIXTURES: &[&str] = &[
+    "pyright/violation.py",
+    "pyright/blanket.py",
+    "pyright/codes.py",
+    "pyright/mode_switch.py",
+];
+
+const TY_FIXTURES: &[&str] = &[
+    "ty/violation.py",
+    "ty/line_blanket.py",
+    "ty/line_codes.py",
+    "ty/file_header.py",
+    "ty/next_line.py",
+];
+
+#[test]
+fn fixtures_differ_only_in_their_comments() {
+    for family in [MYPY_FIXTURES, PYRIGHT_FIXTURES, TY_FIXTURES] {
+        let control = without_comments(&read_fixture(family[0]));
+        for path in &family[1..] {
+            assert_eq!(
+                without_comments(&read_fixture(path)),
+                control,
+                "{path} is not the control program plus a directive, so a checker \
+                 passing it would not prove the directive did it"
+            );
+        }
+    }
+    assert_eq!(
+        without_comments(&read_fixture("mixed/suppressed.py")),
+        without_comments(&read_fixture("mixed/unsuppressed.py"))
+    );
+}
+
+#[test]
+fn real_mypy_is_flipped_by_every_directive_the_parser_claims() {
+    assert_eq!(
+        mypy_failures(&family_dir(), "mypy.ini", MYPY_FIXTURES),
+        vec!["mypy/violation.py"],
+        "real mypy disagrees about which fixtures are suppressed; the fixtures, \
+         the grammar, or the pin drifted"
+    );
+}
+
+#[test]
+fn real_pyright_is_flipped_by_every_directive_the_parser_claims() {
+    assert_eq!(
+        pyright_failures(&family_dir(), ".", PYRIGHT_FIXTURES),
+        // `# pyright: basic` switches the type-checking mode; it silences nothing,
+        // which is exactly why the parser must not report it.
+        vec!["pyright/mode_switch.py", "pyright/violation.py"],
+        "real pyright disagrees about which fixtures are suppressed; the fixtures, \
+         the grammar, or the pin drifted"
+    );
+}
+
+#[test]
+fn real_ty_is_flipped_by_every_directive_the_parser_claims() {
+    assert_eq!(
+        ty_failures(&family_dir(), "ty.toml", TY_FIXTURES),
+        vec!["ty/violation.py"],
+        "real ty disagrees about which fixtures are suppressed; the fixtures, \
+         the grammar, or the pin drifted"
+    );
+}
+
+#[test]
+fn the_cli_describes_every_mypy_directive_exactly() {
+    let expected: BTreeMap<&str, Vec<Record>> = BTreeMap::from([
+        ("mypy/violation.py", vec![]),
+        (
+            "mypy/line_blanket.py",
+            vec![record(
+                "mypy",
+                "line",
+                &[],
+                None,
+                (7, 16),
+                "# type: ignore",
+                Some(7),
+            )],
+        ),
+        (
+            "mypy/line_codes.py",
+            vec![record(
+                "mypy",
+                "line",
+                &["arg-type"],
+                Some("upstream stub is wrong"),
+                (7, 16),
+                "# type: ignore[arg-type]  # upstream stub is wrong",
+                Some(7),
+            )],
+        ),
+        (
+            "mypy/module_ignore.py",
+            vec![record(
+                "mypy",
+                "file",
+                &[],
+                Some("the whole module is generated from protobuf"),
+                (1, 1),
+                "# type: ignore  # the whole module is generated from protobuf",
+                None,
+            )],
+        ),
+        (
+            "mypy/ignore_errors.py",
+            vec![record(
+                "mypy",
+                "file",
+                &[],
+                None,
+                (6, 1),
+                "# mypy: ignore-errors",
+                None,
+            )],
+        ),
+        (
+            "mypy/disable_error_code.py",
+            vec![record(
+                "mypy",
+                "file",
+                &["arg-type", "index"],
+                None,
+                (6, 1),
+                "# mypy: disable-error-code=\"arg-type, index\"",
+                None,
+            )],
+        ),
+    ]);
+
+    for (path, records) in expected {
+        assert_eq!(records_for(path), records, "{path}");
+    }
+}
+
+#[test]
+fn the_cli_describes_every_pyright_directive_exactly() {
+    let expected: BTreeMap<&str, Vec<Record>> = BTreeMap::from([
+        ("pyright/violation.py", vec![]),
+        // A mode switch is configuration, not a suppression.
+        ("pyright/mode_switch.py", vec![]),
+        (
+            "pyright/blanket.py",
+            vec![record(
+                "pyright",
+                "line",
+                &[],
+                Some("legacy call site, tracked upstream"),
+                (7, 16),
+                "# pyright: ignore  # legacy call site, tracked upstream",
+                Some(7),
+            )],
+        ),
+        (
+            "pyright/codes.py",
+            vec![record(
+                "pyright",
+                "line",
+                &["reportArgumentType"],
+                Some("upstream stub is wrong"),
+                (7, 16),
+                "# pyright: ignore[reportArgumentType]  # upstream stub is wrong",
+                Some(7),
+            )],
+        ),
+    ]);
+
+    for (path, records) in expected {
+        assert_eq!(records_for(path), records, "{path}");
+    }
+}
+
+#[test]
+fn the_cli_describes_every_ty_directive_exactly() {
+    let expected: BTreeMap<&str, Vec<Record>> = BTreeMap::from([
+        ("ty/violation.py", vec![]),
+        (
+            "ty/line_blanket.py",
+            vec![record(
+                "ty",
+                "line",
+                &[],
+                None,
+                (7, 16),
+                "# ty: ignore",
+                Some(7),
+            )],
+        ),
+        (
+            "ty/line_codes.py",
+            vec![record(
+                "ty",
+                "line",
+                &["invalid-argument-type"],
+                Some("upstream stub is wrong"),
+                (7, 16),
+                "# ty: ignore[invalid-argument-type]  # upstream stub is wrong",
+                Some(7),
+            )],
+        ),
+        (
+            "ty/file_header.py",
+            vec![record(
+                "ty",
+                "file",
+                &[],
+                Some("the whole module is generated from protobuf"),
+                (1, 1),
+                "# ty: ignore  # the whole module is generated from protobuf",
+                None,
+            )],
+        ),
+        (
+            // On its own line in the body, ty's directive covers the line below —
+            // reporting this one as `line` would point a reviewer at a comment.
+            "ty/next_line.py",
+            vec![record(
+                "ty",
+                "next-line",
+                &["invalid-argument-type"],
+                Some("the call below is deliberately wrong"),
+                (6, 1),
+                "# ty: ignore[invalid-argument-type]  # the call below is deliberately wrong",
+                Some(7),
+            )],
+        ),
+    ]);
+
+    for (path, records) in expected {
+        assert_eq!(records_for(path), records, "{path}");
+    }
+}
+
+/// One line, two tools: both directives are live, and each is reported once
+/// under the tool whose syntax it is.
+#[test]
+fn a_line_carrying_two_tools_directives_yields_a_record_for_each() {
+    let mixed = ["mixed/unsuppressed.py", "mixed/suppressed.py"];
+    assert_eq!(
+        mypy_failures(&family_dir(), "mypy.ini", &mixed),
+        vec!["mixed/unsuppressed.py"],
+        "the `# type: ignore[import-not-found]` should be the only thing mypy needs"
+    );
+    assert!(
+        !ruff_passes(&family_dir().join("mixed/unsuppressed.py"), "F401"),
+        "the control must violate F401, or the noqa below proves nothing"
+    );
+    assert!(
+        ruff_passes(&family_dir().join("mixed/suppressed.py"), "F401"),
+        "the embedded `# noqa: F401` should still reach ruff"
+    );
+
+    assert_eq!(
+        records_for("mixed/suppressed.py"),
+        vec![
+            record(
+                "mypy",
+                "line",
+                &["import-not-found"],
+                // Each record's reason is the comment text trailing its own
+                // directive, so mypy's runs into ruff's — documented in the README.
+                Some("noqa: F401"),
+                (3, 35),
+                "# type: ignore[import-not-found]  # noqa: F401",
+                Some(3),
+            ),
+            record(
+                "ruff",
+                "line",
+                &["F401"],
+                None,
+                (3, 69),
+                "# noqa: F401",
+                Some(3)
+            ),
+        ]
+    );
+    assert!(records_for("mixed/unsuppressed.py").is_empty());
+}
+
+#[test]
+fn the_python_types_json_report_matches_the_checked_in_golden_report() {
+    let output = notignored(&family_dir())
+        .args(["--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+
+    let golden_path = crate::support::repo_root().join("tests/golden/python-types.json");
+    let actual = String::from_utf8(output.stdout).unwrap();
+    if std::env::var_os("NOTIGNORED_BLESS").is_some() {
+        std::fs::write(&golden_path, &actual).expect("write golden report");
+    }
+    let expected = std::fs::read_to_string(&golden_path).expect("read golden report");
+    assert_eq!(
+        actual, expected,
+        "the JSON report changed. If the change is intended, re-run with NOTIGNORED_BLESS=1 \
+         and bump REPORT_VERSION when the shape (not just the data) moved."
+    );
+}
