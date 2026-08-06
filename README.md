@@ -126,18 +126,19 @@ Adding one is three touch points: a module under `src/tools/`, one line in
 
 ## Where a directive reaches, and who honours it
 
-Placement changes the `scope` for the Python type checkers, so the same comment
-can mean one line or a whole module:
+Every `# type: ignore` and `# pyright: ignore` is `line`-scoped; mypy's
+module-wide exemptions are the two `# mypy:` config comments; and for ty, where
+the comment sits is the scope:
 
 | Source | Reported as |
 | --- | --- |
 | `f(x)  # type: ignore` | `mypy`, `line` |
-| `# type: ignore` above every statement | `mypy`, `file` |
 | `# mypy: ignore-errors` on its own line | `mypy`, `file` |
+| `# mypy: disable-error-code="arg-type"` on its own line | `mypy`, `file` |
+| `f(x)  # pyright: ignore` | `pyright`, `line` |
 | `f(x)  # ty: ignore` | `ty`, `line` |
 | `# ty: ignore` above every statement | `ty`, `file` |
 | `# ty: ignore` on its own line in the body | `ty`, `next-line` |
-| `f(x)  # pyright: ignore` | `pyright`, `line` |
 
 Several tools honour a directive they did not invent: pyright and ty both act on
 mypy's `# type: ignore`, and ruff, pyright, and ty all act on one that does not
@@ -145,11 +146,18 @@ open its comment (mypy does not). A directive is reported **once, under the tool
 whose syntax it is** — `# type: ignore` is one `mypy` record, not three — so a
 count of records is a count of suppressions written, not of checkers affected.
 
-One line can still carry directives for several tools, and each is reported
-separately: `import legacy  # type: ignore[import-not-found]  # noqa: F401`
-yields one `mypy` record and one `ruff` record. Each record's `reason` is the
-comment text trailing **its own** directive, so on a shared line the earlier
-directive's reason includes the later one.
+One line can still carry directives for several tools, and each record covers
+**its own directive only**. Given
+
+```python
+import legacy  # type: ignore[import-not-found]  # no stubs published  # noqa: F401  # imported for its side effects
+```
+
+the `mypy` record's `raw` stops at `# no stubs published` and its `reason` is
+`"no stubs published"`; the `ruff` record's `raw` starts at `# noqa: F401` and
+its `reason` is `"imported for its side effects"`. A record's `raw` and `reason`
+always end where the next tool's directive begins, so one tool's live suppression
+can never be filed as another's justification.
 
 `# pyright: basic` and `# pyright: strict` switch pyright's type-checking mode
 rather than silencing a diagnostic, and are deliberately not reported.

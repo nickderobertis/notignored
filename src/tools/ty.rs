@@ -49,6 +49,7 @@ impl ToolParser for TyParser {
             // One suppression per comment: a second `# ty: ignore` on the same
             // line silences nothing the first did not.
             let Some((segment, rest)) = python::segments(comment)
+                .into_iter()
                 .find_map(|segment| directive_body(segment.after_hash).map(|rest| (segment, rest)))
             else {
                 continue;
@@ -76,11 +77,32 @@ impl ToolParser for TyParser {
 fn scope_of(file: &SourceFile, comment: &Comment) -> Scope {
     if !comment.leading {
         Scope::Line
-    } else if python::in_file_header(file, comment) {
+    } else if in_file_header(file, comment) {
         Scope::File
     } else {
         Scope::NextLine
     }
+}
+
+/// True when nothing but blank lines and whole-line comments precede `comment`.
+///
+/// ty promotes a directive in that header to a whole-file exemption, so telling
+/// the header apart from the body is the difference between reporting one line
+/// and reporting a module.
+fn in_file_header(file: &SourceFile, comment: &Comment) -> bool {
+    file.source()
+        .lines()
+        .take(usize::try_from(comment.line.saturating_sub(1)).unwrap_or(usize::MAX))
+        .enumerate()
+        .all(|(index, line)| {
+            if line.trim().is_empty() {
+                return true;
+            }
+            let number = u32::try_from(index + 1).unwrap_or(u32::MAX);
+            file.comments()
+                .iter()
+                .any(|earlier| earlier.leading && earlier.line == number)
+        })
 }
 
 fn suppressed_range(scope: Scope, line: u32) -> Suppressed {
@@ -100,6 +122,14 @@ fn suppressed_range(scope: Scope, line: u32) -> Suppressed {
             end_line: Some(line),
         },
     }
+}
+
+/// True when the text after a `#` opens a ty directive.
+///
+/// The shared segment scan uses this to bound the run before it; see
+/// `src/tools/python.rs::segments`.
+pub(super) fn opens_directive(after_hash: &str) -> bool {
+    directive_body(after_hash).is_some()
 }
 
 /// The text after `ty: ignore`, or `None` when this run is something else.
@@ -212,6 +242,22 @@ mod tests {
         assert_eq!(directive.raw, "# ty: ignore");
         assert_eq!(directive.column, 21);
         assert_eq!(directive.scope, Scope::Line);
+    }
+
+    #[test]
+    fn a_record_stops_at_the_next_tools_directive() {
+        let directive =
+            only("import os\nf(1)  # ty: ignore  # narrowed upstream  # noqa: F401  # unused\n");
+        assert_eq!(directive.reason.as_deref(), Some("narrowed upstream"));
+        assert_eq!(directive.raw, "# ty: ignore  # narrowed upstream");
+    }
+
+    #[test]
+    fn the_header_check_reads_only_the_lines_above_the_comment() {
+        let file = SourceFile::new("a.py", "\"\"\"Doc.\"\"\"\n# after\n".to_string());
+        assert!(!in_file_header(&file, &file.comments()[0]));
+        let shebang = SourceFile::new("a.py", "#!/usr/bin/env python\n# after\n".to_string());
+        assert!(in_file_header(&shebang, &shebang.comments()[1]));
     }
 
     #[test]

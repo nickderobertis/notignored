@@ -7,26 +7,28 @@
 //! | --- | --- | --- |
 //! | `# type: ignore` | line | *(blanket)* |
 //! | `# type: ignore[arg-type, index]` | line | `arg-type`, `index` |
-//! | `# type: ignore` above all code | file | *(blanket)* |
 //! | `# mypy: ignore-errors` | file | *(blanket)* |
 //! | `# mypy: disable-error-code="arg-type, index"` | file | `arg-type`, `index` |
 //!
-//! Three constraints come straight from what mypy actually honours, and each one
-//! is the difference between reporting a live suppression and inventing one:
+//! `# type: ignore` is line-scoped in every position, including above all code;
+//! the module-wide forms this parser reports are the two `# mypy:` config
+//! comments, which is the whole of what the record contract specifies.
+//!
+//! Two constraints come straight from what mypy honours, and each is the
+//! difference between reporting a live suppression and inventing one:
 //!
 //! * **The directive must open its comment.** mypy reads `# type: ignore  # noqa`
 //!   but not `# noqa  # type: ignore`, so — unlike ruff, pyright, and ty — an
 //!   embedded directive is not reported.
-//! * **A bare `# type: ignore` above all code exempts the whole module.** After
-//!   so much as a docstring the same comment is line-scoped. The bracketed form
-//!   is never file-scoped: mypy rejects it there outright.
 //! * **`# mypy: …` config comments must be on their own line**, anywhere in the
 //!   file. Trailing after code, mypy ignores them.
 //!
-//! Any further `# …` becomes the [`reason`](crate::model::IgnoreDirective::reason).
-//! Note that mypy itself only tolerates one after `# type: ignore`: a trailing
-//! comment on a `# mypy: …` line is parsed as part of the option value and makes
-//! mypy fail, so a reason there is a mistake we report rather than endorse.
+//! Any further `# …` becomes the [`reason`](crate::model::IgnoreDirective::reason),
+//! up to the next tool's directive, so a `# noqa` sharing the line is never filed
+//! as mypy's justification. Note that mypy itself only tolerates a trailing
+//! comment after `# type: ignore`: one on a `# mypy: …` line is parsed as part of
+//! the option value and makes mypy fail, so a reason there is a mistake we report
+//! rather than endorse.
 //!
 //! pyright and ty honour `# type: ignore` too. It is reported once, as mypy's,
 //! because that is whose syntax it is; see the README's supported-tools table.
@@ -53,10 +55,12 @@ impl ToolParser for MypyParser {
         let mut out = Vec::new();
         for comment in file.comments() {
             // mypy only reads the run that opens the comment.
-            let found = python::segments(comment).next().and_then(|segment| {
-                let in_header = || python::in_file_header(file, comment);
-                directive(&segment, comment.leading, in_header).map(|parsed| (segment, parsed))
-            });
+            let found = python::segments(comment)
+                .into_iter()
+                .next()
+                .and_then(|segment| {
+                    directive(&segment, comment.leading).map(|parsed| (segment, parsed))
+                });
             let Some((segment, (scope, rules, reason))) = found else {
                 continue;
             };
@@ -91,27 +95,25 @@ fn suppressed_range(scope: Scope, line: u32) -> Suppressed {
     }
 }
 
-/// Recognize a mypy directive at the start of a comment.
+/// True when the text after a `#` opens a mypy directive.
 ///
-/// `in_header` is deferred because working it out means walking the lines above
-/// the comment, and only a bare `# type: ignore` ever asks.
-fn directive(
-    segment: &Segment<'_>,
-    leading: bool,
-    in_header: impl Fn() -> bool,
-) -> Option<(Scope, Vec<String>, Option<String>)> {
+/// Recognition is by syntax alone — where mypy will actually act on it is
+/// [`directive`]'s job. The shared segment scan uses this to bound the run before
+/// it; see `src/tools/python.rs::segments`.
+pub(super) fn opens_directive(after_hash: &str) -> bool {
+    let body = after_hash.trim_start();
+    strip_directive(body, "type:", "ignore").is_some()
+        || strip_directive(body, "mypy:", "ignore-errors").is_some()
+        || strip_directive(body, "mypy:", "disable-error-code").is_some()
+}
+
+/// Recognize a mypy directive at the start of a comment.
+fn directive(segment: &Segment<'_>, leading: bool) -> Option<(Scope, Vec<String>, Option<String>)> {
     let body = segment.after_hash.trim_start();
 
     if let Some(rest) = strip_directive(body, "type:", "ignore") {
         let (rules, reason) = python::rules_and_reason(rest);
-        // Only the blanket form reaches module scope; mypy rejects
-        // `# type: ignore[code]` above the first statement outright.
-        let scope = if rules.is_empty() && leading && in_header() {
-            Scope::File
-        } else {
-            Scope::Line
-        };
-        return Some((scope, rules, reason));
+        return Some((Scope::Line, rules, reason));
     }
 
     // Everything below is mypy's inline config, which it reads only from a
@@ -238,34 +240,28 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_type_ignore_above_all_code_exempts_the_module() {
-        let directive = only("#!/usr/bin/env python\n\n# type: ignore  # generated\nimport os\n");
-        assert_eq!(directive.scope, Scope::File);
-        assert!(directive.rules.is_empty());
-        assert_eq!(directive.reason.as_deref(), Some("generated"));
-        assert_eq!(
-            directive.suppressed,
-            Suppressed {
-                start_line: 1,
-                end_line: None
-            }
-        );
-    }
-
-    #[test]
-    fn the_module_form_needs_both_a_bare_code_list_and_an_empty_header() {
-        // A docstring is code, so the same comment is line-scoped after one.
-        assert_eq!(
-            only("\"\"\"Doc.\"\"\"\n# type: ignore\nimport os\n").scope,
-            Scope::Line
-        );
-        // mypy rejects a code list at module level, so this is never file scope.
-        assert_eq!(
-            only("# type: ignore[arg-type]\nimport os\n").scope,
-            Scope::Line
-        );
-        // And a trailing directive is scoped to its own line, header or not.
-        assert_eq!(only("x = 1  # type: ignore\n").scope, Scope::Line);
+    fn a_type_ignore_is_line_scoped_wherever_it_sits() {
+        // The record contract spells mypy's module-wide exemption with the
+        // `# mypy:` forms below; `# type: ignore` stays a line directive in every
+        // position, so where it sits cannot change the scope.
+        for source in [
+            "x = 1  # type: ignore\n",
+            "# type: ignore\nimport os\n",
+            "#!/usr/bin/env python\n\n# type: ignore\nimport os\n",
+            "\"\"\"Doc.\"\"\"\n# type: ignore\nimport os\n",
+            "# type: ignore[arg-type]\nimport os\n",
+        ] {
+            let directive = only(source);
+            assert_eq!(directive.scope, Scope::Line, "{source:?}");
+            assert_eq!(
+                directive.suppressed,
+                Suppressed {
+                    start_line: directive.line,
+                    end_line: Some(directive.line)
+                },
+                "{source:?}"
+            );
+        }
     }
 
     #[test]
@@ -318,6 +314,21 @@ mod tests {
                 .as_deref(),
             Some("narrow")
         );
+    }
+
+    #[test]
+    fn a_record_stops_at_the_next_tools_directive() {
+        // Reporting ruff's live suppression as mypy's stated justification is the
+        // inversion this tool exists to prevent.
+        let directive = only("import legacy  # type: ignore[import-not-found]  # noqa: F401\n");
+        assert_eq!(directive.rules, vec!["import-not-found"]);
+        assert_eq!(directive.reason, None);
+        assert_eq!(directive.raw, "# type: ignore[import-not-found]");
+
+        let with_reason =
+            only("import legacy  # type: ignore  # no stubs published  # noqa: F401  # unused\n");
+        assert_eq!(with_reason.reason.as_deref(), Some("no stubs published"));
+        assert_eq!(with_reason.raw, "# type: ignore  # no stubs published");
     }
 
     #[test]

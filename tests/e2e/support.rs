@@ -121,6 +121,9 @@ pub fn mypy_failures(cwd: &Path, config: &str, targets: &[&str]) -> Vec<String> 
         .args(targets)
         .output()
         .expect("run mypy");
+    // 0 is clean and 1 is "found errors"; anything else (a missing fixture, a bad
+    // config) would otherwise read as "every file passed".
+    assert_checker_ran("mypy", &output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     // `path:line: error: message  [code]`; the `note:` follow-ups name the same
     // file, so keeping only `error:` lines is enough.
@@ -145,6 +148,7 @@ pub fn ty_failures(cwd: &Path, config: &str, targets: &[&str]) -> Vec<String> {
         .args(targets)
         .output()
         .expect("run ty check");
+    assert_checker_ran("ty", &output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     // `path:line:column: error[rule] message`
     collect_paths(stdout.lines().filter_map(|line| {
@@ -192,6 +196,25 @@ pub fn pyright_failures(cwd: &Path, project: &str, targets: &[&str]) -> Vec<Stri
         })
         .collect::<Vec<_>>();
     collect_paths(diagnostics.iter().map(String::as_str))
+}
+
+/// A checker that could not run at all must fail the test, not read as a clean
+/// bill of health.
+///
+/// Every checker here exits 0 for "nothing to report" and 1 for "found
+/// something"; anything else is a missing fixture, a bad config, or a crash —
+/// and all three otherwise surface as an empty diagnostic list.
+fn assert_checker_ran(tool: &str, output: &std::process::Output) {
+    assert!(
+        output
+            .status
+            .code()
+            .is_some_and(|code| code == 0 || code == 1),
+        "{tool} exited unexpectedly ({:?})\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Normalize, deduplicate, and sort the paths a checker named.

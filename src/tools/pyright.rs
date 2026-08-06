@@ -12,7 +12,9 @@
 //! Pyright honours a directive anywhere in the comment — `# noqa: F401  #
 //! pyright: ignore[reportAny]` suppresses — so, like ruff, this reports the span
 //! of the inner `#` that opened it. Any further `# …` is the
-//! [`reason`](crate::model::IgnoreDirective::reason).
+//! [`reason`](crate::model::IgnoreDirective::reason), up to the next tool's
+//! directive, so a `# noqa` sharing the line is never filed as pyright's
+//! justification.
 //!
 //! Everything else a `# pyright: …` comment can say (`# pyright: basic`,
 //! `# pyright: strict`) switches the type-checking mode rather than silencing a
@@ -20,8 +22,8 @@
 //! change, and a review tool that files it as a suppression cries wolf. Pyright
 //! also honours mypy's `# type: ignore`, which is reported once, as mypy's.
 //!
-//! Pyright's ignore is always line-scoped: unlike mypy and ty it gives a
-//! directive above the first statement no special meaning.
+//! Pyright's ignore is always line-scoped: unlike ty it gives a directive above
+//! the first statement no special meaning.
 
 use crate::model::{IgnoreDirective, Scope, Suppressed, Tool};
 use crate::source::{Language, SourceFile};
@@ -47,6 +49,7 @@ impl ToolParser for PyrightParser {
             // One suppression per comment: a second `# pyright: ignore` on the
             // same line silences nothing the first did not.
             let Some((segment, rest)) = python::segments(comment)
+                .into_iter()
                 .find_map(|segment| directive_body(segment.after_hash).map(|rest| (segment, rest)))
             else {
                 continue;
@@ -70,6 +73,14 @@ impl ToolParser for PyrightParser {
         }
         out
     }
+}
+
+/// True when the text after a `#` opens a pyright suppression.
+///
+/// The shared segment scan uses this to bound the run before it; see
+/// `src/tools/python.rs::segments`.
+pub(super) fn opens_directive(after_hash: &str) -> bool {
+    directive_body(after_hash).is_some()
 }
 
 /// The text after `pyright: ignore`, or `None` for any other `# pyright: …`

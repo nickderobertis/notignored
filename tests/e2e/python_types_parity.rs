@@ -119,7 +119,6 @@ const MYPY_FIXTURES: &[&str] = &[
     "mypy/violation.py",
     "mypy/line_blanket.py",
     "mypy/line_codes.py",
-    "mypy/module_ignore.py",
     "mypy/ignore_errors.py",
     "mypy/disable_error_code.py",
 ];
@@ -216,18 +215,6 @@ fn the_cli_describes_every_mypy_directive_exactly() {
                 (7, 16),
                 "# type: ignore[arg-type]  # upstream stub is wrong",
                 Some(7),
-            )],
-        ),
-        (
-            "mypy/module_ignore.py",
-            vec![record(
-                "mypy",
-                "file",
-                &[],
-                Some("the whole module is generated from protobuf"),
-                (1, 1),
-                "# type: ignore  # the whole module is generated from protobuf",
-                None,
             )],
         ),
         (
@@ -359,8 +346,12 @@ fn the_cli_describes_every_ty_directive_exactly() {
     }
 }
 
-/// One line, two tools: both directives are live, and each is reported once
-/// under the tool whose syntax it is.
+/// One line, two tools: both directives are live, and each record covers its own
+/// directive only — its own rules, its own reason, its own span.
+///
+/// Getting this wrong inverts the tool's purpose: without a directive boundary
+/// ruff's live `# noqa: F401` reads as mypy's stated justification, and a
+/// reviewer sees a suppression that looks explained when it is not.
 #[test]
 fn a_line_carrying_two_tools_directives_yields_a_record_for_each() {
     let mixed = ["mixed/unsuppressed.py", "mixed/suppressed.py"];
@@ -385,24 +376,41 @@ fn a_line_carrying_two_tools_directives_yields_a_record_for_each() {
                 "mypy",
                 "line",
                 &["import-not-found"],
-                // Each record's reason is the comment text trailing its own
-                // directive, so mypy's runs into ruff's — documented in the README.
-                Some("noqa: F401"),
+                Some("no stubs published"),
                 (3, 35),
-                "# type: ignore[import-not-found]  # noqa: F401",
+                "# type: ignore[import-not-found]  # no stubs published",
                 Some(3),
             ),
             record(
                 "ruff",
                 "line",
                 &["F401"],
-                None,
-                (3, 69),
-                "# noqa: F401",
-                Some(3)
+                Some("imported for its side effects"),
+                (3, 91),
+                "# noqa: F401  # imported for its side effects",
+                Some(3),
             ),
         ]
     );
+
+    // Neither record may quote the other's directive anywhere a reviewer reads it.
+    for directive in records_for("mixed/suppressed.py") {
+        let (tool, .., reason, _, raw, _) = &directive;
+        let foreign = if tool == "mypy" {
+            "noqa"
+        } else {
+            "type: ignore"
+        };
+        assert!(
+            !raw.contains(foreign),
+            "{tool}'s raw span swallowed the other directive: {raw}"
+        );
+        assert!(
+            !reason.as_deref().unwrap_or_default().contains(foreign),
+            "{tool}'s reason swallowed the other directive: {reason:?}"
+        );
+    }
+
     assert!(records_for("mixed/unsuppressed.py").is_empty());
 }
 

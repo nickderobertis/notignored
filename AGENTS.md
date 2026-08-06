@@ -81,10 +81,15 @@ will be misread as comments. Grammar shared by a *family* of tools lives in a
 private sibling module (`src/tools/python.rs` serves mypy/pyright/ty); it is not
 a tool and stays out of the registry.
 
-A tool's scope is what it honours, not what its docs headline: the same
-`# type: ignore` is line-scoped mid-file and file-scoped above all code, and ty
-reads an own-line directive as covering the line below. Derive each from the real
-tool before writing the parser.
+A tool's scope is what it honours, not what its docs headline — ty reads an
+own-line directive as covering the line below. Derive each from the real tool,
+but report only the scopes the record contract specifies: a checker may honour
+more than we claim, and widening that unasked changes the contract.
+
+One line can carry several tools' directives. Each record's `raw` and `reason`
+must stop at the next one, or a live suppression is filed as its neighbour's
+justification. `src/tools/python.rs::segments` owns that boundary; a new Python
+parser adds an `opens_directive` recognizer to it.
 
 ## Commits, releases, and merging
 

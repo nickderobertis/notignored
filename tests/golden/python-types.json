@@ -7,12 +7,12 @@
       "rules": [
         "import-not-found"
       ],
-      "reason": "noqa: F401",
+      "reason": "no stubs published",
       "path": "mixed/suppressed.py",
       "line": 3,
       "end_line": 3,
       "column": 35,
-      "raw": "# type: ignore[import-not-found]  # noqa: F401",
+      "raw": "# type: ignore[import-not-found]  # no stubs published",
       "suppressed": {
         "start_line": 3,
         "end_line": 3
@@ -24,12 +24,12 @@
       "rules": [
         "F401"
       ],
-      "reason": null,
+      "reason": "imported for its side effects",
       "path": "mixed/suppressed.py",
       "line": 3,
       "end_line": 3,
-      "column": 69,
-      "raw": "# noqa: F401",
+      "column": 91,
+      "raw": "# noqa: F401  # imported for its side effects",
       "suppressed": {
         "start_line": 3,
         "end_line": 3
@@ -98,21 +98,6 @@
       "suppressed": {
         "start_line": 7,
         "end_line": 7
-      }
-    },
-    {
-      "tool": "mypy",
-      "scope": "file",
-      "rules": [],
-      "reason": "the whole module is generated from protobuf",
-      "path": "mypy/module_ignore.py",
-      "line": 1,
-      "end_line": 1,
-      "column": 1,
-      "raw": "# type: ignore  # the whole module is generated from protobuf",
-      "suppressed": {
-        "start_line": 1,
-        "end_line": null
       }
     },
     {
