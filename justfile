@@ -96,7 +96,7 @@ setup-python-tools:
 # just the data, moved.
 # Rewrite the checked-in golden reports from the current output.
 bless:
-    @NOTIGNORED_BLESS=1 cargo test --quiet --locked --test e2e golden_report
+    @NOTIGNORED_BLESS=1 cargo test --quiet --locked --test e2e golden
 
 # Upgrade dependencies, then re-run the full gate.
 upgrade:
