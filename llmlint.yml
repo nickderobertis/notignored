@@ -26,6 +26,11 @@ files:
     # exempt — it holds no block — and neither is any hand-written file.
     - "tests/golden/tools-report.json"
     - "tests/golden/polyglot.json"
+    # Same reason, one step further: a rendered comment body quotes the source
+    # line each finding sits on, so the goldens hold fixture directives verbatim
+    # — an `// @ts-ignore` inside a snippet is the report *showing* a suppression,
+    # not this repo taking one. The fixtures those lines come from are judged.
+    - "tests/golden/markdown/*.md"
     # Composed verbatim by the create-repo skill (`compose_repo_plan.py
     # --llmlint-config` and `assets/setup-llmlint.sh.template`). Editing them to
     # local taste forks them from the template and loses the ability to
