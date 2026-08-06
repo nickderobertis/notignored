@@ -24,7 +24,7 @@ default:
     @just --list
 
 # Installs toolchain components, the pinned cargo dev tools, deps, and the
-# pinned ruff the e2e parity suite drives.
+# pinned Python tools the e2e parity suites drive.
 # Set up the project from a clean clone.
 bootstrap:
     @rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
@@ -33,7 +33,7 @@ bootstrap:
     @just _ensure-tool cargo-nextest
     @just _ensure-tool cargo-llvm-cov
     @cargo fetch --locked --quiet
-    @bash scripts/setup-ruff.sh
+    @bash scripts/setup-python-tools.sh
 
 # These are test runners, not rules: their version cannot change the gate's
 # verdict, so both here and CI take the latest rather than keeping two pins that
@@ -74,7 +74,7 @@ test:
 test-quick:
     @cargo nextest run --locked --status-level fail
 
-# Drives the compiled binary and the real pinned ruff — never a stub.
+# Drives the compiled binary and the real pinned Python tools — never a stub.
 # The end-to-end binary journeys in isolation (also run by `test`/`check`).
 test-e2e:
     @cargo nextest run --locked -E 'binary(e2e)' --status-level fail
@@ -87,15 +87,16 @@ doc:
 run *ARGS:
     cargo run --locked --quiet -- {{ARGS}}
 
-# Install the pinned ruff the e2e parity suite drives (also run by `bootstrap`).
-setup-ruff:
-    @bash scripts/setup-ruff.sh
+# Install the pinned ruff/mypy/pyright/ty the e2e parity suites drive (also run
+# by `bootstrap`).
+setup-python-tools:
+    @bash scripts/setup-python-tools.sh
 
 # Only after reviewing the diff — and bump REPORT_VERSION when the shape, not
 # just the data, moved.
-# Rewrite the checked-in golden report from the current output.
+# Rewrite the checked-in golden reports from the current output.
 bless:
-    @NOTIGNORED_BLESS=1 cargo test --quiet --locked --test e2e json_format
+    @NOTIGNORED_BLESS=1 cargo test --quiet --locked --test e2e golden_report
 
 # Upgrade dependencies, then re-run the full gate.
 upgrade:

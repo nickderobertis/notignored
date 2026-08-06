@@ -29,6 +29,8 @@
       "Bash(just deps-check)",
       "Bash(just run:*)",
       "Bash(just session-setup)",
+      "Bash(just setup-python-tools)",
+      "Bash(just bless)",
       "Bash(just setup-llmlint)",
       "Bash(just lint-llm:*)",
       "Bash(just lint-llm-diff:*)",
