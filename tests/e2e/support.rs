@@ -294,14 +294,36 @@ pub fn rustc_accepts(file: &Path, lints: &[&str]) -> bool {
     output.status.success()
 }
 
+/// A `git` invocation rooted at `dir` and insulated from an ambient repository.
+///
+/// `-C` does not outrank `GIT_DIR`, and the merge-path gate runs this suite from
+/// inside a `pre-push` hook — which exports `GIT_DIR` and `GIT_INDEX_FILE` for
+/// the repository being pushed. Inherited, they turn every scratch repository
+/// below into the real one: `git init` reuses it and `checkout -b main` fails on
+/// a branch the journey never created. Mirrors `diff.rs`'s production list.
+fn git_command(dir: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(dir);
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
 /// Run `git` in `dir`, failing with the command that broke and git's own reason.
 ///
 /// The diff journeys drive a **real** repository: a stubbed git would prove
 /// nothing about the semantics `--diff-base` promises.
 pub fn git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
+    let output = git_command(dir)
         .args(args)
         .output()
         .unwrap_or_else(|error| {
@@ -386,9 +408,7 @@ fn split_path_field(line: &str) -> Option<(&str, &str)> {
 /// Run `git` in `dir` and return its stdout, for a journey that needs to read
 /// the change the way git itself describes it.
 pub fn git_stdout(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
+    let output = git_command(dir)
         .args(args)
         .output()
         .unwrap_or_else(|error| panic!("cannot run git {args:?}: {error}"));

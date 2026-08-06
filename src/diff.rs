@@ -306,9 +306,7 @@ impl Diff {
 
     /// Run git in the diff's root, returning its stdout.
     fn git(&self, args: &[&str]) -> Result<String, DiffError> {
-        let output = Command::new(&self.git)
-            .arg("-C")
-            .arg(&self.root)
+        let output = git_command(&self.git, &self.root)
             .args(args)
             .output()
             .map_err(|error| {
@@ -330,6 +328,37 @@ impl Diff {
         // one undecodable byte must not abort a scan.
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
+}
+
+/// The environment variables that tell git which repository to operate on, and
+/// which `-C <dir>` does **not** outrank.
+///
+/// Every git hook runs with `GIT_DIR` exported for the repository it fired in,
+/// and `pre-push` also exports `GIT_INDEX_FILE`. A `--diff` run from inside one
+/// would silently report that repository instead of the path it was given —
+/// and a hook, or a CI step git itself invoked, is exactly where this tool is
+/// meant to run.
+const AMBIENT_REPOSITORY_VARS: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+];
+
+/// A `git` invocation rooted at `dir` and nowhere else.
+///
+/// Clearing [`AMBIENT_REPOSITORY_VARS`] leaves `-C` as the only thing that
+/// decides which repository answers.
+fn git_command(program: &str, dir: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.arg("-C").arg(dir);
+    for name in AMBIENT_REPOSITORY_VARS {
+        command.env_remove(name);
+    }
+    command
 }
 
 /// Read `git diff --name-status -z` output.
@@ -458,10 +487,12 @@ mod tests {
     use super::*;
 
     /// Run git in `dir`, panicking with the command that failed.
+    ///
+    /// Through [`git_command`] for the same reason the production path is: the
+    /// gate runs inside a `pre-push` hook, and a scratch repository built with
+    /// `GIT_DIR` inherited is not a scratch repository at all.
     fn git(dir: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(dir)
+        let output = git_command("git", dir)
             .args(args)
             .output()
             .unwrap_or_else(|error| panic!("run git {args:?}: {error}"));
