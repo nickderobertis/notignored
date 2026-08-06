@@ -2,7 +2,7 @@
 name = "notignored"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Extract lint and type-check suppression comments from source files natively and fast — no linter subprocesses."
 license = "MIT"
 repository = "https://github.com/nickderobertis/notignored"

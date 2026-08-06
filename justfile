@@ -92,9 +92,9 @@ deps-check:
     cargo deny check
     cargo machete
 
-# Build under the declared MSRV (needs the 1.85 toolchain installed).
+# Build under the declared MSRV (needs the 1.88 toolchain installed).
 msrv:
-    cargo +1.85 check --locked --all-targets
+    cargo +1.88 check --locked --all-targets
 
 # Ensures `just`, verifies the rest, then runs setup-llmlint. Runs automatically
 # via the Claude Code SessionStart hook; this is the manual entry point.

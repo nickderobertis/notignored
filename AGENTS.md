@@ -92,9 +92,11 @@ Use the `just` recipes; do not hand-roll equivalent commands.
   squash commit whose subject is the PR title. Queue with
   `gh pr merge --auto --squash`. Merged head branches auto-delete. Admins may
   bypass in a break-glass.
-- **All gating checks are required:** `gate`, `cross`, `deny`, `install`,
-  `pr-title`, and `llmlint` — plus linear history, conversation resolution, and
-  no force-push / branch-deletion.
+- **All gating checks are required:** `gate`, `deny`, `msrv`, `pr-title`,
+  `llmlint`, and every matrix leg of `cross` and `install` — plus linear history,
+  conversation resolution, and no force-push / branch-deletion. Re-apply with
+  the create-repo skill's `setup_github_governance.py`; adding a CI job means
+  adding its context there too, or it is advisory.
 - **PRs follow the template** (`.github/pull_request_template.md`): terse
   **What** and **Why**. It becomes the squash commit body.
 - **Releases: release-plz, release-PR gate shape.** The bot opens a release PR
