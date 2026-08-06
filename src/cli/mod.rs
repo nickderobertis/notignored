@@ -17,8 +17,10 @@ use crate::model::{Report, Tool};
 use crate::scan::{self, ScanError, ScanOptions};
 use crate::source::{display_path, Language};
 
+mod markdown;
 mod render;
 
+pub use markdown::{render_markdown, MarkdownOptions, MARKER};
 pub use render::{narrate_errors, render_human, render_json};
 
 /// The scan completed and nothing forced a failure.
@@ -37,6 +39,41 @@ pub enum Format {
     Human,
     /// The full report envelope as JSON, for machines.
     Json,
+    /// A pull-request comment body, for the GitHub Action.
+    Markdown,
+}
+
+/// Accept an `owner/repo` slug and nothing else.
+///
+/// It is interpolated into a permalink, so anything that is not two plain path
+/// segments — a full URL, a `..`, a query string — is rejected here rather than
+/// rendered into a link that goes somewhere unintended.
+fn github_repo(value: &str) -> Result<String, String> {
+    let segment_ok = |segment: &str| {
+        !segment.is_empty()
+            && segment != ".."
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    match value.split_once('/') {
+        Some((owner, repo)) if segment_ok(owner) && segment_ok(repo) => Ok(value.to_string()),
+        _ => Err(format!("expected owner/repo, got {value:?}")),
+    }
+}
+
+/// Accept a hexadecimal commit id and nothing else.
+///
+/// The permalinks pin source to a commit; a branch name would move under the
+/// reader and a fragment of one would resolve to something else entirely.
+fn github_sha(value: &str) -> Result<String, String> {
+    if (7..=64).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(value.to_string())
+    } else {
+        Err(format!(
+            "expected a commit sha of 7 to 64 hex digits, got {value:?}"
+        ))
+    }
 }
 
 /// Report every lint/type-check suppression comment in a source tree.
@@ -50,6 +87,8 @@ pub enum Format {
                   never invoked — so this is fast enough to run on every pull request.\n\n\
                   With --diff, only the suppressions the change added are reported, which is the \
                   review case: `notignored --diff --diff-base main`.\n\n\
+                  --format markdown renders that report as a pull-request comment body; pass \
+                  --github-repo and --github-sha to link each suppression to its source.\n\n\
                   Exit codes:\n  \
                   0  the scan completed\n  \
                   1  --fail-if-found was given and at least one suppression was reported\n  \
@@ -73,6 +112,15 @@ pub struct Cli {
     /// Exit 1 when any suppression is reported.
     #[arg(long)]
     pub fail_if_found: bool,
+
+    /// The `owner/repo` the `markdown` format links suppressions to. Without it
+    /// (or --github-sha) locations render as plain `path:line` text.
+    #[arg(long = "github-repo", value_name = "OWNER/REPO", value_parser = github_repo)]
+    pub github_repo: Option<String>,
+
+    /// The commit the `markdown` format pins its permalinks to.
+    #[arg(long = "github-sha", value_name = "SHA", value_parser = github_sha)]
+    pub github_sha: Option<String>,
 
     // llmlint: ignore-block[invalid_states_unrepresentable] the pair is a field-per-flag mirror of the command line, and clap rejects a base without --diff at the boundary (`requires = "diff"`, exit 2, covered by an e2e); folding them into an enum would move flag parsing into a custom value parser, which is exactly what this layer keeps out.
     /// Report only the suppressions this change added: those on lines the diff
@@ -204,6 +252,14 @@ impl Cli {
             tools: self.tools.clone(),
         }
     }
+
+    /// Where this invocation says the scanned source lives.
+    fn markdown_options(&self) -> MarkdownOptions {
+        MarkdownOptions {
+            repo: self.github_repo.clone(),
+            sha: self.github_sha.clone(),
+        }
+    }
 }
 
 /// Run the command, writing the report to `out` and diagnostics to `err`.
@@ -229,6 +285,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let rendered = match cli.format {
         Format::Human => render_human(&report, out, err),
         Format::Json => render_json(&report, out),
+        Format::Markdown => render_markdown(&report, &cli.markdown_options(), out),
     };
     // A downstream consumer that stops reading (`| head`, `| grep -q`) closes the
     // pipe. That is its prerogative, not our failure — report the scan's verdict
@@ -331,6 +388,66 @@ mod tests {
         // A base with nothing to compare is a mistake, not a whole-tree scan.
         let error = Cli::try_parse_from(["notignored", "--diff-base", "main"]).unwrap_err();
         assert!(error.to_string().contains("--diff"), "{error}");
+    }
+
+    #[test]
+    fn the_markdown_permalink_flags_are_parsed_into_render_options() {
+        let cli = parse(&[
+            "--format",
+            "markdown",
+            "--github-repo",
+            "acme/widgets",
+            "--github-sha",
+            "0123456789abcdef0123456789abcdef01234567",
+        ]);
+        assert_eq!(cli.format, Format::Markdown);
+        assert_eq!(
+            cli.markdown_options(),
+            MarkdownOptions {
+                repo: Some("acme/widgets".into()),
+                sha: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            }
+        );
+        // Omitted, they simply render locations as plain text.
+        assert_eq!(parse(&[]).markdown_options(), MarkdownOptions::default());
+    }
+
+    #[test]
+    fn a_repo_that_is_not_owner_slash_repo_is_rejected() {
+        for bad in [
+            "widgets",
+            "acme/widgets/extra",
+            "https://github.com/acme/widgets",
+            "acme/../secrets",
+            "/widgets",
+            "acme/",
+        ] {
+            assert!(github_repo(bad).is_err(), "{bad} was accepted");
+        }
+        assert_eq!(github_repo("acme/widgets.rs"), Ok("acme/widgets.rs".into()));
+
+        let error = Cli::try_parse_from(["notignored", "--github-repo", "not-a-slug"]).unwrap_err();
+        assert!(error.to_string().contains("owner/repo"), "{error}");
+    }
+
+    #[test]
+    fn a_sha_that_is_not_a_commit_id_is_rejected() {
+        for bad in ["main", "abc", "", &"a".repeat(65), "0123456z"] {
+            assert!(github_sha(bad).is_err(), "{bad} was accepted");
+        }
+        assert_eq!(github_sha("0123abc"), Ok("0123abc".into()));
+
+        let error = Cli::try_parse_from(["notignored", "--github-sha", "main"]).unwrap_err();
+        assert!(error.to_string().contains("hex digits"), "{error}");
+    }
+
+    #[test]
+    fn markdown_format_writes_a_comment_body_to_stdout() {
+        let dir = fixture();
+        let (code, out, _) = run_in(dir.path(), &["--format", "markdown"]);
+        assert_eq!(code, EXIT_OK);
+        assert!(out.starts_with(MARKER), "{out}");
+        assert!(out.contains("- **ruff E501** — _long URL_ — "), "{out}");
     }
 
     #[test]

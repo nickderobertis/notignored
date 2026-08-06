@@ -45,17 +45,20 @@ tagged release attaches per-platform archives built on native runners.
 ## Usage
 
 ```
-notignored [PATHS...] [--format human|json] [--tool NAME]... [--fail-if-found]
-           [--diff [--diff-base REF]]
+notignored [PATHS...] [--format human|json|markdown] [--tool NAME]... [--fail-if-found]
+           [--diff [--diff-base REF]] [--github-repo OWNER/REPO] [--github-sha SHA]
 ```
 
 - `PATHS` — files and/or directories. Directories are walked recursively,
   honouring `.gitignore`. Defaults to `.`.
-- `--format` — `human` (default) or `json`.
+- `--format` — `human` (default), `json`, or `markdown` (a pull-request comment
+  body; see the action below).
 - `--tool` — only report this tool; repeat to allow several. Omit for all.
 - `--fail-if-found` — exit 1 when any suppression is reported.
 - `--diff` — report only the suppressions the change added (see below).
 - `--diff-base` — the git revision or range `--diff` compares against.
+- `--github-repo` / `--github-sha` — the `owner/repo` and commit the `markdown`
+  format builds its permalinks from.
 
 ### Reviewing a pull request
 
@@ -85,6 +88,68 @@ notignored: 1 ignore in 1 file
 
 `--diff` shells out to `git` — infrastructure, not one of the linters whose
 directives are parsed natively — so it needs `git` on `PATH` and a work tree.
+
+### On a pull request: the GitHub Action
+
+The action posts one sticky comment naming every suppression the pull request
+added, with its stated reason and a link to the line. It edits that same comment
+on each push instead of adding another, and on a pull request that adds none it
+posts nothing at all.
+
+```yaml
+# .github/workflows/notignored.yml
+name: notignored
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  suppressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the base branch has to be fetched to diff against it
+      - uses: nickderobertis/notignored@main
+```
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `github-token` | `${{ github.token }}` | Token used to upsert the comment. Needs `pull-requests: write`. |
+| `diff-base` | the pull request's base branch | Any git revision or range, as `--diff-base` takes. |
+| `paths` | the whole repository | Whitespace-separated files and directories to scan. |
+| `version` | `latest` | A release tag such as `v0.1.0`, or `local` to build the action's own source with `cargo`. |
+
+It exposes `count` (how many suppressions the change added) and `report-path`
+(the JSON report), so a later step can fail the build, upload the report, or
+gate on a threshold:
+
+```yaml
+      - uses: nickderobertis/notignored@main
+        id: notignored
+      - if: steps.notignored.outputs.count != '0'
+        run: echo "this change adds ${{ steps.notignored.outputs.count }} suppression(s)"
+```
+
+The steps are `bash`, so the action runs on the Linux and macOS runners; it needs
+`jq` and the `gh` CLI (both preinstalled there), plus `cargo` when
+`version: local`.
+
+`--format markdown` renders exactly the body the action posts, so it can be
+previewed locally:
+
+```console
+$ notignored --diff --diff-base main --format markdown \
+    --github-repo nickderobertis/notignored --github-sha "$(git rev-parse HEAD)"
+```
+
+Both permalink flags are optional; without them each location renders as plain
+`path:line` text. When a body names fewer than four suppressions, each one also
+carries the source line with two lines of context on either side.
 
 ### Exit codes
 
@@ -142,10 +207,10 @@ The `json` format emits the full report envelope:
 
 | Tool | Directives | Status |
 | --- | --- | --- |
-| `eslint` | `// eslint-disable-next-line rule -- reason` | Planned |
-| `biome` | `// biome-ignore lint/group/rule: reason` | Planned |
+| `eslint` | `// eslint-disable-line rule`, `// eslint-disable-next-line rule -- reason`, `/* eslint-disable rule -- reason */` … `/* eslint-enable rule */` | **Supported** |
+| `biome` | `// biome-ignore lint/group/rule: reason`, `// biome-ignore-all lint/group/rule: reason`, `// biome-ignore-start lint/group/rule: reason` … `// biome-ignore-end lint/group/rule: reason` | **Supported** |
 | `ruff` | `# noqa`, `# noqa: E501, F401`, `# ruff: noqa`, `# ruff: noqa: E501` | **Supported** |
-| `typescript` | `// @ts-ignore`, `// @ts-expect-error` | Planned |
+| `typescript` | `// @ts-ignore`, `// @ts-expect-error reason`, `/* @ts-ignore */`, `// @ts-nocheck` | **Supported** |
 | `mypy` | `# type: ignore`, `# type: ignore[arg-type, index]`, `# mypy: ignore-errors`, `# mypy: disable-error-code="arg-type"` | **Supported** |
 | `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]` | **Supported** |
 | `ty` | `# ty: ignore`, `# ty: ignore[invalid-argument-type]` | **Supported** |
@@ -165,6 +230,19 @@ Scope follows each tool's own rules, not a house convention:
   `ignore-block` … `ignore-end` is one `block` record spanning both directives.
   A block left unclosed keeps a null `suppressed.end_line` and adds an `errors`
   entry.
+
+Each tool's own reason syntax is what gets captured: ESLint's ` -- description`,
+Biome's mandatory `: explanation`, ruff's trailing `# comment`, and — for
+TypeScript, which defines no separator — whatever text trails the directive. A
+directive that lists no rules is a blanket suppression (`rules: []`).
+
+Scope follows the tool rather than the syntax. `// eslint-disable-line` is
+`line`; `// eslint-disable-next-line`, `// biome-ignore` and
+`// @ts-expect-error` are `next-line`; `# ruff: noqa`, `// biome-ignore-all` and
+`// @ts-nocheck` are `file`; and the delimited pairs
+(`/* eslint-disable */` … `/* eslint-enable */`,
+`// biome-ignore-start` … `// biome-ignore-end`) are `block`, running to
+end-of-file with `suppressed.end_line: null` when they are never closed.
 
 Adding one is three touch points: a module under `src/tools/`, one line in
 `src/tools/mod.rs::registry()`, and one row above. The registry is the single
@@ -228,10 +306,11 @@ just --list      # everything else
 
 `just check` runs the end-to-end suite, which drives the compiled binary as a
 subprocess and the **real, pinned** tools — `ruff`, `mypy`, `pyright`, `ty`,
-`shellcheck`, and `llmlint` (see the `.<tool>-version` files) plus the pinned
+`shellcheck`, and `llmlint` (see the `.<tool>-version` files), `eslint` /
+`biome` / `tsc` (see `tests/js-toolchain/package.json`), plus the pinned
 toolchain's own `rustc` and `clippy-driver` — to prove that what `notignored`
-reports is what those tools actually suppress. `just bootstrap` installs the
-Python-packaged ones with `uv` into project-local venvs under `.dev/`.
+reports is what those tools actually suppress. `just bootstrap` installs them
+all under `.dev/`; it needs `uv` and Node.js 20+ on `PATH`.
 
 ## License
 

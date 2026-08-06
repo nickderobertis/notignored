@@ -24,7 +24,7 @@ default:
     @just --list
 
 # Installs toolchain components, the pinned cargo dev tools, deps, and the
-# pinned linters the e2e parity suites drive.
+# pinned linters and type checkers the e2e parity suites drive.
 # Set up the project from a clean clone.
 bootstrap:
     @rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
@@ -34,6 +34,7 @@ bootstrap:
     @just _ensure-tool cargo-llvm-cov
     @cargo fetch --locked --quiet
     @bash scripts/setup-python-tools.sh
+    @bash scripts/setup-js.sh
     @bash scripts/setup-misc-tools.sh
 
 # These are test runners, not rules: their version cannot change the gate's
@@ -88,10 +89,16 @@ doc:
 run *ARGS:
     cargo run --locked --quiet -- {{ARGS}}
 
-# Install the pinned ruff/mypy/pyright/ty the e2e parity suites drive (also run
-# by `bootstrap`).
+# Also run by `bootstrap`; this is the manual entry point. A recipe's doc is only
+# its LAST comment line, so the one-liners below have to stay one line.
+# Install the pinned ruff/mypy/pyright/ty the e2e parity suites drive.
 setup-python-tools:
     @bash scripts/setup-python-tools.sh
+
+# Also run by `bootstrap`; this is the manual entry point.
+# Install the pinned eslint/biome/tsc the e2e parity suites drive.
+setup-js:
+    @bash scripts/setup-js.sh
 
 # Install the pinned shellcheck/llmlint the e2e parity suites drive (also run by
 # `bootstrap`). Rust needs no pin here — `rust-toolchain.toml` is the one source.

@@ -97,6 +97,31 @@ must stop at the next one, or a live suppression is filed as its neighbour's
 justification. `src/tools/python.rs::segments` owns that boundary; a new Python
 parser adds an `opens_directive` recognizer to it.
 
+## The GitHub Action
+
+`action.yml` (composite, repo root) + `scripts/action/comment.sh` are the
+product's review surface. Keep the judgment in Rust: `--format markdown` renders
+the whole comment body, golden-tested at the counts the rules turn on
+(`tests/golden/markdown/`), so the composite's shell only moves bytes. Its two
+scripts are proven by *lifting them out of `action.yml`* and running them
+(`tests/e2e/action_scan.rs`, `tests/e2e/action_comment.rs`); a copy in a test
+would keep passing after the action stopped doing what it says. GitHub's API is
+the only thing stubbed — everything else is a real repository, the real binary,
+and the real `gh`.
+
+Never interpolate `${{ github.event.* }}` (or an input) into a `run:` script: on
+a fork's pull request that text is attacker-controlled and `${{ }}` splices it in
+as shell source. Pass it through `env`, or read the payload as data from
+`$GITHUB_EVENT_PATH`. `tests/action_contract.rs` fails the build otherwise, and
+also gates the inputs, outputs, and the sticky marker the renderer and the
+comment script must agree on.
+
+`.github/workflows/notignored.yml` dogfoods it with `version: local`, which
+builds the branch's own source. It is **not a required check** and must not
+become one: it is skipped on fork pull requests, whose read-only token cannot
+upsert a comment, and a required context that never reports would block them
+forever.
+
 ## Commits, releases, and merging
 
 - **Squash-merge only, via PR, with auto-merge.** The default branch is
@@ -176,6 +201,21 @@ fixture is the *same* program with a directive in a different slot, one test
 asserts they differ only in comments, and one checker run per tool decides the
 whole family. That keeps a slow checker (pyright) to a single invocation and
 makes `violation.py` a control rather than a separate program.
+
+The JS family is the one installer that does not read a `.<tool>-version` file:
+`scripts/setup-js.sh` takes its pins from `tests/js-toolchain/package.json`
+(eslint/biome/tsc, needs Node).
+
+Where a tool parses its own reason — eslint's ` -- ` description, in
+`suppressedMessages[].suppressions[].justification` — the e2e asserts our
+extraction against *its* reading, not against a literal.
+
+Not every parity proof can be a pass/fail flip. A mismatched or unclosed
+`biome-ignore-start` is only a *warning* in biome, which still exits 0 and still
+honours the range to end-of-file, so exit status cannot discriminate it. Those
+journeys assert on biome's own diagnostic text via `--reporter=json`
+(`support::biome_diagnostics`) instead. Reach for that shape only where the tool
+genuinely has no failing exit to offer.
 
 ## Keeping the allowlist current
 

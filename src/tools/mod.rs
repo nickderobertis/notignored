@@ -13,6 +13,8 @@ use crate::source::SourceFile;
 
 mod python;
 
+pub mod biome;
+pub mod eslint;
 pub mod llmlint;
 pub mod mypy;
 pub mod pyright;
@@ -20,6 +22,7 @@ pub mod ruff;
 pub mod rust;
 pub mod shellcheck;
 pub mod ty;
+pub mod typescript;
 
 /// Turns one tool's suppression syntax into [`IgnoreDirective`] records.
 ///
@@ -55,10 +58,10 @@ pub trait ToolParser: Send + Sync {
 /// parser exists.
 pub fn registry() -> Vec<Box<dyn ToolParser>> {
     vec![
-        // eslint: planned — `// eslint-disable-next-line rule -- reason`
-        // biome: planned — `// biome-ignore lint/suspicious/noAny: reason`
+        Box::new(eslint::EslintParser),
+        Box::new(biome::BiomeParser),
         Box::new(ruff::RuffParser),
-        // typescript: planned — `// @ts-expect-error reason`
+        Box::new(typescript::TypescriptParser),
         Box::new(mypy::MypyParser),
         Box::new(pyright::PyrightParser),
         Box::new(ty::TyParser),
@@ -94,7 +97,10 @@ mod tests {
         assert_eq!(
             tools,
             vec![
+                Tool::Eslint,
+                Tool::Biome,
                 Tool::Ruff,
+                Tool::Typescript,
                 Tool::Mypy,
                 Tool::Pyright,
                 Tool::Ty,
@@ -142,8 +148,8 @@ mod tests {
     fn filtering_selects_the_named_tools_only() {
         assert_eq!(registry_for(&[]).len(), registry().len());
         assert_eq!(registry_for(&[Tool::Ruff]).len(), 1);
+        assert_eq!(registry_for(&[Tool::Eslint, Tool::Biome]).len(), 2);
         assert_eq!(registry_for(&[Tool::Mypy, Tool::Ty]).len(), 2);
         assert_eq!(registry_for(&[Tool::Rust, Tool::Llmlint]).len(), 2);
-        assert!(registry_for(&[Tool::Eslint]).is_empty());
     }
 }

@@ -27,13 +27,18 @@ fn human_format_lists_every_suppression_and_summarizes_on_stderr() {
             // The fixture's own llmlint directive is a suppression like any
             // other, so a scan that claims to list every one has to show it.
             "src/app.py:13:3 llmlint suppressions_justified (file) -- fixture input, not production code: the bare directive above proves a blanket, reason-less suppression is reported with empty rules and a null reason (tests/golden/report.json).\n",
+            "src/app.ts:1:1 eslint no-console (next-line) -- debugging aid\n",
+            "src/app.ts:4:1 biome lint/suspicious/noDebugger (next-line) -- stepping through the parser\n",
+            "src/app.ts:7:1 typescript * (next-line) -- the vendored SDK ships no types\n",
+            "src/legacy.js:1:1 typescript * (file) -- bundled by a toolchain that predates our types\n",
+            "src/legacy.js:2:1 eslint no-alert (block) -- the whole module is a prompt\n",
             "src/vendored.py:1:1 ruff E501 (file) -- vendored upstream, not ours to reformat\n",
         ),
         "{stdout}"
     );
 
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(stderr, "notignored: 5 ignores in 2 files\n", "{stderr}");
+    assert_eq!(stderr, "notignored: 10 ignores in 4 files\n", "{stderr}");
 }
 
 #[test]
@@ -112,25 +117,28 @@ fn string_literals_and_unparsed_languages_are_never_reported() {
         .output()
         .expect("run notignored");
     let report = parse_report(&output.stdout);
-    let paths: Vec<&str> = report["ignores"]
-        .as_array()
-        .unwrap()
+    let ignores = report["ignores"].as_array().unwrap();
+    let paths: Vec<&str> = ignores
         .iter()
         .map(|d| d["path"].as_str().unwrap())
         .collect();
 
-    // `src/app.ts` holds an eslint directive but no eslint parser is registered
-    // yet; `docs/notes.md` is not a source language at all.
-    assert!(!paths.iter().any(|p| p.ends_with(".ts")), "{paths:?}");
+    // `docs/notes.md` is not a source language at all.
     assert!(!paths.iter().any(|p| p.ends_with(".md")), "{paths:?}");
     // `MESSAGE = "# noqa: E722"` is a string literal, not a directive.
     assert!(
-        !report["ignores"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|d| d["rules"][0] == "E722"),
+        !ignores.iter().any(|d| d["rules"][0] == "E722"),
         "a string literal was reported as a suppression"
+    );
+    // …and so is the eslint directive quoted inside `console.log(…)` on line 2
+    // of `src/app.ts`, which would otherwise double the eslint count there.
+    assert_eq!(
+        ignores
+            .iter()
+            .filter(|d| d["path"] == "src/app.ts" && d["tool"] == "eslint")
+            .count(),
+        1,
+        "a string literal was reported as a suppression: {report:#}"
     );
 }
 
@@ -163,7 +171,7 @@ fn the_tool_filter_selects_and_deselects_parsers() {
     );
 
     let deselected = notignored(&tree())
-        .args(["--tool", "mypy", "--tool", "eslint", "--format", "json"])
+        .args(["--tool", "mypy", "--tool", "pyright", "--format", "json"])
         .output()
         .expect("run notignored");
     assert!(deselected.status.success());

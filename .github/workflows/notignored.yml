@@ -1,0 +1,35 @@
+name: notignored
+
+# Dogfooding: every pull request here is reviewed by the action this repository
+# ships, built from the branch's own source. A fixture-heavy change is a feature —
+# the comment it produces is the demo.
+#
+# Deliberately NOT a required check (see AGENTS.md): it is skipped on fork pull
+# requests, whose read-only token cannot upsert a comment, and a required context
+# that never reports would block them forever.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: notignored-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suppressions:
+    # A fork's pull request is granted a read-only token, so the upsert would
+    # fail on something the contributor has no way to fix.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # --diff resolves the base branch, which a shallow checkout omits.
+          fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./
+        with:
+          version: local

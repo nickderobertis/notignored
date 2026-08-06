@@ -1,0 +1,129 @@
+name: notignored
+description: Comment on a pull request with the lint and type-check suppressions it adds.
+author: nickderobertis
+branding:
+  icon: eye-off
+  color: purple
+
+inputs:
+  github-token:
+    description: >-
+      Token used to read and upsert the sticky comment. Needs `pull-requests: write`.
+    required: false
+    default: ${{ github.token }}
+  diff-base:
+    description: >-
+      Git revision or range the scan compares against. Defaults to the pull
+      request's base branch, which needs `actions/checkout` with `fetch-depth: 0`.
+    required: false
+    default: ""
+  paths:
+    description: >-
+      Whitespace-separated files and directories to scan. Defaults to the whole
+      repository.
+    required: false
+    default: ""
+  version:
+    description: >-
+      notignored release to install (a tag such as `v0.1.0`, or `latest`), or
+      `local` to build the source shipped with this action using cargo.
+    required: false
+    default: latest
+
+outputs:
+  count:
+    description: How many suppressions the change added.
+    value: ${{ steps.scan.outputs.count }}
+  report-path:
+    description: Path to the JSON report the scan wrote.
+    value: ${{ steps.scan.outputs.report-path }}
+
+# Every step reads its inputs through `env`. Nothing from `github.event` — a
+# branch name, a title, a body, all of it attacker-controlled on a fork pull
+# request — is ever interpolated into a `run:` script, where it would be shell
+# source rather than data.
+runs:
+  using: composite
+  steps:
+    - name: Install notignored
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        root="$RUNNER_TEMP/notignored"
+        mkdir -p "$root/bin"
+        case "$VERSION" in
+          local)
+            # The source that ships with this action, not the caller's checkout:
+            # `uses: ./` makes the two the same, which is how this repository
+            # dogfoods its own branch.
+            cargo install --path "$GITHUB_ACTION_PATH" --locked --root "$root" --quiet
+            ;;
+          latest)
+            sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to "$root/bin"
+            ;;
+          *)
+            sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to "$root/bin" --version "$VERSION"
+            ;;
+        esac
+        echo "bin=$root/bin/notignored" >> "$GITHUB_OUTPUT"
+
+    - name: Scan the change
+      id: scan
+      shell: bash
+      env:
+        NOTIGNORED: ${{ steps.install.outputs.bin }}
+        DIFF_BASE: ${{ inputs.diff-base }}
+        SCAN_PATHS: ${{ inputs.paths }}
+      run: |
+        set -euo pipefail
+        base="$DIFF_BASE"
+        if [ -z "$base" ]; then
+          if [ -z "${GITHUB_BASE_REF:-}" ]; then
+            echo "::error::diff-base is empty and this is not a pull_request event; set the diff-base input"
+            exit 1
+          fi
+          base="origin/$GITHUB_BASE_REF"
+        fi
+        if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+          echo "::error::cannot resolve '$base'; check out with fetch-depth: 0 so the base branch is available"
+          exit 1
+        fi
+
+        # Permalinks must pin the head commit: on a pull request GITHUB_SHA is the
+        # throwaway merge commit, whose blobs stop resolving once the pull request
+        # closes. The event payload is read as data, never interpolated.
+        sha="$GITHUB_SHA"
+        if [ -f "${GITHUB_EVENT_PATH:-}" ]; then
+          head_sha="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+          if [ -n "$head_sha" ]; then
+            sha="$head_sha"
+          fi
+        fi
+
+        report="$RUNNER_TEMP/notignored-report.json"
+        body="$RUNNER_TEMP/notignored-comment.md"
+        read -r -a scan_paths <<< "$SCAN_PATHS"
+        "$NOTIGNORED" --diff --diff-base "$base" --format json "${scan_paths[@]}" > "$report"
+        "$NOTIGNORED" --diff --diff-base "$base" --format markdown \
+          --github-repo "$GITHUB_REPOSITORY" --github-sha "$sha" \
+          "${scan_paths[@]}" > "$body"
+
+        count="$(jq '.ignores | length' "$report")"
+        {
+          echo "count=$count"
+          echo "report-path=$report"
+          echo "body-path=$body"
+        } >> "$GITHUB_OUTPUT"
+        echo "notignored: $count suppression(s) added since $base"
+
+    - name: Upsert the sticky pull-request comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        BODY_FILE: ${{ steps.scan.outputs.body-path }}
+        COUNT: ${{ steps.scan.outputs.count }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/action/comment.sh"

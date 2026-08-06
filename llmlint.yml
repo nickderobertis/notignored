@@ -31,6 +31,9 @@ files:
     # re-compose, so they are generated output, not repo-authored code.
     - "oneharness.toml"
     - "scripts/setup-llmlint.sh"
+    # Resolved by `npm ci`, not written by hand: the pin that matters is the
+    # exact version in the manifest beside it.
+    - "tests/js-toolchain/package-lock.json"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-5.5

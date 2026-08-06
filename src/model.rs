@@ -320,8 +320,11 @@ mod tests {
 
     #[test]
     fn only_the_registered_tools_report_as_implemented() {
-        assert!(Tool::Ruff.is_implemented());
-        assert!(!Tool::Eslint.is_implemented());
+        // Every tool in the contract has a parser today; a planned one added
+        // here reports as unimplemented until its module joins the registry.
+        for tool in Tool::ALL {
+            assert!(tool.is_implemented(), "{tool} has no registered parser");
+        }
     }
 
     #[test]

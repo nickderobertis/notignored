@@ -68,6 +68,87 @@
       }
     },
     {
+      "tool": "eslint",
+      "scope": "next-line",
+      "rules": [
+        "no-console"
+      ],
+      "reason": "debugging aid",
+      "path": "src/app.ts",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "raw": "// eslint-disable-next-line no-console -- debugging aid",
+      "suppressed": {
+        "start_line": 2,
+        "end_line": 2
+      }
+    },
+    {
+      "tool": "biome",
+      "scope": "next-line",
+      "rules": [
+        "lint/suspicious/noDebugger"
+      ],
+      "reason": "stepping through the parser",
+      "path": "src/app.ts",
+      "line": 4,
+      "end_line": 4,
+      "column": 1,
+      "raw": "// biome-ignore lint/suspicious/noDebugger: stepping through the parser",
+      "suppressed": {
+        "start_line": 5,
+        "end_line": 5
+      }
+    },
+    {
+      "tool": "typescript",
+      "scope": "next-line",
+      "rules": [],
+      "reason": "the vendored SDK ships no types",
+      "path": "src/app.ts",
+      "line": 7,
+      "end_line": 7,
+      "column": 1,
+      "raw": "// @ts-expect-error the vendored SDK ships no types",
+      "suppressed": {
+        "start_line": 8,
+        "end_line": 8
+      }
+    },
+    {
+      "tool": "typescript",
+      "scope": "file",
+      "rules": [],
+      "reason": "bundled by a toolchain that predates our types",
+      "path": "src/legacy.js",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "raw": "// @ts-nocheck bundled by a toolchain that predates our types",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "eslint",
+      "scope": "block",
+      "rules": [
+        "no-alert"
+      ],
+      "reason": "the whole module is a prompt",
+      "path": "src/legacy.js",
+      "line": 2,
+      "end_line": 2,
+      "column": 1,
+      "raw": "/* eslint-disable no-alert -- the whole module is a prompt */",
+      "suppressed": {
+        "start_line": 2,
+        "end_line": null
+      }
+    },
+    {
       "tool": "ruff",
       "scope": "file",
       "rules": [
