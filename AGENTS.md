@@ -77,10 +77,13 @@ One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
 row in the README supported-tools table. Keep it to those three touch points so
 parallel branches don't conflict. Parsers consume the comments, attributes, and
 item punctuation `src/comments.rs` extracted — never re-scan raw lines, or string
-literals will be misread as comments. A directive that can be *malformed* in a
-way the record cannot express (an unclosed llmlint block) overrides
-`ToolParser::parse_all` to report it alongside the directive; the default
-reports no errors.
+literals will be misread as comments.
+
+`ToolParser` is **fixed at three methods** returning directives and nothing else;
+`tests/tools_contract.rs` locks the signatures. A syntax that can be malformed in
+a way the record cannot express (an unclosed llmlint block) keeps that richer
+result as an *inherent* method on its own parser — `LlmlintParser::scan` — which
+`scan_files` folds into the report. Do not widen the trait for one tool's defect.
 
 ## Commits, releases, and merging
 

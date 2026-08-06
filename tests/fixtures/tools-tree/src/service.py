@@ -1,9 +1,9 @@
-# llmlint: ignore-file[errors_are_contextualized] a transport shim: the caller adds context
+# llmlint: ignore-file[boundary_inputs_validated] a transport shim: the caller validates before this layer
 import os  # noqa: F401  # re-exported for the public API
 
-# llmlint: ignore-block[no_debug_prints] the trace is this module's whole job
+# llmlint: ignore-block[tool_output_is_signal] the trace is this module's whole job
 print("connecting")
 print("connected")
-# llmlint: ignore-end[no_debug_prints]
+# llmlint: ignore-end[tool_output_is_signal]
 
-MESSAGE = "# llmlint: ignore[no_todo_comments] inside a string literal"
+MESSAGE = "# llmlint: ignore[comments_earn_their_place] inside a string literal"

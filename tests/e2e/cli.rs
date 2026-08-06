@@ -24,13 +24,16 @@ fn human_format_lists_every_suppression_and_summarizes_on_stderr() {
             "src/app.py:3:12 ruff F401 (line) -- re-exported for the public API\n",
             "src/app.py:5:58 ruff E501 (line) -- long wrapped URL\n",
             "src/app.py:10:17 ruff * (line)\n",
+            // The fixture's own llmlint directive is a suppression like any
+            // other, so a scan that claims to list every one has to show it.
+            "src/app.py:13:3 llmlint suppressions_justified (file) -- fixture input, not production code: the bare directive above proves a blanket, reason-less suppression is reported with empty rules and a null reason (tests/golden/report.json).\n",
             "src/vendored.py:1:1 ruff E501 (file) -- vendored upstream, not ours to reformat\n",
         ),
         "{stdout}"
     );
 
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(stderr, "notignored: 4 ignores in 2 files\n", "{stderr}");
+    assert_eq!(stderr, "notignored: 5 ignores in 2 files\n", "{stderr}");
 }
 
 #[test]
@@ -94,9 +97,9 @@ fn the_multi_tool_tree_renders_every_tool_and_scope_readably() {
             "src/lints.rs:1:1 rust clippy::needless_return (file)\n",
             "src/lints.rs:4:1 rust dead_code,clippy::needless_collect (next-line)\n",
             "src/lints.rs:10:1 rust dead_code (next-line) -- a justification long enough that it wraps across two lines of the attribute\n",
-            "src/service.py:1:3 llmlint errors_are_contextualized (file) -- a transport shim: the caller adds context\n",
+            "src/service.py:1:3 llmlint boundary_inputs_validated (file) -- a transport shim: the caller validates before this layer\n",
             "src/service.py:2:12 ruff F401 (line) -- re-exported for the public API\n",
-            "src/service.py:4:3 llmlint no_debug_prints (block) -- the trace is this module's whole job\n",
+            "src/service.py:4:3 llmlint tool_output_is_signal (block) -- the trace is this module's whole job\n",
         ),
         "{stdout}"
     );

@@ -11,6 +11,7 @@ use ignore::WalkBuilder;
 
 use crate::model::{Report, ReportError, Tool};
 use crate::source::{display_path, Language, SourceFile};
+use crate::tools::llmlint::LlmlintParser;
 use crate::tools::registry_for;
 
 /// What to look for in the selected files.
@@ -85,10 +86,21 @@ pub fn scan_files(files: &[PathBuf], options: &ScanOptions) -> Report {
         match SourceFile::read(path) {
             Ok(file) => {
                 for parser in &parsers {
-                    if parser.applies_to(&file) {
-                        let parsed = parser.parse_all(&file);
-                        report.ignores.extend(parsed.directives);
-                        report.errors.extend(parsed.errors);
+                    if !parser.applies_to(&file) {
+                        continue;
+                    }
+                    // `ToolParser::parse` hands back directives and nothing
+                    // else — that trait is a fixed contract. llmlint is the one
+                    // syntax whose directive can be malformed in a way an
+                    // `IgnoreDirective` cannot express (an `ignore-block` left
+                    // open), so its parser keeps the richer result as an
+                    // inherent method and the scan integrates it here instead.
+                    if parser.tool() == Tool::Llmlint {
+                        let scanned = LlmlintParser.scan(&file);
+                        report.ignores.extend(scanned.directives);
+                        report.errors.extend(scanned.errors);
+                    } else {
+                        report.ignores.extend(parser.parse(&file));
                     }
                 }
             }

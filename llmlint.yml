@@ -10,22 +10,21 @@ files:
   # List committed files that shouldn't be judged (lock files, generated output).
   exclude:
     - "**/.git/**"
-    # Deliberately malformed input, not code: the parity fixtures hold
-    # suppressions that the tools they mirror reject, including llmlint
-    # directives naming rules this config does not define and a block left
-    # unclosed on purpose. Judging them — or running `check-ignores` over them —
-    # reads test data as a claim about the repo.
-    - "tests/fixtures/**"
-    # Generated output: the golden reports are whatever the CLI printed, so they
-    # quote the fixtures' directives verbatim.
-    - "tests/golden/**"
-    # Directive text as subject matter. `check-ignores` scans raw lines, so the
-    # module that implements llmlint's own syntax — its doc table and its ~30
-    # test literals, several deliberately malformed — reads as a file full of
-    # broken suppressions. The deterministic gate still covers it in full
-    # (clippy, and unit tests over every branch); this only keeps the LLM tier
-    # from re-litigating test data.
-    - "src/tools/llmlint.rs"
+    # The one directory whose whole purpose is input `check-ignores` must
+    # reject: an ignore-block left open, a directive with no reason, a rule name
+    # this config does not define, and one directive inside a string literal.
+    # `tests/e2e/llmlint_parity.rs` runs the real `check-ignores` over it with
+    # the fixtures' own config and asserts each rejection, so the coverage moves
+    # here rather than disappearing. Nothing else is exempt: the parser that
+    # implements this syntax, the other fixtures, and the golden reports are all
+    # still judged, and none of them spells a directive out.
+    - "tests/fixtures/llmlint-parity/**"
+    # Generated output, and unfixable in place: a block record folds its closing
+    # `ignore-end` in rather than emitting a second record (the ignore-record
+    # contract), so this file quotes an ignore-block's text with no matching end
+    # and `check-ignores` reads it as unclosed. `tests/golden/report.json` is NOT
+    # exempt — it holds no block — and neither is any hand-written file.
+    - "tests/golden/tools-report.json"
     # Composed verbatim by the create-repo skill (`compose_repo_plan.py
     # --llmlint-config` and `assets/setup-llmlint.sh.template`). Editing them to
     # local taste forks them from the template and loses the ability to

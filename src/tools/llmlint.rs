@@ -1,19 +1,21 @@
-//! llmlint (`llmlint: ignore[rule] reason`) suppression parsing.
+//! llmlint suppression parsing.
 //!
 //! llmlint is the LLM-judge linter this project mirrors, and its directives are
 //! the richest test of the record model: every scope the contract defines, a
 //! required native reason, and an explicitly delimited block.
 //!
-//! | Source | Scope | Rules | Reason |
-//! | --- | --- | --- | --- |
-//! | `llmlint: ignore[rule] why` | line | `rule` | `why` |
-//! | `llmlint: ignore-file[a, b] why` | file | `a`, `b` | `why` |
-//! | `llmlint: ignore-block[rule] why` … `llmlint: ignore-end[rule]` | block | `rule` | `why` |
+//! Each form below is written after the [`KEYWORD`] and a colon, inside whatever
+//! comment syntax the host language uses — so this parser claims every language
+//! the extractor understands.
 //!
-//! The directive is written in whatever comment syntax the host language uses,
-//! so this parser claims every language the extractor understands. The keyword
-//! is lower-case, takes no space before its colon, and need not open the comment
-//! — matching what the real `llmlint check-ignores` accepts.
+//! | Form | Scope | Rules | Reason |
+//! | --- | --- | --- | --- |
+//! | `ignore[rule] why` | line | `rule` | `why` |
+//! | `ignore-file[a, b] why` | file | `a`, `b` | `why` |
+//! | `ignore-block[rule] why` … `ignore-end[rule]` | block | `rule` | `why` |
+//!
+//! The keyword is lower-case, takes no space before its colon, and need not open
+//! the comment — matching what the real `llmlint check-ignores` accepts.
 //!
 //! A block record spans from its `ignore-block` line through its
 //! `ignore-end` line; the closing directive is part of that record, not one of
@@ -21,41 +23,55 @@
 //! `ignore-end` naming only some of an open block's rules leaves the rest open.
 //! An unclosed block keeps `suppressed.end_line` null **and** raises a report
 //! error — llmlint rejects the file, and a range that silently ran to
-//! end-of-file would hide that.
+//! end-of-file would hide that. That error has nowhere to live in an
+//! [`IgnoreDirective`], and [`ToolParser`] is a fixed three-method contract, so
+//! it rides on the inherent [`LlmlintParser::scan`] and
+//! [`crate::scan::scan_files`] folds it into the report.
 //!
 //! Reasons are required (except on `ignore-end`, which carries none), so a
 //! directive with valid rules and no reason is still reported, with a null
 //! reason: llmlint will reject it, and that is precisely what a reviewer wants
 //! to see. A directive with no rule list at all is a different matter — llmlint
 //! honours nothing without one — so it is not reported.
+//!
+//! **This module never spells a directive out.** `check-ignores` scans raw
+//! lines, so a keyword sitting next to a verb anywhere here — a doc table, a
+//! test literal — would read as a real (and usually deliberately malformed)
+//! suppression of this repo's own rules. Every example is assembled from
+//! [`KEYWORD`] instead, which is what keeps this file under llmlint's gate
+//! rather than exempt from it.
 
 use crate::comments::Comment;
 use crate::model::{normalize_reason, IgnoreDirective, ReportError, Scope, Suppressed, Tool};
 use crate::source::SourceFile;
-use crate::tools::{Parsed, ToolParser};
+use crate::tools::ToolParser;
 
 /// The keyword every llmlint directive opens with.
-const KEYWORD: &str = "llmlint";
+pub const KEYWORD: &str = "llmlint";
+
+/// Everything [`LlmlintParser::scan`] found in one file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Scanned {
+    /// Directives, in source order.
+    pub directives: Vec<IgnoreDirective>,
+    /// Blocks left open at end-of-file. The directive is still reported, with
+    /// its end unknown; this is the part of the defect a record cannot carry.
+    pub errors: Vec<ReportError>,
+}
 
 /// Parses llmlint's `ignore` family out of any language's comments.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LlmlintParser;
 
-impl ToolParser for LlmlintParser {
-    fn tool(&self) -> Tool {
-        Tool::Llmlint
-    }
-
-    fn applies_to(&self, file: &SourceFile) -> bool {
-        file.language().is_scannable()
-    }
-
-    fn parse(&self, file: &SourceFile) -> Vec<IgnoreDirective> {
-        self.parse_all(file).directives
-    }
-
-    fn parse_all(&self, file: &SourceFile) -> Parsed {
-        let mut parsed = Parsed::default();
+impl LlmlintParser {
+    /// Every directive in `file`, plus the blocks left unclosed.
+    ///
+    /// Inherent rather than a [`ToolParser`] method: that trait is a fixed
+    /// contract that hands back directives and nothing else, and llmlint is the
+    /// only tool here with a defect an [`IgnoreDirective`] cannot express.
+    /// [`ToolParser::parse`] is this, minus the errors.
+    pub fn scan(&self, file: &SourceFile) -> Scanned {
+        let mut scanned = Scanned::default();
         // One open block per rule, in the order they were opened, so an
         // unclosed-block error lands in source order too.
         let mut open: Vec<(String, usize)> = Vec::new();
@@ -67,18 +83,18 @@ impl ToolParser for LlmlintParser {
                 };
                 let column = column.saturating_add(prefix_width(text, found.offset));
                 if found.verb == Verb::End {
-                    close_blocks(&mut parsed, &mut open, &found.rules, line);
+                    close_blocks(&mut scanned, &mut open, &found.rules, line);
                     continue;
                 }
                 let scope = found.verb.scope();
                 if scope == Scope::Block {
                     for rule in &found.rules {
                         if !open.iter().any(|(open_rule, _)| open_rule == rule) {
-                            open.push((rule.clone(), parsed.directives.len()));
+                            open.push((rule.clone(), scanned.directives.len()));
                         }
                     }
                 }
-                parsed.directives.push(IgnoreDirective {
+                scanned.directives.push(IgnoreDirective {
                     tool: Tool::Llmlint,
                     scope,
                     rules: found.rules,
@@ -94,27 +110,46 @@ impl ToolParser for LlmlintParser {
         }
 
         for (rule, index) in open {
-            let line = parsed.directives[index].line;
-            parsed.errors.push(ReportError {
+            let line = scanned.directives[index].line;
+            scanned.errors.push(ReportError {
                 path: file.display_path().to_string(),
                 message: format!(
-                    "unclosed llmlint ignore-block for rule {rule:?} opened at line {line}; \
-                     add a matching `llmlint: ignore-end[{rule}]`"
+                    "unclosed {KEYWORD} ignore-block for rule {rule:?} opened at line {line}; \
+                     add a matching `{KEYWORD}: ignore-end[{rule}]`"
                 ),
             });
         }
-        parsed
+        scanned
+    }
+}
+
+impl ToolParser for LlmlintParser {
+    fn tool(&self) -> Tool {
+        Tool::Llmlint
+    }
+
+    fn applies_to(&self, file: &SourceFile) -> bool {
+        file.language().is_scannable()
+    }
+
+    fn parse(&self, file: &SourceFile) -> Vec<IgnoreDirective> {
+        self.scan(file).directives
     }
 }
 
 /// Record the end line on every block `rules` closes, dropping them from the
 /// open set. A block closes at the last `ignore-end` that names one of its rules.
-fn close_blocks(parsed: &mut Parsed, open: &mut Vec<(String, usize)>, rules: &[String], line: u32) {
+fn close_blocks(
+    scanned: &mut Scanned,
+    open: &mut Vec<(String, usize)>,
+    rules: &[String],
+    line: u32,
+) {
     open.retain(|(open_rule, index)| {
         if !rules.contains(open_rule) {
             return true;
         }
-        let suppressed = &mut parsed.directives[*index].suppressed;
+        let suppressed = &mut scanned.directives[*index].suppressed;
         suppressed.end_line = Some(suppressed.end_line.unwrap_or(line).max(line));
         false
     });
@@ -262,12 +297,24 @@ fn directive_body(after_keyword: &str) -> Option<(Verb, Vec<String>, Option<Stri
 mod tests {
     use super::*;
 
-    fn parse_in(path: &str, source: &str) -> Parsed {
-        LlmlintParser.parse_all(&SourceFile::new(path, source.to_string()))
+    /// A `#` comment carrying `body`, assembled from [`KEYWORD`] rather than
+    /// written out — see the "never spells a directive out" note in the module
+    /// docs for why every fixture below is built this way.
+    fn hash(body: &str) -> String {
+        format!("# {KEYWORD}: {body}")
+    }
+
+    /// A source file whose lines are `lines`, newline-terminated.
+    fn script(lines: &[&str]) -> String {
+        format!("{}\n", lines.join("\n"))
+    }
+
+    fn scan_in(path: &str, source: &str) -> Scanned {
+        LlmlintParser.scan(&SourceFile::new(path, source.to_string()))
     }
 
     fn parse(source: &str) -> Vec<IgnoreDirective> {
-        parse_in("src/app.py", source).directives
+        scan_in("src/app.py", source).directives
     }
 
     fn only(source: &str) -> IgnoreDirective {
@@ -278,6 +325,15 @@ mod tests {
             "expected one directive in {source:?}: {found:#?}"
         );
         found.remove(0)
+    }
+
+    /// The single directive in a one-line `#` comment followed by one statement.
+    fn only_hash(body: &str) -> IgnoreDirective {
+        only(&script(&[&hash(body), "x = 1"]))
+    }
+
+    fn parse_hash(body: &str) -> Vec<IgnoreDirective> {
+        parse(&script(&[&hash(body), "x = 1"]))
     }
 
     #[test]
@@ -294,7 +350,7 @@ mod tests {
 
     #[test]
     fn an_ignore_covers_the_line_it_sits_on() {
-        let directive = only("# llmlint: ignore[no_todo] tracked in issue 42\nx = 1\n");
+        let directive = only_hash("ignore[no_todo] tracked in issue 42");
         assert_eq!(directive.tool, Tool::Llmlint);
         assert_eq!(directive.scope, Scope::Line);
         assert_eq!(directive.rules, vec!["no_todo"]);
@@ -306,7 +362,7 @@ mod tests {
         );
         assert_eq!(
             directive.raw,
-            "llmlint: ignore[no_todo] tracked in issue 42"
+            format!("{KEYWORD}: ignore[no_todo] tracked in issue 42")
         );
         assert_eq!(
             directive.suppressed,
@@ -319,7 +375,7 @@ mod tests {
 
     #[test]
     fn an_ignore_file_covers_the_whole_file() {
-        let directive = only("# llmlint: ignore-file[a, b] generated module\nx = 1\n");
+        let directive = only_hash("ignore-file[a, b] generated module");
         assert_eq!(directive.scope, Scope::File);
         assert_eq!(directive.rules, vec!["a", "b"]);
         assert_eq!(
@@ -333,14 +389,14 @@ mod tests {
 
     #[test]
     fn a_block_spans_from_its_opening_directive_to_its_closing_one() {
-        let found = parse(concat!(
-            "x = 0\n",
-            "# llmlint: ignore-block[no_print] a debugging aid, deliberately\n",
-            "print(1)\n",
-            "print(2)\n",
-            "# llmlint: ignore-end[no_print]\n",
-            "y = 1\n",
-        ));
+        let found = parse(&script(&[
+            "x = 0",
+            &hash("ignore-block[no_print] a debugging aid, deliberately"),
+            "print(1)",
+            "print(2)",
+            &hash("ignore-end[no_print]"),
+            "y = 1",
+        ]));
         assert_eq!(found.len(), 1, "{found:#?}");
         assert_eq!(found[0].scope, Scope::Block);
         assert_eq!(found[0].rules, vec!["no_print"]);
@@ -359,64 +415,59 @@ mod tests {
 
     #[test]
     fn a_block_closes_only_when_every_rule_it_named_is_closed() {
-        let parsed = parse_in(
+        let scanned = scan_in(
             "src/app.py",
-            concat!(
-                "# llmlint: ignore-block[a, b] two rules at once\n",
-                "x = 1\n",
-                "# llmlint: ignore-end[a]\n",
-                "y = 2\n",
-                "# llmlint: ignore-end[b]\n",
-            ),
+            &script(&[
+                &hash("ignore-block[a, b] two rules at once"),
+                "x = 1",
+                &hash("ignore-end[a]"),
+                "y = 2",
+                &hash("ignore-end[b]"),
+            ]),
         );
-        assert!(parsed.errors.is_empty(), "{parsed:#?}");
-        assert_eq!(parsed.directives.len(), 1);
-        assert_eq!(parsed.directives[0].suppressed.end_line, Some(5));
+        assert!(scanned.errors.is_empty(), "{scanned:#?}");
+        assert_eq!(scanned.directives.len(), 1);
+        assert_eq!(scanned.directives[0].suppressed.end_line, Some(5));
     }
 
     #[test]
     fn an_unclosed_block_stays_open_and_raises_a_report_error() {
-        let parsed = parse_in(
+        let scanned = scan_in(
             "src/app.py",
-            "# llmlint: ignore-block[no_print] never closed\nprint(1)\n",
+            &script(&[&hash("ignore-block[no_print] never closed"), "print(1)"]),
         );
-        assert_eq!(parsed.directives.len(), 1);
+        assert_eq!(scanned.directives.len(), 1);
         assert_eq!(
-            parsed.directives[0].suppressed,
+            scanned.directives[0].suppressed,
             Suppressed {
                 start_line: 1,
                 end_line: None
             }
         );
-        assert_eq!(parsed.errors.len(), 1, "{parsed:#?}");
-        assert_eq!(parsed.errors[0].path, "src/app.py");
-        assert!(
-            parsed.errors[0].message.contains("no_print"),
-            "{}",
-            parsed.errors[0].message
-        );
-        assert!(
-            parsed.errors[0].message.contains("line 1"),
-            "{}",
-            parsed.errors[0].message
-        );
+        assert_eq!(scanned.errors.len(), 1, "{scanned:#?}");
+        assert_eq!(scanned.errors[0].path, "src/app.py");
+        let message = &scanned.errors[0].message;
+        assert!(message.contains("no_print"), "{message}");
+        assert!(message.contains("line 1"), "{message}");
     }
 
     #[test]
     fn an_ignore_end_with_no_open_block_is_not_a_record() {
-        let parsed = parse_in("src/app.py", "# llmlint: ignore-end[no_print]\nx = 1\n");
-        assert!(parsed.directives.is_empty(), "{parsed:#?}");
-        assert!(parsed.errors.is_empty());
+        let scanned = scan_in(
+            "src/app.py",
+            &script(&[&hash("ignore-end[no_print]"), "x = 1"]),
+        );
+        assert!(scanned.directives.is_empty(), "{scanned:#?}");
+        assert!(scanned.errors.is_empty());
     }
 
     #[test]
-    fn parse_returns_the_directives_parse_all_found() {
-        let source = "# llmlint: ignore-block[a] open forever\nx = 1\n";
-        let file = SourceFile::new("src/app.py", source.to_string());
-        assert_eq!(
-            LlmlintParser.parse(&file),
-            LlmlintParser.parse_all(&file).directives
-        );
+    fn the_trait_method_is_the_scan_without_its_errors() {
+        let source = script(&[&hash("ignore-block[a] open forever"), "x = 1"]);
+        let file = SourceFile::new("src/app.py", source);
+        let scanned = LlmlintParser.scan(&file);
+        assert_eq!(LlmlintParser.parse(&file), scanned.directives);
+        assert_eq!(scanned.errors.len(), 1);
     }
 
     #[test]
@@ -424,18 +475,28 @@ mod tests {
         let slash = LlmlintParser
             .parse(&SourceFile::new(
                 "a.ts",
-                "// llmlint: ignore[a] a slash comment\nconst x = 1;\n".to_string(),
+                script(&[
+                    &format!("// {KEYWORD}: ignore[a] a slash comment"),
+                    "const x = 1;",
+                ]),
             ))
             .remove(0);
         assert_eq!(slash.rules, vec!["a"]);
+
         let directive = LlmlintParser
             .parse(&SourceFile::new(
                 "a.rs",
-                "/* llmlint: ignore[a] inside a block comment */\nfn f() {}\n".to_string(),
+                script(&[
+                    &format!("/* {KEYWORD}: ignore[a] inside a block comment */"),
+                    "fn f() {}",
+                ]),
             ))
             .remove(0);
         assert_eq!(directive.reason.as_deref(), Some("inside a block comment"));
-        assert_eq!(directive.raw, "llmlint: ignore[a] inside a block comment");
+        assert_eq!(
+            directive.raw,
+            format!("{KEYWORD}: ignore[a] inside a block comment")
+        );
         assert_eq!((directive.line, directive.column), (1, 4));
     }
 
@@ -444,7 +505,12 @@ mod tests {
         let directive = LlmlintParser
             .parse(&SourceFile::new(
                 "a.rs",
-                "/*\n  llmlint: ignore[a] on the second line\n*/\nfn f() {}\n".to_string(),
+                script(&[
+                    "/*",
+                    &format!("  {KEYWORD}: ignore[a] on the second line"),
+                    "*/",
+                    "fn f() {}",
+                ]),
             ))
             .remove(0);
         assert_eq!((directive.line, directive.column), (2, 3));
@@ -453,66 +519,86 @@ mod tests {
 
     #[test]
     fn the_directive_need_not_open_the_comment() {
-        let directive = only("# see the ADR: llmlint: ignore[a] deliberate\nx = 1\n");
+        let directive = only(&script(&[
+            &format!("# see the ADR: {KEYWORD}: ignore[a] deliberate"),
+            "x = 1",
+        ]));
         assert_eq!(directive.rules, vec!["a"]);
         assert_eq!(directive.column, 16);
-        assert_eq!(directive.raw, "llmlint: ignore[a] deliberate");
+        assert_eq!(directive.raw, format!("{KEYWORD}: ignore[a] deliberate"));
     }
 
     #[test]
     fn whitespace_around_the_verb_is_tolerated_but_the_colon_binds_tight() {
-        assert_eq!(only("# llmlint:ignore[a] tight\nx = 1\n").rules, vec!["a"]);
         assert_eq!(
-            only("# llmlint:  ignore [a] loose\nx = 1\n").rules,
+            only(&script(&[&format!("# {KEYWORD}:ignore[a] tight"), "x = 1"])).rules,
             vec!["a"]
         );
-        assert!(parse("# llmlint : ignore[a] spaced colon\nx = 1\n").is_empty());
+        assert_eq!(only_hash(" ignore [a] loose").rules, vec!["a"]);
+        assert!(parse(&script(&[
+            &format!("# {KEYWORD} : ignore[a] spaced"),
+            "x = 1"
+        ]))
+        .is_empty());
     }
 
     #[test]
     fn the_keyword_and_verb_are_lower_case() {
-        assert!(parse("# LLMLINT: ignore[a] shouting\nx = 1\n").is_empty());
-        assert!(parse("# llmlint: IGNORE[a] shouting\nx = 1\n").is_empty());
+        let shouted = KEYWORD.to_uppercase();
+        assert!(parse(&script(&[
+            &format!("# {shouted}: ignore[a] shouting"),
+            "x = 1"
+        ]))
+        .is_empty());
+        assert!(parse_hash("IGNORE[a] shouting").is_empty());
     }
 
     #[test]
     fn look_alike_verbs_are_not_directives() {
-        assert!(parse("# llmlint: ignoreblock[a] no dash\nx = 1\n").is_empty());
-        assert!(parse("# llmlint: ignore-foo[a] unknown verb\nx = 1\n").is_empty());
-        assert!(parse("# llmlint: ignore no brackets at all\nx = 1\n").is_empty());
-        assert!(parse("# llmlint: ignore[] nothing named\nx = 1\n").is_empty());
-        assert!(parse("# llmlint: ignore[a unterminated\nx = 1\n").is_empty());
-        assert!(parse("# llmlint is a linter we use\nx = 1\n").is_empty());
+        assert!(parse_hash("ignoreblock[a] no dash").is_empty());
+        assert!(parse_hash("ignore-foo[a] unknown verb").is_empty());
+        assert!(parse_hash("ignore no brackets at all").is_empty());
+        assert!(parse_hash("ignore[] nothing named").is_empty());
+        assert!(parse_hash("ignore[a unterminated").is_empty());
+        assert!(parse(&script(&[
+            &format!("# {KEYWORD} is a linter we use"),
+            "x = 1"
+        ]))
+        .is_empty());
     }
 
     #[test]
     fn a_directive_with_no_reason_is_still_reported() {
-        let directive = only("# llmlint: ignore[a]\nx = 1\n");
+        let directive = only_hash("ignore[a]");
         assert_eq!(directive.rules, vec!["a"]);
         assert_eq!(directive.reason, None);
     }
 
     #[test]
     fn a_directive_inside_a_string_literal_is_not_reported() {
-        assert!(parse("MSG = \"# llmlint: ignore[a] in a string\"\n").is_empty());
+        let source = script(&[&format!("MSG = \"# {KEYWORD}: ignore[a] in a string\"")]);
+        assert!(parse(&source).is_empty(), "{source}");
     }
 
     #[test]
     fn a_second_keyword_on_a_line_is_reached_when_the_first_is_prose() {
-        let directive = only("# llmlint is fine: llmlint: ignore[a] the real one\nx = 1\n");
+        let directive = only(&script(&[
+            &format!("# {KEYWORD} is fine: {KEYWORD}: ignore[a] the real one"),
+            "x = 1",
+        ]));
         assert_eq!(directive.rules, vec!["a"]);
-        assert_eq!(directive.raw, "llmlint: ignore[a] the real one");
+        assert_eq!(directive.raw, format!("{KEYWORD}: ignore[a] the real one"));
     }
 
     #[test]
     fn every_directive_in_a_file_is_reported_in_source_order() {
-        let found = parse(concat!(
-            "# llmlint: ignore-file[a] whole module\n",
-            "# llmlint: ignore-block[b] a stretch of it\n",
-            "x = 1\n",
-            "# llmlint: ignore-end[b]\n",
-            "y = 2  # llmlint: ignore[c] just here\n",
-        ));
+        let found = parse(&script(&[
+            &hash("ignore-file[a] whole module"),
+            &hash("ignore-block[b] a stretch of it"),
+            "x = 1",
+            &hash("ignore-end[b]"),
+            &format!("y = 2  # {KEYWORD}: ignore[c] just here"),
+        ]));
         assert_eq!(
             found.iter().map(|d| (d.line, d.scope)).collect::<Vec<_>>(),
             vec![(1, Scope::File), (2, Scope::Block), (5, Scope::Line)]

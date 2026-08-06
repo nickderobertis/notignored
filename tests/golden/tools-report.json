@@ -107,14 +107,14 @@
       "tool": "llmlint",
       "scope": "file",
       "rules": [
-        "errors_are_contextualized"
+        "boundary_inputs_validated"
       ],
-      "reason": "a transport shim: the caller adds context",
+      "reason": "a transport shim: the caller validates before this layer",
       "path": "src/service.py",
       "line": 1,
       "end_line": 1,
       "column": 3,
-      "raw": "llmlint: ignore-file[errors_are_contextualized] a transport shim: the caller adds context",
+      "raw": "llmlint: ignore-file[boundary_inputs_validated] a transport shim: the caller validates before this layer",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -141,14 +141,14 @@
       "tool": "llmlint",
       "scope": "block",
       "rules": [
-        "no_debug_prints"
+        "tool_output_is_signal"
       ],
       "reason": "the trace is this module's whole job",
       "path": "src/service.py",
       "line": 4,
       "end_line": 4,
       "column": 3,
-      "raw": "llmlint: ignore-block[no_debug_prints] the trace is this module's whole job",
+      "raw": "llmlint: ignore-block[tool_output_is_signal] the trace is this module's whole job",
       "suppressed": {
         "start_line": 4,
         "end_line": 7

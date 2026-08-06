@@ -8,7 +8,7 @@
 //! already extracted. They must not re-scan raw source lines — that is how
 //! string literals get mistaken for directives.
 
-use crate::model::{IgnoreDirective, ReportError, Tool};
+use crate::model::{IgnoreDirective, Tool};
 use crate::source::SourceFile;
 
 pub mod llmlint;
@@ -16,19 +16,17 @@ pub mod ruff;
 pub mod rust;
 pub mod shellcheck;
 
-/// Everything one parser found in one file.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Parsed {
-    /// Directives, in source order.
-    pub directives: Vec<IgnoreDirective>,
-    /// Directives the parser recognized but could not resolve — an llmlint
-    /// `ignore-block` with no `ignore-end`, say. Never a panic, and never a
-    /// dropped record: the directive is still reported, with whatever of its
-    /// span is knowable.
-    pub errors: Vec<ReportError>,
-}
-
 /// Turns one tool's suppression syntax into [`IgnoreDirective`] records.
+///
+/// The three methods below are the whole contract, and it is **fixed**: a
+/// parser hands back directives and nothing else.
+/// `tests/tools_contract.rs` locks the signatures.
+///
+/// A syntax that can be malformed in a way an [`IgnoreDirective`] cannot express
+/// — llmlint's `ignore-block` with no closing directive — keeps that richer
+/// result as an inherent method on its own parser and is integrated by
+/// [`crate::scan`], rather than widening this trait for the one tool that needs
+/// it. See [`llmlint::LlmlintParser::scan`].
 pub trait ToolParser: Send + Sync {
     /// The tool this parser understands.
     fn tool(&self) -> Tool;
@@ -42,19 +40,6 @@ pub trait ToolParser: Send + Sync {
     /// Never fails: input this parser cannot make sense of yields no directive
     /// rather than an error, so one odd comment can't abort a scan.
     fn parse(&self, file: &SourceFile) -> Vec<IgnoreDirective>;
-
-    /// [`parse`](ToolParser::parse), plus the malformed directives this parser
-    /// can name.
-    ///
-    /// A scan calls this one. Override it only for a syntax that can be wrong
-    /// in a way an [`IgnoreDirective`] cannot express — most tools cannot, so
-    /// the default reports no errors.
-    fn parse_all(&self, file: &SourceFile) -> Parsed {
-        Parsed {
-            directives: self.parse(file),
-            errors: Vec::new(),
-        }
-    }
 }
 
 /// Every registered parser, in [`Tool::ALL`] order.
@@ -107,12 +92,29 @@ mod tests {
         );
     }
 
+    /// A parser needs nothing beyond the three contract methods to be
+    /// registered — if the trait ever grows a fourth, this stops compiling.
     #[test]
-    fn a_parser_that_names_no_errors_still_reports_its_directives() {
-        let file = SourceFile::new("a.py", "x = 1  # noqa: E501\n".to_string());
-        let parsed = ruff::RuffParser.parse_all(&file);
-        assert_eq!(parsed.directives, ruff::RuffParser.parse(&file));
-        assert!(parsed.errors.is_empty());
+    fn the_three_contract_methods_are_all_a_parser_must_implement() {
+        struct Minimal;
+
+        impl ToolParser for Minimal {
+            fn tool(&self) -> Tool {
+                Tool::Eslint
+            }
+            fn applies_to(&self, _: &SourceFile) -> bool {
+                false
+            }
+            fn parse(&self, _: &SourceFile) -> Vec<IgnoreDirective> {
+                Vec::new()
+            }
+        }
+
+        let parser: Box<dyn ToolParser> = Box::new(Minimal);
+        let file = SourceFile::new("a.py", "x = 1  # noqa\n".to_string());
+        assert_eq!(parser.tool(), Tool::Eslint);
+        assert!(!parser.applies_to(&file));
+        assert!(parser.parse(&file).is_empty());
     }
 
     #[test]
