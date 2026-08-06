@@ -258,6 +258,64 @@ fn a_file_the_change_deleted_is_skipped_rather_than_reported_as_unreadable() {
     assert!(run_json(root, &["--diff", "gone.py"], 0).is_empty());
 }
 
+/// A file the change touched under a name that is not valid UTF-8 becomes a
+/// report error, not a file that quietly vanishes from the review.
+///
+/// Git speaks paths as bytes and the report contract speaks `String`, so such a
+/// name has no faithful spelling in a report. Decoded lossily it names a file
+/// that does not exist: handed back to git as a pathspec it matches nothing, and
+/// a change carrying a fresh suppression reads as clean. Only Unix can hold such
+/// a name — Windows filenames are UTF-16 — so this drives real git there.
+#[cfg(unix)]
+#[test]
+fn a_changed_path_that_is_not_utf8_is_reported_rather_than_dropped() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "value = 1\n");
+    commit(root, "baseline");
+
+    let undecodable = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9.py"));
+    fs::write(
+        &undecodable,
+        "import os  # noqa: F401  # its name is not UTF-8\n",
+    )
+    .expect("write a file whose name is not UTF-8");
+    write(root, "app.py", "value = 1\nurl = URL  # noqa: E501\n");
+    // `git diff` only knows about tracked files, and this one is brand new.
+    git(root, &["add", "-A"]);
+
+    let output = notignored(root)
+        .args(["--diff", "--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a file that could not be scanned is not a clean run: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The rest of the change is still reported: one unnameable file does not
+    // take the review down with it.
+    assert_eq!(reported(&output.stdout), vec!["app.py:2 E501"]);
+    let report = parse_report(&output.stdout);
+    let errors = report["errors"].as_array().expect("an errors array");
+    assert_eq!(errors.len(), 1, "{report:#}");
+    assert_eq!(errors[0]["path"], "caf\u{fffd}.py");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .expect("a message")
+            .contains("UTF-8"),
+        "{report:#}"
+    );
+    // And a person watching the terminal is told, not just the JSON consumer.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("caf\u{fffd}.py"), "{stderr}");
+}
+
 /// The files a change did not touch are never even read — that is what keeps a
 /// diff run cheap on a large repository. A file that cannot be read at all is
 /// how to observe it: it fails a whole-tree scan and is invisible to a diff run

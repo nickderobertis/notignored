@@ -6,3 +6,9 @@ echo $1
 echo $(id -u)
 # shellcheck disable=all
 echo $2
+
+# llmlint: ignore-file[tool_output_is_signal, suppressions_justified] fixture
+# input, not a script this project runs: ShellCheck reads it and nothing
+# executes it, so the noisy expansions are the violations the parity test needs,
+# and the reason-less directives are the form it asserts comes back with a null
+# `reason`.

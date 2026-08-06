@@ -45,6 +45,7 @@ for override in "$BASE_URL" "$API_URL"; do
     case "$override" in
         http://*|https://*) ;;
         *) printf 'error: %s\n' "release URL must start with http:// or https:// (got $override)" >&2
+           printf 'unset NOTIGNORED_RELEASE_BASE_URL / NOTIGNORED_RELEASE_API_URL to use the published release\n' >&2
            exit 1 ;;
     esac
 done
@@ -68,8 +69,8 @@ INSTALL_DIR="${NOTIGNORED_INSTALL_DIR:-$HOME/.local/bin}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --version) [ $# -ge 2 ] || err "--version needs a value"; VERSION="$2"; shift 2 ;;
-        --to) [ $# -ge 2 ] || err "--to needs a value"; INSTALL_DIR="$2"; shift 2 ;;
+        --version) [ $# -ge 2 ] || err "--version needs a value; pass a release tag, e.g. --version v0.1.0"; VERSION="$2"; shift 2 ;;
+        --to) [ $# -ge 2 ] || err "--to needs a value; pass a directory, e.g. --to \"\$HOME/.local/bin\""; INSTALL_DIR="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage; err "unknown argument: $1" ;;
     esac
@@ -159,7 +160,7 @@ fetch "$BASE_URL/$VERSION/$ARCHIVE.sha256" "$WORK/$ARCHIVE.sha256" \
 
 expected="$(cut -d' ' -f1 < "$WORK/$ARCHIVE.sha256")"
 actual="$(sha256_of "$WORK/$ARCHIVE")" \
-    || err "cannot compute the SHA-256 of $ARCHIVE (see above); refusing to install unverified"
+    || err "cannot compute the SHA-256 of $ARCHIVE; refusing to install unverified — install sha256sum, shasum, or openssl, or install from source: cargo install --git https://github.com/$REPO --locked"
 [ "$expected" = "$actual" ] \
     || err "checksum mismatch for $ARCHIVE (expected $expected, got $actual); refusing to install — retry the download, and report it at https://github.com/$REPO/issues if it persists"
 

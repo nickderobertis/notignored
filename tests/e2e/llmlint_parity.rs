@@ -8,10 +8,31 @@
 //! same directives; llmlint rejects one and notignored reports the same file,
 //! line, and rule with the same defect visible in the record.
 
-use crate::support::{fixture, llmlint_check_ignores, notignored, parse_report};
+use std::path::Path;
+
+use crate::support::{
+    fixture, llmlint_check_ignores, notignored, parse_report, relative_to, split_path_field,
+};
 
 fn parity_dir() -> std::path::PathBuf {
     fixture("llmlint-parity")
+}
+
+/// The `path:line` locations a `check-ignores` run named, in its own order.
+///
+/// llmlint reports each finding as `path:line: message`. The path is compared
+/// through [`relative_to`] rather than as llmlint spelled it: a substring match
+/// on the whole line would pass on any spelling, including one naming a file in
+/// another directory entirely.
+fn locations(dir: &Path, output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (path, rest) = split_path_field(line.trim())?;
+            let number: u32 = rest.split(':').next()?.parse().ok()?;
+            Some(format!("{}:{number}", relative_to(dir, path)))
+        })
+        .collect()
 }
 
 /// Run notignored over one fixture sub-tree. Only `invalid/` exits non-zero, so
@@ -104,14 +125,20 @@ fn llmlint_validates_the_clean_fixture_and_notignored_reports_every_directive() 
 
 #[test]
 fn an_unclosed_block_and_a_missing_reason_are_flagged_by_both() {
-    let (passed, output) = llmlint_check_ignores(&parity_dir().join("invalid"));
+    let invalid = parity_dir().join("invalid");
+    let (passed, output) = llmlint_check_ignores(&invalid);
     assert!(!passed, "llmlint must reject this fixture:\n{output}");
+    assert_eq!(
+        locations(&invalid, &output),
+        vec!["no_reason.py:1", "unclosed.py:1"],
+        "llmlint flagged a different set of directives:\n{output}"
+    );
     assert!(
-        output.contains("unclosed.py:1: unclosed ignore-block for rule \"no_debug_prints\""),
+        output.contains("unclosed ignore-block for rule \"no_debug_prints\""),
         "llmlint no longer words the unclosed-block failure this way:\n{output}"
     );
     assert!(
-        output.contains("no_reason.py:1: give a reason"),
+        output.contains("give a reason"),
         "llmlint no longer words the missing-reason failure this way:\n{output}"
     );
 
@@ -151,9 +178,12 @@ fn an_unclosed_block_and_a_missing_reason_are_flagged_by_both() {
 
 #[test]
 fn a_directive_inside_a_string_literal_is_reported_by_llmlint_but_not_by_notignored() {
-    let (passed, output) = llmlint_check_ignores(&parity_dir().join("string-literal"));
-    assert!(
-        !passed && output.contains("decoy.rs:5"),
+    let literal = parity_dir().join("string-literal");
+    let (passed, output) = llmlint_check_ignores(&literal);
+    assert!(!passed, "llmlint must reject this fixture:\n{output}");
+    assert_eq!(
+        locations(&literal, &output),
+        vec!["decoy.rs:5"],
         "llmlint scans raw lines, so it should reject the literal's rule name:\n{output}"
     );
 

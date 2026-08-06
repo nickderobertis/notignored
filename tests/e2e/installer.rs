@@ -372,10 +372,16 @@ fn a_mirror_url_must_be_http_or_https() {
             .output()
             .expect("run install.sh");
         assert_eq!(output.status.code(), Some(1), "{url} was accepted");
+        let stderr = stderr_of(&output);
         assert!(
-            stderr_of(&output).contains("must start with http:// or https://"),
-            "{url}: {}",
-            stderr_of(&output)
+            stderr.contains("must start with http:// or https://"),
+            "{url}: {stderr}"
+        );
+        // Refusing is half the message: the reader also has to be told which
+        // override to drop to get the published release back.
+        assert!(
+            stderr.contains("NOTIGNORED_RELEASE_BASE_URL"),
+            "{url}: {stderr}"
         );
     }
 }
@@ -496,6 +502,30 @@ fn with_no_version_the_installer_resolves_the_latest_release() {
     assert!(target.path().join("notignored").exists());
 }
 
+/// A host that can download but cannot hash refuses to install rather than
+/// skipping verification — and names the tools that would fix it.
+#[test]
+fn without_a_sha256_tool_the_installer_says_which_to_install() {
+    let release = publish("v9.9.9", false, true);
+    let target = tempfile::tempdir().unwrap();
+    let bin = path_with(&["curl"]);
+    let output = install_with_path(
+        &release,
+        target.path(),
+        bin.path(),
+        &["--version", "v9.9.9"],
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.status);
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("refusing to install unverified"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("sha256sum"), "{stderr}");
+    assert!(!target.path().join("notignored").exists(), "{stderr}");
+}
+
 #[test]
 fn wget_stands_in_when_curl_is_unavailable() {
     if which("wget").is_err() {
@@ -593,6 +623,29 @@ fn help_documents_the_flags_the_readme_advertises() {
         assert!(
             help.contains(flag),
             "install.sh --help omits {flag}:\n{help}"
+        );
+    }
+}
+
+/// A flag whose value the caller forgot: naming the flag is half the message,
+/// so each failure shows the shape of the value it wanted.
+#[test]
+fn a_flag_with_no_value_is_rejected_with_an_example() {
+    for (flag, example) in [("--version", "v0.1.0"), ("--to", ".local/bin")] {
+        let output = Command::new("sh")
+            .arg(repo_root().join("scripts/install.sh"))
+            .arg(flag)
+            .output()
+            .expect("run install.sh");
+        assert_eq!(output.status.code(), Some(1), "{:?}", output.status);
+        let stderr = stderr_of(&output);
+        assert!(
+            stderr.contains(&format!("{flag} needs a value")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(example),
+            "the message shows no example value: {stderr}"
         );
     }
 }

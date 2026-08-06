@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "ignores": [
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "ANN001"
+      ],
+      "reason": "the gateway fixes this signature",
+      "path": "api/clean.py",
+      "line": 4,
+      "end_line": 4,
+      "column": 20,
+      "raw": "# noqa: ANN001  # the gateway fixes this signature",
+      "suppressed": {
+        "start_line": 4,
+        "end_line": 4
+      }
+    },
+    {
+      "tool": "rust",
+      "scope": "next-line",
+      "rules": [
+        "dead_code"
+      ],
+      "reason": "error recovery lands with the next parser",
+      "path": "crates/lexer.rs",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "raw": "#[expect(dead_code, reason = \"error recovery lands with the next parser\")]",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": 2
+      }
+    },
+    {
+      "tool": "typescript",
+      "scope": "next-line",
+      "rules": [],
+      "reason": "the SDK's teardown hook is untyped",
+      "path": "web/widget.ts",
+      "line": 17,
+      "end_line": 17,
+      "column": 1,
+      "raw": "// @ts-expect-error the SDK's teardown hook is untyped",
+      "suppressed": {
+        "start_line": 18,
+        "end_line": 18
+      }
+    }
+  ],
+  "errors": []
+}

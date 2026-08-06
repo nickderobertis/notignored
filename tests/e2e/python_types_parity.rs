@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::support::{
-    fixture, mypy_failures, mypy_passes, notignored, parse_report, pyright_failures, ruff_passes,
-    ty_failures,
+    fixture, mypy_failures, mypy_passes, notignored, parse_report, pyright_diagnostics,
+    pyright_failures, ruff_passes, ty_failures,
 };
 
 fn family_dir() -> PathBuf {
@@ -27,7 +27,7 @@ fn family_dir() -> PathBuf {
 /// The CLI's JSON report for one fixture, with paths relative to the family root.
 ///
 /// Scoped to the tools these fixtures are about: one holding the reason-less
-/// form of a directive carries an `llmlint: ignore-file[…]` footer to keep it,
+/// form of a directive carries an llmlint `ignore-file` footer to keep it,
 /// and that footer is this repo's own lint bookkeeping rather than a record the
 /// family asserts on. The golden report below scans unfiltered and does show it.
 fn report_for(path: &str) -> serde_json::Value {
@@ -146,6 +146,10 @@ const PYRIGHT_FIXTURES: &[&str] = &[
     "pyright/codes.py",
     "pyright/mode_switch.py",
     "pyright/embedded.py",
+    "pyright/rule_value.py",
+    "pyright/rule_value_severity.py",
+    "pyright/rule_value_trailing.py",
+    "pyright/rule_value_embedded.py",
 ];
 
 const TY_FIXTURES: &[&str] = &[
@@ -174,10 +178,13 @@ fn fixtures_differ_only_in_their_comments() {
         without_comments(&read_fixture("mixed/suppressed.py")),
         without_comments(&read_fixture("mixed/unsuppressed.py"))
     );
-    assert_eq!(
-        without_comments(&read_fixture(MALFORMED_FIXTURE)),
-        without_comments(&read_fixture(MYPY_FIXTURES[0]))
-    );
+    for outside_a_family in [MALFORMED_FIXTURE, BEHIND_CODE_FIXTURE] {
+        assert_eq!(
+            without_comments(&read_fixture(outside_a_family)),
+            without_comments(&read_fixture(MYPY_FIXTURES[0])),
+            "{outside_a_family} is not the control program plus a directive"
+        );
+    }
 }
 
 /// `# mypy: disable-error-code` with nothing assigned to it.
@@ -228,11 +235,57 @@ fn real_mypy_is_flipped_by_every_directive_the_parser_claims() {
 fn real_pyright_is_flipped_by_every_directive_the_parser_claims() {
     assert_eq!(
         pyright_failures(&family_dir(), ".", PYRIGHT_FIXTURES),
-        // `# pyright: basic` switches the type-checking mode; it silences nothing,
-        // which is exactly why the parser must not report it.
-        vec!["pyright/mode_switch.py", "pyright/violation.py"],
+        vec![
+            // `# pyright: basic` switches the type-checking mode; it silences
+            // nothing, which is exactly why the parser must not report it.
+            "pyright/mode_switch.py",
+            // A directive that opens no comment is prose to pyright, so the
+            // override never applies and the parser must report nothing.
+            "pyright/rule_value_embedded.py",
+            // A rule moved to another severity is still diagnosed.
+            "pyright/rule_value_severity.py",
+            // Pyright reads a trailing `# reason` as more of its item list and
+            // refuses the whole comment, silencing nothing.
+            "pyright/rule_value_trailing.py",
+            "pyright/violation.py",
+        ],
         "real pyright disagrees about which fixtures are suppressed; the fixtures, \
          the grammar, or the pin drifted"
+    );
+}
+
+/// An override behind code, which pyright faults *and* applies.
+///
+/// It cannot join [`PYRIGHT_FIXTURES`]: pyright's complaint about the placement
+/// puts the file in the failure list, which in that family reads as "suppressed
+/// nothing" — and here the rule really is off.
+const BEHIND_CODE_FIXTURE: &str = "pyright/rule_value_behind_code.py";
+
+/// Where a rule override sits does not decide whether it silences the rule, so
+/// the record is what a reviewer needs either way.
+#[test]
+fn an_override_pyright_faults_the_placement_of_is_still_a_live_suppression() {
+    let diagnostics = pyright_diagnostics(&family_dir(), ".", &[BEHIND_CODE_FIXTURE]);
+    assert_eq!(
+        diagnostics,
+        // One diagnostic, about where line 7's override was written — and not
+        // the `reportArgumentType` the control earns, so the override applied.
+        vec![(BEHIND_CODE_FIXTURE.to_string(), None, 7)],
+        "real pyright no longer applies an override that trails code; the form's \
+         scope has to be re-derived from the tool"
+    );
+
+    assert_eq!(
+        records_for(BEHIND_CODE_FIXTURE),
+        vec![record(
+            "pyright",
+            "file",
+            &["reportArgumentType"],
+            None,
+            (7, 16),
+            "# pyright: reportArgumentType=false",
+            None,
+        )]
     );
 }
 
@@ -338,6 +391,26 @@ fn the_cli_describes_every_pyright_directive_exactly() {
                 Some(7),
             )],
         ),
+        (
+            // A rule switched off is a file-wide suppression. Pyright reads the
+            // rest of the line as its item list, so the form carries no reason.
+            "pyright/rule_value.py",
+            vec![record(
+                "pyright",
+                "file",
+                &["reportArgumentType"],
+                None,
+                (6, 1),
+                "# pyright: reportArgumentType=false",
+                None,
+            )],
+        ),
+        // A severity change silences nothing, a trailing reason makes pyright
+        // refuse the comment, and an override that opens no comment is prose:
+        // none of the three is a suppression, so none is reported.
+        ("pyright/rule_value_severity.py", vec![]),
+        ("pyright/rule_value_trailing.py", vec![]),
+        ("pyright/rule_value_embedded.py", vec![]),
         (
             // Real pyright honours a directive that opens no comment, so the
             // record starts at the directive — not at the prose before it, which

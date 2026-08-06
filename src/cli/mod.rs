@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, ValueEnum};
 
 use crate::diff::{self, AddedLines, Diff, DiffError};
-use crate::model::{Report, Tool};
+use crate::model::{Report, ReportError, Tool};
 use crate::scan::{self, ScanError, ScanOptions};
 use crate::source::{display_path, Language};
 
@@ -146,6 +146,10 @@ struct Selection {
     /// In `--diff` mode, the lines the change added to each selected file, keyed
     /// by the path the report uses. `None` when every directive is reported.
     added: Option<BTreeMap<String, AddedLines>>,
+    /// What selection itself could not do: a file the change touched under a
+    /// name this build cannot represent. Carried into the report's `errors` so a
+    /// file that cannot be scanned is never counted as clean.
+    errors: Vec<ReportError>,
 }
 
 /// Why a run could not decide what to look at.
@@ -182,16 +186,28 @@ impl Cli {
             return Ok(Selection {
                 files: scan::discover(&self.paths)?,
                 added: None,
+                errors: Vec::new(),
             });
         }
         // The diff is taken where the command was run, so its paths line up with
         // the ones the report prints.
         let diff = Diff::open(Path::new("."), self.diff_base.as_deref())?;
         let changed = diff.changed_files()?;
+        // A path this build cannot name cannot be narrowed by PATHS either — the
+        // spelling a selector would be compared against is the one we do not
+        // have — so it is reported however the run was scoped.
+        let errors = changed
+            .undecodable
+            .iter()
+            .map(|path| ReportError {
+                path: path.clone(),
+                message: "path is not valid UTF-8, so it cannot be scanned".to_string(),
+            })
+            .collect();
 
         let mut files = Vec::new();
         let mut added = BTreeMap::new();
-        for file in self.narrow_to_paths(&changed)? {
+        for file in self.narrow_to_paths(&changed.files)? {
             // A file the change deleted is part of the diff but has no source
             // left to read; skipping it is the answer, not an error.
             if !file.path.exists() {
@@ -213,6 +229,7 @@ impl Cli {
         Ok(Selection {
             files,
             added: Some(added),
+            errors,
         })
     }
 
@@ -278,6 +295,10 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let mut report = scan::scan_files(&selection.files, &cli.scan_options());
     if let Some(added) = &selection.added {
         diff::retain_new(&mut report, added);
+    }
+    if !selection.errors.is_empty() {
+        report.errors.extend(selection.errors);
+        report.sort();
     }
     // Errors first, so a human sees what went wrong above the summary and a JSON
     // run still gets them on the terminal when stdout is redirected.

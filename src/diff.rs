@@ -101,6 +101,22 @@ pub struct ChangedFile {
     pub renamed_from: Option<PathBuf>,
 }
 
+/// Everything one `git diff --name-status` named.
+///
+/// The files a change touched, and — kept apart from them — the paths this build
+/// cannot name. A file path is bytes to git and a `String` in the report
+/// contract, so a name that is not valid UTF-8 has no faithful spelling here:
+/// the lossy one is a *different* path, and handing it back to git as a pathspec
+/// would match nothing and silently drop the file from the review.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Changed {
+    /// The files to read, in git's order.
+    pub files: Vec<ChangedFile>,
+    /// The lossy spelling of each path that could not be represented, in git's
+    /// order. These become [`Report::errors`] entries.
+    pub undecodable: Vec<String>,
+}
+
 /// The 1-based lines a change added to one file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AddedLines {
@@ -241,12 +257,14 @@ impl Diff {
     }
 
     /// Every file this change touched, in git's order.
-    pub fn changed_files(&self) -> Result<Vec<ChangedFile>, DiffError> {
+    pub fn changed_files(&self) -> Result<Changed, DiffError> {
         // `-z` makes the records NUL-separated, so a path holding a space or a
         // quote needs no unquoting; `--relative` reports paths the way this run's
-        // report does — relative to the directory it was invoked from.
+        // report does — relative to the directory it was invoked from. The output
+        // is read as bytes because a path *is* bytes: decoding it lossily here
+        // would invent a name for a file and then fail to find it.
         let args = ["diff", "--name-status", "-z", "--relative", self.base.arg()];
-        let output = self.git(&args)?;
+        let output = self.git_bytes(&args)?;
         parse_name_status(&output, &format!("git {}", args.join(" ")))
     }
 
@@ -305,7 +323,17 @@ impl Diff {
     }
 
     /// Run git in the diff's root, returning its stdout.
+    ///
+    /// Patches and revisions are text; only [`changed_files`](Self::changed_files)
+    /// needs the raw bytes, and it goes through [`Self::git_bytes`].
     fn git(&self, args: &[&str]) -> Result<String, DiffError> {
+        // A diff's body is read lossily for the same reason report paths are:
+        // one undecodable byte must not abort a scan.
+        Ok(String::from_utf8_lossy(&self.git_bytes(args)?).into_owned())
+    }
+
+    /// Run git in the diff's root, returning its stdout as the bytes git wrote.
+    fn git_bytes(&self, args: &[&str]) -> Result<Vec<u8>, DiffError> {
         let output = git_command(&self.git, &self.root)
             .args(args)
             .output()
@@ -324,9 +352,7 @@ impl Diff {
                 message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
             });
         }
-        // Paths and diffs are read lossily for the same reason report paths are:
-        // one undecodable byte must not abort a scan.
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        Ok(output.stdout)
     }
 }
 
@@ -365,9 +391,14 @@ fn git_command(program: &str, dir: &Path) -> Command {
 ///
 /// Records are NUL-separated: a status field, then the path it applies to — or
 /// two paths, source then destination, when the status is a rename or a copy.
-fn parse_name_status(output: &str, command: &str) -> Result<Vec<ChangedFile>, DiffError> {
-    let mut fields = output.split('\0').filter(|field| !field.is_empty());
-    let mut files = Vec::new();
+///
+/// A path whose bytes are not valid UTF-8 is set aside rather than decoded
+/// lossily: the replacement characters would name a file that does not exist, so
+/// the scan would look for nothing and the report would call the change clean.
+/// It is reported instead — see [`Changed::undecodable`].
+fn parse_name_status(output: &[u8], command: &str) -> Result<Changed, DiffError> {
+    let mut fields = output.split(|byte| *byte == 0).filter(|f| !f.is_empty());
+    let mut changed = Changed::default();
     while let Some(status) = fields.next() {
         // A record cut short, or one whose status this build does not know,
         // means git described a change in terms we cannot act on. Answering from
@@ -377,34 +408,59 @@ fn parse_name_status(output: &str, command: &str) -> Result<Vec<ChangedFile>, Di
             command: command.to_string(),
             detail,
         };
-        let paired = match status_kind(status) {
-            Some(paired) => paired,
-            None => return Err(malformed(format!("unknown status {status:?}"))),
+        let status = String::from_utf8_lossy(status);
+        let Some(kind) = status_kind(&status) else {
+            return Err(malformed(format!("unknown status {status:?}")));
         };
         let truncated = || malformed(format!("record {status:?} names no path"));
-        let first = fields.next().ok_or_else(truncated)?;
-        if !paired {
-            files.push(ChangedFile {
-                path: PathBuf::from(first),
+        let first = decode_path(fields.next().ok_or_else(truncated)?);
+        let (path, renamed_from) = match kind {
+            StatusKind::OnePath => (first, None),
+            StatusKind::Paired => (
+                decode_path(fields.next().ok_or_else(truncated)?),
+                Some(first),
+            ),
+        };
+        match (path, renamed_from) {
+            (Ok(path), None) => changed.files.push(ChangedFile {
+                path,
                 renamed_from: None,
-            });
-            continue;
+            }),
+            (Ok(path), Some(Ok(source))) => changed.files.push(ChangedFile {
+                path,
+                renamed_from: Some(source),
+            }),
+            // Either end of a rename is enough to lose it: git only detects one
+            // when the pathspec admits the source too.
+            (Err(lossy), _) | (Ok(_), Some(Err(lossy))) => changed.undecodable.push(lossy),
         }
-        let destination = fields.next().ok_or_else(truncated)?;
-        files.push(ChangedFile {
-            path: PathBuf::from(destination),
-            renamed_from: Some(PathBuf::from(first)),
-        });
     }
-    Ok(files)
+    Ok(changed)
 }
 
-/// Whether a `--name-status` status field names a two-path (rename or copy)
-/// change, or `None` when git named a status this build does not know.
+/// The path a `-z` record names, or the lossy spelling of one whose bytes this
+/// build cannot represent.
+fn decode_path(field: &[u8]) -> Result<PathBuf, String> {
+    std::str::from_utf8(field)
+        .map(PathBuf::from)
+        .map_err(|_| String::from_utf8_lossy(field).into_owned())
+}
+
+/// How many paths a `--name-status` record carries after its status field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusKind {
+    /// The status applies to the one path that follows it.
+    OnePath,
+    /// A rename or copy: a source path, then a destination path.
+    Paired,
+}
+
+/// How many paths a `--name-status` status field introduces, or `None` when git
+/// named a status this build does not know.
 ///
 /// Only `R`/`C` carry a similarity score and a second path; `X` is git's own
 /// "this is a bug" marker and is not something to report a change from.
-fn status_kind(status: &str) -> Option<bool> {
+fn status_kind(status: &str) -> Option<StatusKind> {
     let (letter, score) = status.split_at(
         status
             .char_indices()
@@ -412,8 +468,8 @@ fn status_kind(status: &str) -> Option<bool> {
             .map_or(status.len(), |(i, _)| i),
     );
     match letter {
-        "R" | "C" if score.chars().all(|c| c.is_ascii_digit()) => Some(true),
-        "A" | "D" | "M" | "T" | "U" if score.is_empty() => Some(false),
+        "R" | "C" if score.chars().all(|c| c.is_ascii_digit()) => Some(StatusKind::Paired),
+        "A" | "D" | "M" | "T" | "U" if score.is_empty() => Some(StatusKind::OnePath),
         _ => None,
     }
 }
@@ -532,6 +588,7 @@ mod tests {
     fn changed(diff: &Diff) -> Vec<(String, Option<String>)> {
         diff.changed_files()
             .expect("changed files")
+            .files
             .into_iter()
             .map(|file| {
                 (
@@ -546,6 +603,7 @@ mod tests {
         let file = diff
             .changed_files()
             .expect("changed files")
+            .files
             .into_iter()
             .find(|file| display_path(&file.path) == path)
             .unwrap_or_else(|| panic!("{path} is not in the diff"));
@@ -754,11 +812,39 @@ mod tests {
         assert!(error.hint().contains("executable"), "{}", error.hint());
     }
 
+    /// A path git named in bytes this build cannot spell is set aside rather
+    /// than decoded into a name that points at nothing.
+    #[test]
+    fn a_path_that_is_not_utf8_is_set_aside_rather_than_guessed_at() {
+        let command = "git diff --name-status";
+        let changed = parse_name_status(b"M\0caf\xe9.py\0A\0plain.py\0", command).unwrap();
+        assert_eq!(
+            changed.files,
+            vec![ChangedFile {
+                path: PathBuf::from("plain.py"),
+                renamed_from: None
+            }],
+            "the file git *could* name is still part of the change"
+        );
+        assert_eq!(changed.undecodable, vec!["caf\u{fffd}.py"]);
+
+        // Either end of a rename losing its name loses the pairing, so the whole
+        // record is one this build cannot act on.
+        for record in [
+            &b"R100\0caf\xe9.py\0new.py\0"[..],
+            b"R100\0old.py\0caf\xe9.py\0",
+        ] {
+            let changed = parse_name_status(record, command).unwrap();
+            assert!(changed.files.is_empty(), "{record:?}");
+            assert_eq!(changed.undecodable, vec!["caf\u{fffd}.py"], "{record:?}");
+        }
+    }
+
     #[test]
     fn truncated_name_status_output_is_an_error_not_a_shorter_answer() {
         let command = "git diff --name-status";
-        assert!(parse_name_status("", command).unwrap().is_empty());
-        for truncated in ["M\0", "R100\0old.py\0"] {
+        assert_eq!(parse_name_status(b"", command).unwrap(), Changed::default());
+        for truncated in [&b"M\0"[..], b"R100\0old.py\0"] {
             let error = parse_name_status(truncated, command).unwrap_err();
             assert!(matches!(error, DiffError::Malformed { .. }), "{error:?}");
             assert!(error.to_string().contains("names no path"), "{error}");
@@ -766,30 +852,33 @@ mod tests {
 
         // A status this build does not know — git's own "unknown" marker, or a
         // field that is not a status at all — is not read as a plain change.
-        for unknown in ["X\0a.py\0", "M100\0a.py\0", "a.py\0M\0"] {
+        for unknown in [&b"X\0a.py\0"[..], b"M100\0a.py\0", b"a.py\0M\0"] {
             let error = parse_name_status(unknown, command).unwrap_err();
             assert!(error.to_string().contains("unknown status"), "{error}");
         }
         // Every status git does define is understood.
         for (record, renamed_from) in [
-            ("A\0a.py\0", None),
-            ("D\0a.py\0", None),
-            ("T\0a.py\0", None),
-            ("U\0a.py\0", None),
-            ("C75\0old.py\0a.py\0", Some("old.py")),
-            ("R\0old.py\0a.py\0", Some("old.py")),
+            (&b"A\0a.py\0"[..], None),
+            (b"D\0a.py\0", None),
+            (b"T\0a.py\0", None),
+            (b"U\0a.py\0", None),
+            (b"C75\0old.py\0a.py\0", Some("old.py")),
+            (b"R\0old.py\0a.py\0", Some("old.py")),
         ] {
-            let files = parse_name_status(record, command).unwrap();
-            assert_eq!(files.len(), 1, "{record:?}");
-            assert_eq!(files[0].path, PathBuf::from("a.py"), "{record:?}");
+            let changed = parse_name_status(record, command).unwrap();
+            assert_eq!(changed.files.len(), 1, "{record:?}");
+            assert_eq!(changed.files[0].path, PathBuf::from("a.py"), "{record:?}");
             assert_eq!(
-                files[0].renamed_from,
+                changed.files[0].renamed_from,
                 renamed_from.map(PathBuf::from),
                 "{record:?}"
             );
+            assert!(changed.undecodable.is_empty(), "{record:?}");
         }
         assert_eq!(
-            parse_name_status("M\0a.py\0A\0b.py\0", command).unwrap(),
+            parse_name_status(b"M\0a.py\0A\0b.py\0", command)
+                .unwrap()
+                .files,
             vec![
                 ChangedFile {
                     path: PathBuf::from("a.py"),

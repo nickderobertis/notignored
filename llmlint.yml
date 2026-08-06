@@ -21,18 +21,26 @@ files:
     - "tests/fixtures/llmlint-parity/**"
     # Generated output, and unfixable in place: a block record folds its closing
     # `ignore-end` in rather than emitting a second record (the ignore-record
-    # contract), so this file quotes an ignore-block's text with no matching end
+    # contract), so these files quote an ignore-block's text with no matching end
     # and `check-ignores` reads it as unclosed. `tests/golden/report.json` is NOT
     # exempt — it holds no block — and neither is any hand-written file.
     - "tests/golden/tools-report.json"
+    - "tests/golden/polyglot.json"
+    # Same reason, one step further: a rendered comment body quotes the source
+    # line each finding sits on, so the goldens hold fixture directives verbatim
+    # — an `// @ts-ignore` inside a snippet is the report *showing* a suppression,
+    # not this repo taking one. The fixtures those lines come from are judged.
+    - "tests/golden/markdown/*.md"
     # Composed verbatim by the create-repo skill (`compose_repo_plan.py
     # --llmlint-config` and `assets/setup-llmlint.sh.template`). Editing them to
     # local taste forks them from the template and loses the ability to
     # re-compose, so they are generated output, not repo-authored code.
     - "oneharness.toml"
     - "scripts/setup-llmlint.sh"
-    # Resolved by `npm ci`, not written by hand: the pin that matters is the
-    # exact version in the manifest beside it.
+    # Lock files: resolved by `cargo`/`npm ci`, not written by hand. The pin that
+    # matters is the exact version in the manifest beside each one, and that
+    # manifest is judged.
+    - "Cargo.lock"
     - "tests/js-toolchain/package-lock.json"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`

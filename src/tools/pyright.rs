@@ -8,22 +8,39 @@
 //! | `# pyright: ignore` | line | *(blanket)* |
 //! | `# pyright: ignore[reportArgumentType]` | line | `reportArgumentType` |
 //! | `# pyright: ignore[reportAny, reportUnusedImport]` | line | both |
+//! | `# pyright: reportMissingImports=false` | file | `reportMissingImports` |
 //!
-//! Pyright honours a directive anywhere in the comment — `# noqa: F401  #
+//! Pyright honours an *ignore* anywhere in the comment — `# noqa: F401  #
 //! pyright: ignore[reportAny]` suppresses — so, like ruff, this reports the span
 //! of the inner `#` that opened it. Any further `# …` is the
 //! [`reason`](crate::model::IgnoreDirective::reason), up to the next tool's
 //! directive, so a `# noqa` sharing the line is never filed as pyright's
 //! justification.
 //!
-//! Everything else a `# pyright: …` comment can say (`# pyright: basic`,
-//! `# pyright: strict`) switches the type-checking mode rather than silencing a
-//! diagnostic, and is deliberately **not** reported: a mode switch is a config
-//! change, and a review tool that files it as a suppression cries wolf. Pyright
-//! also honours mypy's `# type: ignore`, which is reported once, as mypy's.
+//! The `<rule>=<value>` form is pyright's per-file rule override, and the values
+//! that switch a rule **off** — `false` and `none` — silence it for the whole
+//! file. The other four (`true`, `error`, `warning`, `information`) turn a rule
+//! on or move its severity, so they are configuration and not reported; a comment
+//! that lists none of the off values yields no record. Neither does a mode switch
+//! (`# pyright: basic`, `# pyright: strict`): a review tool that files a config
+//! change as a suppression cries wolf.
 //!
-//! Pyright's ignore is always line-scoped: unlike ty it gives a directive above
-//! the first statement no special meaning.
+//! Two constraints on that form come straight from what pyright honours:
+//!
+//! * **The directive must open its comment.** `# stale  # pyright: reportAny=false`
+//!   is prose to pyright, so reporting it would invent a suppression.
+//! * **The whole comment is the directive.** Pyright reads the rest of the line
+//!   as its comma-separated item list, so a trailing `# reason` — or any value
+//!   outside those six — makes it reject the comment and silence nothing. That is
+//!   why this form never carries a reason.
+//!
+//! Where the comment *sits* is not one of them: pyright faults a `<rule>=<value>`
+//! comment that trails code or is indented, and then applies it anyway. The rule
+//! really is off, so the record is what a reviewer needs either way.
+//!
+//! Pyright also honours mypy's `# type: ignore`, which is reported once, as
+//! mypy's. Its own ignore is always line-scoped: unlike ty it gives a directive
+//! above the first statement no special meaning.
 
 use crate::model::{IgnoreDirective, Scope, Suppressed, Tool};
 use crate::source::{Language, SourceFile};
@@ -48,26 +65,54 @@ impl ToolParser for PyrightParser {
         for comment in file.comments() {
             // One suppression per comment: a second `# pyright: ignore` on the
             // same line silences nothing the first did not.
-            let Some((segment, rest)) = python::segments(comment)
+            let found = python::segments(comment)
                 .into_iter()
-                .find_map(|segment| directive_body(segment.after_hash).map(|rest| (segment, rest)))
+                .find_map(|segment| directive_body(segment.after_hash).map(|rest| (segment, rest)));
+            if let Some((segment, rest)) = found {
+                let (rules, reason) = python::rules_and_reason(rest);
+                out.push(IgnoreDirective {
+                    tool: Tool::Pyright,
+                    scope: Scope::Line,
+                    rules,
+                    reason,
+                    path: file.display_path().to_string(),
+                    line: comment.line,
+                    end_line: comment.end_line,
+                    column: segment.column,
+                    raw: segment.raw.to_string(),
+                    suppressed: Suppressed {
+                        start_line: comment.line,
+                        end_line: Some(comment.line),
+                    },
+                });
+                continue;
+            }
+            // A rule override is the whole comment, so it is read from the raw
+            // text rather than from a segment: a second `#` is not a boundary
+            // here but a malformation pyright refuses outright.
+            let Some(rules) = comment
+                .raw
+                .strip_prefix('#')
+                .and_then(config_body)
+                .and_then(disabled_rules)
             else {
                 continue;
             };
-            let (rules, reason) = python::rules_and_reason(rest);
             out.push(IgnoreDirective {
                 tool: Tool::Pyright,
-                scope: Scope::Line,
+                scope: Scope::File,
                 rules,
-                reason,
+                // Pyright reads any trailing `# …` as part of its item list and
+                // then rejects the comment, so this form has no reason to carry.
+                reason: None,
                 path: file.display_path().to_string(),
                 line: comment.line,
                 end_line: comment.end_line,
-                column: segment.column,
-                raw: segment.raw.to_string(),
+                column: comment.column,
+                raw: comment.raw.trim_end().to_string(),
                 suppressed: Suppressed {
-                    start_line: comment.line,
-                    end_line: Some(comment.line),
+                    start_line: 1,
+                    end_line: None,
                 },
             });
         }
@@ -84,10 +129,49 @@ pub(super) fn opens_directive(after_hash: &str) -> bool {
 }
 
 /// The text after `pyright: ignore`, or `None` for any other `# pyright: …`
-/// comment (the mode switches).
+/// comment (the mode switches and the rule overrides).
 fn directive_body(after_hash: &str) -> Option<&str> {
     let after_prefix = after_hash.trim_start().strip_prefix("pyright:")?;
     python::strip_keyword(after_prefix.trim_start(), "ignore")
+}
+
+/// The item list of a `# pyright: <item>, <item>` comment, or `None` when the
+/// comment does not open with the keyword.
+fn config_body(after_hash: &str) -> Option<&str> {
+    Some(after_hash.trim_start().strip_prefix("pyright:")?.trim())
+}
+
+/// The type-checking modes that may appear among the items without a value.
+const MODES: [&str; 3] = ["basic", "standard", "strict"];
+
+/// The values pyright accepts for a rule, and the two that switch it off.
+const VALUES: [&str; 6] = ["true", "false", "error", "warning", "information", "none"];
+const OFF: [&str; 2] = ["false", "none"];
+
+/// The rules an item list switches off, or `None` when there is nothing to
+/// report: a list pyright would reject outright (and so honour nowhere), or one
+/// it honours that silences nothing (every rule turned *on*, or a mode switch).
+fn disabled_rules(items: &str) -> Option<Vec<String>> {
+    let mut disabled = Vec::new();
+    for item in items.split(',') {
+        let item = item.trim();
+        let Some((rule, value)) = item.split_once('=') else {
+            // A valueless item is only ever a mode switch; anything else is the
+            // form pyright answers with "must be followed by = and a value".
+            if MODES.contains(&item) {
+                continue;
+            }
+            return None;
+        };
+        let (rule, value) = (rule.trim(), value.trim());
+        if rule.is_empty() || !VALUES.contains(&value) {
+            return None;
+        }
+        if OFF.contains(&value) {
+            disabled.push(rule.to_string());
+        }
+    }
+    (!disabled.is_empty()).then_some(disabled)
 }
 
 #[cfg(test)]
@@ -184,7 +268,77 @@ mod tests {
     fn mode_switches_are_configuration_not_suppressions() {
         assert!(parse("# pyright: basic\nimport os\n").is_empty());
         assert!(parse("# pyright: strict\nimport os\n").is_empty());
-        assert!(parse("# pyright: reportMissingImports=false\nimport os\n").is_empty());
+    }
+
+    #[test]
+    fn a_rule_switched_off_is_a_file_wide_suppression() {
+        let directive = only("# pyright: reportMissingImports=false\nimport legacy\n");
+        assert_eq!(directive.scope, Scope::File);
+        assert_eq!(directive.rules, vec!["reportMissingImports"]);
+        assert_eq!(directive.reason, None);
+        assert_eq!((directive.line, directive.column), (1, 1));
+        assert_eq!(directive.raw, "# pyright: reportMissingImports=false");
+        assert_eq!(
+            directive.suppressed,
+            Suppressed {
+                start_line: 1,
+                end_line: None
+            }
+        );
+        // `none` is pyright's other off value, and the spaces it tolerates
+        // around the `=` do not change what it reads.
+        assert_eq!(
+            only("# pyright: reportMissingImports = none\nimport legacy\n").rules,
+            vec!["reportMissingImports"]
+        );
+    }
+
+    #[test]
+    fn only_the_rules_switched_off_are_reported() {
+        let directive = only(
+            "# pyright: strict, reportMissingImports=false, reportAny=error, reportUnusedImport=none\n",
+        );
+        assert_eq!(
+            directive.rules,
+            vec!["reportMissingImports", "reportUnusedImport"]
+        );
+        // A rule turned on, or given a severity, silences nothing.
+        for on in ["true", "error", "warning", "information"] {
+            assert!(
+                parse(&format!("# pyright: reportAny={on}\n")).is_empty(),
+                "`{on}` is not a suppression"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rule_override_pyright_rejects_is_not_a_suppression() {
+        // Pyright reads the rest of the line as its item list, so each of these
+        // makes it refuse the comment — and silence nothing.
+        for rejected in [
+            "# pyright: reportAny=false  # no stubs published",
+            "# pyright: reportAny=False",
+            "# pyright: reportAny",
+            "# pyright: reportAny=false, ",
+            "# pyright: =false",
+        ] {
+            assert!(
+                parse(&format!("{rejected}\nimport legacy\n")).is_empty(),
+                "{rejected:?} is a form pyright refuses"
+            );
+        }
+        // The directive has to open the comment: embedded, pyright reads prose.
+        assert!(parse("# stale  # pyright: reportAny=false\n").is_empty());
+    }
+
+    #[test]
+    fn a_rule_override_is_reported_wherever_pyright_applies_it() {
+        // Pyright faults the placement of an override that trails code and then
+        // applies it anyway, so the rule really is off for the file.
+        let directive = only("import legacy  # pyright: reportMissingImports=false\n");
+        assert_eq!(directive.scope, Scope::File);
+        assert_eq!(directive.rules, vec!["reportMissingImports"]);
+        assert_eq!((directive.line, directive.column), (1, 16));
     }
 
     #[test]

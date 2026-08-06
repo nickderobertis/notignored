@@ -13,7 +13,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || {
+  echo "$(basename "${BASH_SOURCE[0]}"): cannot enter the repository root $ROOT" >&2
+  echo "ACTION: run this from a checkout whose directories are readable, then re-run 'just bootstrap'" >&2
+  exit 1
+}
 
 MANIFEST="tests/js-toolchain"
 VENV=".dev/js"
@@ -33,8 +37,16 @@ if [ -d "$VENV/node_modules" ] \
   exit 0
 fi
 
-mkdir -p "$VENV"
-cp "$MANIFEST/package.json" "$MANIFEST/package-lock.json" "$VENV/"
+mkdir -p "$VENV" || {
+  echo "setup-js: cannot create $ROOT/$VENV" >&2
+  echo "ACTION: check the directory is writable (or remove a stale file at that path), then re-run 'just setup-js'" >&2
+  exit 1
+}
+cp "$MANIFEST/package.json" "$MANIFEST/package-lock.json" "$VENV/" || {
+  echo "setup-js: cannot copy the pinned manifest from $MANIFEST into $ROOT/$VENV" >&2
+  echo "ACTION: check that tests/js-toolchain/package.json and package-lock.json exist, then re-run 'just setup-js'" >&2
+  exit 1
+}
 # --ignore-scripts: nothing in this tree needs a postinstall, and the pinned
 # linters are dev inputs, not code we run in production. Least privilege.
 if ! (cd "$VENV" && npm ci --silent --no-audit --no-fund --ignore-scripts); then

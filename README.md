@@ -42,6 +42,13 @@ The installer honours `NOTIGNORED_VERSION` / `NOTIGNORED_INSTALL_DIR` (or the
 published beside it, and refuses to install a binary it cannot verify. Every
 tagged release attaches per-platform archives built on native runners.
 
+In CI there is nothing to install: the [GitHub Action](#on-a-pull-request-the-github-action)
+fetches the release binary itself and posts what the pull request added.
+
+```yaml
+- uses: nickderobertis/notignored@main
+```
+
 ## Usage
 
 ```
@@ -85,6 +92,10 @@ notignored: 1 ignore in 1 file
 - Only the files the change touched are read, so a diff run stays fast on a
   large repository. Files the change deleted are skipped; a renamed file reports
   what the change added to it, not the lines that merely moved.
+- Git names a file in bytes and a report names it with a string, so a path that
+  is not valid UTF-8 has no faithful spelling here. It becomes an `errors` entry
+  (and exit 2) rather than a file quietly dropped from the review — the lossy
+  spelling would name a file that does not exist.
 
 `--diff` shells out to `git` — infrastructure, not one of the linters whose
 directives are parsed natively — so it needs `git` on `PATH` and a work tree.
@@ -212,7 +223,7 @@ The `json` format emits the full report envelope:
 | `ruff` | `# noqa`, `# noqa: E501, F401`, `# ruff: noqa`, `# ruff: noqa: E501` | **Supported** |
 | `typescript` | `// @ts-ignore`, `// @ts-expect-error reason`, `/* @ts-ignore */`, `// @ts-nocheck` | **Supported** |
 | `mypy` | `# type: ignore`, `# type: ignore[arg-type, index]`, `# mypy: ignore-errors`, `# mypy: disable-error-code="arg-type"` | **Supported** |
-| `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]` | **Supported** |
+| `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]`, `# pyright: reportMissingImports=false` | **Supported** |
 | `ty` | `# ty: ignore`, `# ty: ignore[invalid-argument-type]` | **Supported** |
 | `rust` | `#[allow(dead_code)]`, `#[allow(clippy::needless_collect, dead_code)]`, `#[expect(dead_code, reason = "…")]`, `#![allow(…)]`, `#![expect(…, reason = "…")]` | **Supported** |
 | `shellcheck` | `# shellcheck disable=SC2086`, `# shellcheck disable=SC2086,SC2046`, `# shellcheck disable=SC2000-SC2100`, `# shellcheck disable=all`, `# shellcheck disable=SC2086  # reason` | **Supported** |
@@ -226,6 +237,12 @@ Scope follows each tool's own rules, not a house convention:
 - **shellcheck** — a directive above the first command is `file`; anywhere else
   it is `next-line`. A directive ShellCheck itself rejects (trailing prose with
   no `#`, or one placed after a command) is reported by neither tool.
+- **typescript** — the parity claim is pinned to one compiler: the `typescript`
+  version in `tests/js-toolchain/package.json` — **7.0.2**, the Go port — which
+  is what `tests/e2e/typescript_parity.rs` drives. The 5.x compiler is a
+  separate implementation of the same directives and is not guaranteed to read
+  every form the same way, so the claim here is parity with the pinned compiler
+  rather than with every `tsc` ever shipped.
 - **llmlint** — `ignore` is `line`, `ignore-file` is `file`, and
   `ignore-block` … `ignore-end` is one `block` record spanning both directives.
   A block left unclosed keeps a null `suppressed.end_line` and adds an `errors`
@@ -251,9 +268,10 @@ if a row here and the registered parsers disagree.
 
 ## Where a directive reaches, and who honours it
 
-Every `# type: ignore` and `# pyright: ignore` is `line`-scoped; mypy's
-module-wide exemptions are the two `# mypy:` config comments; and for ty, where
-the comment sits is the scope:
+Every `# type: ignore` and `# pyright: ignore` is `line`-scoped; the module-wide
+forms are mypy's two `# mypy:` config comments and pyright's rule override; for
+ty, where the comment sits is the scope; and a Rust attribute reaches to the end
+of the item it annotates:
 
 | Source | Reported as |
 | --- | --- |
@@ -261,9 +279,26 @@ the comment sits is the scope:
 | `# mypy: ignore-errors` on its own line | `mypy`, `file` |
 | `# mypy: disable-error-code="arg-type"` on its own line | `mypy`, `file` |
 | `f(x)  # pyright: ignore` | `pyright`, `line` |
+| `# pyright: reportMissingImports=false` | `pyright`, `file` |
 | `f(x)  # ty: ignore` | `ty`, `line` |
 | `# ty: ignore` above every statement | `ty`, `file` |
 | `# ty: ignore` on its own line in the body | `ty`, `next-line` |
+| `#[allow(dead_code)]` above an item | `rust`, `next-line`, `suppressed` through the item's last line |
+| `#[expect(dead_code, reason = "…")]` above an item | `rust`, `next-line`, `reason` from the attribute |
+| `#![allow(dead_code)]` at the top of the file | `rust`, `file` |
+
+A Rust attribute's `scope` is `next-line` — that is where the item it annotates
+starts, and where a reviewer has to look — while its `suppressed` range covers
+the whole item, however many lines that item runs to. An inner `#![…]` attribute
+exempts the file it opens.
+
+Pyright's `<rule>=<value>` override is reported only for the two values that
+switch a rule off, `false` and `none`; `true`, `error`, `warning`, and
+`information` turn a rule on or move its severity, so they are configuration
+rather than suppression. Pyright reads the rest of that line as its own item
+list, so the form can carry no reason — and a comment it refuses (a trailing
+`# why`, a value outside those six, or a directive that does not open the
+comment) silences nothing and is not reported.
 
 Several tools honour a directive they did not invent: pyright and ty both act on
 mypy's `# type: ignore`, and ruff, pyright, and ty all act on one that does not

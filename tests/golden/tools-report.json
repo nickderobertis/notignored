@@ -52,6 +52,24 @@
       }
     },
     {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "tool_output_is_signal",
+        "suppressions_justified"
+      ],
+      "reason": "fixture",
+      "path": "scripts/deploy.sh",
+      "line": 10,
+      "end_line": 10,
+      "column": 3,
+      "raw": "llmlint: ignore-file[tool_output_is_signal, suppressions_justified] fixture",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
       "tool": "rust",
       "scope": "file",
       "rules": [
@@ -101,6 +119,23 @@
       "suppressed": {
         "start_line": 10,
         "end_line": 17
+      }
+    },
+    {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "the missing reason is the",
+      "path": "src/lints.rs",
+      "line": 21,
+      "end_line": 21,
+      "column": 4,
+      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
       }
     },
     {
