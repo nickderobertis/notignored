@@ -1,0 +1,10 @@
+# Rules the llmlint parity fixtures name. Deliberately NOT called `llmlint.yml`:
+# this config belongs to the fixtures, and a discoverable name would fold it into
+# the repo's own llmlint run. The e2e passes it with an explicit `-c`.
+rules:
+  - name: no_todo_comments
+    description: No TODO or FIXME comments remain in the code.
+  - name: no_debug_prints
+    description: No debugging print statements remain in the code.
+  - name: errors_are_contextualized
+    description: Every returned error adds context about the operation that failed.

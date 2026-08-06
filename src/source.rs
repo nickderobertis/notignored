@@ -1,15 +1,15 @@
 //! Source files: the unit a [`ToolParser`](crate::tools::ToolParser) consumes.
 //!
-//! A [`SourceFile`] extracts its comments (and, for Rust, its attributes) **once**
-//! at construction. Parsers read that extraction; they never re-scan raw lines,
-//! which is what keeps string-literal contents from being mistaken for
-//! directives.
+//! A [`SourceFile`] extracts its comments (and, for Rust, its attributes and
+//! item punctuation) **once** at construction. Parsers read that extraction;
+//! they never re-scan raw lines, which is what keeps string-literal contents
+//! from being mistaken for directives.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::comments::{self, Attribute, Comment, Extracted};
+use crate::comments::{self, Attribute, CodePunctuation, Comment, Extracted};
 
 /// A source language, as far as comment syntax is concerned.
 ///
@@ -137,6 +137,12 @@ impl SourceFile {
         &self.extracted.attributes
     }
 
+    /// Every item-delimiting punctuation mark in the file, in source order.
+    /// Empty for every language but Rust.
+    pub fn punctuation(&self) -> &[CodePunctuation] {
+        &self.extracted.punctuation
+    }
+
     /// Number of lines in the file (a trailing newline does not add one).
     pub fn line_count(&self) -> u32 {
         if self.source.is_empty() {
@@ -188,6 +194,7 @@ mod tests {
         assert_eq!(file.language(), Language::Python);
         assert_eq!(file.comments().len(), 1);
         assert!(file.attributes().is_empty());
+        assert!(file.punctuation().is_empty());
         assert_eq!(file.display_path(), "a.py");
         assert_eq!(file.path(), Path::new("a.py"));
         assert_eq!(file.source(), "x = 1  # noqa\n");

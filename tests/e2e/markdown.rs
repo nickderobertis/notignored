@@ -16,6 +16,11 @@ use crate::support::{notignored, repo_root};
 const REPO: &str = "acme/widgets";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
+/// The tools the fixtures below are written in. Scoping the run keeps the
+/// `llmlint: ignore-file[…]` footer a reason-less fixture must carry from
+/// counting as one more finding and shifting every golden by a file.
+const TOOLS: [&str; 4] = ["eslint", "ruff", "rust", "typescript"];
+
 /// Fixture files, in the order that grows the report one finding at a time.
 ///
 /// Every count the rules distinguish is reached by adding a file rather than by
@@ -31,7 +36,11 @@ const FIXTURES: [(&str, usize); 5] = [
 /// Render the first `files` fixtures as a comment body, with the permalink flags
 /// the action passes.
 fn render(files: usize) -> String {
-    let output = notignored(&repo_root())
+    let mut command = notignored(&repo_root());
+    for tool in TOOLS {
+        command.args(["--tool", tool]);
+    }
+    let output = command
         .args(FIXTURES.iter().take(files).map(|(path, _)| *path))
         .args(["--format", "markdown"])
         .args(["--github-repo", REPO, "--github-sha", SHA])

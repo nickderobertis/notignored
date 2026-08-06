@@ -20,7 +20,10 @@ fn parity_dir() -> std::path::PathBuf {
 
 fn report_for(file: &str) -> serde_json::Value {
     let output = notignored(&parity_dir())
-        .args([file, "--format", "json"])
+        // Scoped to eslint: the grammar fixture's own `llmlint: ignore-file`
+        // footer is a directive we parse too, and this suite asserts on the
+        // fixture's whole record set.
+        .args([file, "--tool", "eslint", "--format", "json"])
         .output()
         .expect("run notignored");
     assert!(output.status.success(), "exit: {:?}", output.status);
