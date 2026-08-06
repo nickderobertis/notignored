@@ -131,7 +131,9 @@ jobs:
           printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
           notignored "$tmp" --format json | grep -q '"E501"'
           # --fail-if-found must exit 1 here; anything else is a broken artifact.
-          notignored "$tmp" --fail-if-found; code=$?
+          # `|| code=$?` keeps `set -e` from aborting on the expected failure.
+          code=0
+          notignored "$tmp" --fail-if-found || code=$?
           [ "$code" -eq 1 ] || { echo "::error::expected exit 1, got $code"; exit 1; }
 
   # Lint the PR title: under squash-merge it becomes the release-driving commit.

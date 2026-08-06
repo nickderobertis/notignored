@@ -31,18 +31,13 @@ readonly ORIG_PATH="${PATH}"
 log() { printf 'session-setup: %s\n' "$*" >&2; }
 
 # CI has its own provisioning; skip there rather than racing it.
-if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
-  log "CI detected; skipping (toolchain provisioned by the CI workflow)"
-  exit 0
-fi
+# CI provisions the toolchain itself; skip there rather than racing it.
+[ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] && exit 0
 
 export PATH="${BIN_DIR}:${PATH}"
 
 ensure_just() {
-  if command -v just >/dev/null 2>&1; then
-    log "just present ($(just --version 2>/dev/null || echo unknown))"
-    return 0
-  fi
+  command -v just >/dev/null 2>&1 && return 0
   if ! command -v uv >/dev/null 2>&1; then
     log "uv not found; cannot install just (install uv: https://docs.astral.sh/uv/)"
     return 0
@@ -66,11 +61,10 @@ verify_prereqs() {
 
 # Persist PATH so the freshly installed `just` resolves in every later Bash call.
 persist_session_env() {
-  [ -n "${CLAUDE_ENV_FILE:-}" ] || { log "no CLAUDE_ENV_FILE (not a session); skipping env"; return 0; }
+  [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
   case ":${ORIG_PATH}:" in
     *":${BIN_DIR}:"*) ;;
-    *) printf 'export PATH=%q\n' "${BIN_DIR}:${PATH}" >> "$CLAUDE_ENV_FILE"
-       log "prepended ${BIN_DIR} to PATH for the session";;
+    *) printf 'export PATH=%q\n' "${BIN_DIR}:${PATH}" >> "$CLAUDE_ENV_FILE" ;;
   esac
 }
 
@@ -81,7 +75,6 @@ persist_session_env
 # Hand off to the llmlint-tier installer beside this script.
 setup_llmlint="$(dirname "$0")/setup-llmlint.sh"
 if [ -x "$setup_llmlint" ]; then
-  log "running setup-llmlint.sh"
   "$setup_llmlint" || log "setup-llmlint.sh reported an issue (continuing)"
 fi
 

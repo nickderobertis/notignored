@@ -69,13 +69,6 @@ parallel branches don't conflict. Parsers consume the extracted comments and
 attributes from `src/comments.rs` — never re-scan raw lines, or string literals
 will be misread as comments.
 
-## Command surface
-
-`just check` must pass before any commit or PR, and `just bootstrap` must stay
-sufficient from a clean clone — CI runs exactly those two and nothing else.
-When a step becomes routine, add a recipe rather than a one-off command, so CI
-and contributors keep running the same thing.
-
 ## Commits, releases, and merging
 
 - **Squash-merge only, via PR, with auto-merge.** The default branch is
@@ -83,11 +76,10 @@ and contributors keep running the same thing.
   squash commit whose subject is the PR title. Queue with
   `gh pr merge --auto --squash`. Merged head branches auto-delete. Admins may
   bypass in a break-glass.
-- **All gating checks are required:** `gate`, `deny`, `msrv`, `pr-title`,
-  `llmlint`, and every matrix leg of `cross` and `install` — plus linear history,
-  conversation resolution, and no force-push / branch-deletion. Re-apply with
-  the create-repo skill's `setup_github_governance.py`; adding a CI job means
-  adding its context there too, or it is advisory.
+- **A new CI job is advisory until it is required.** Branch protection lists
+  contexts by name, so adding a job means re-running the create-repo skill's
+  `setup_github_governance.py` with the new context — otherwise a red run still
+  merges.
 - **PRs follow the template** (`.github/pull_request_template.md`): terse
   **What** and **Why**. It becomes the squash commit body.
 - **Releases: release-plz, release-PR gate shape.** The bot opens a release PR
@@ -106,11 +98,10 @@ and contributors keep running the same thing.
 - The quality gate is strict: no warnings-only mode. A diagnostic is either an
   error or suppressed with a documented, tracked rationale. (We are a tool that
   surfaces suppressions — an unjustified `#[allow]` here is a self-own.)
-- **Tests are realistic, not mocked, and complete, not minimal.** E2E spawns the
-  compiled binary and drives real `ruff` as a subprocess; a feature isn't done
-  until a real journey covers it.
 - Validate all external / IO inputs at trust boundaries. An unreadable file or a
   malformed directive becomes a report `error` entry — never a panic.
+- CI runs `just bootstrap` then `just check` and nothing else, so a routine step
+  belongs in a recipe rather than a one-off command.
 - Keep the artifact portable across Linux, macOS, and Windows.
 - **Security is gate-level.** No secrets, credentials, or customer data in the
   tree; every grant least-privilege.
@@ -121,20 +112,14 @@ and contributors keep running the same thing.
 - On failure, print the exact error and a concrete suggested next action.
 - Treat all command output as context the next agent has to read.
 
-## Tests are context engineering
+## Parity is the contract each parser owes
 
-This is an agent-driven repo: the suite is the *only* QA loop.
-
-- **Never mock the layer under test.** `tests/e2e/` spawns the built binary with
-  `assert_cmd` and asserts exit code, stdout, and stderr against real fixture
-  trees; the ruff-parity journey runs the **real** pinned `ruff` (via uv) so a
-  claim of parity is proven, not asserted.
-- **Done means complete, not minimal:** every journey, happy path *and*
-  failure/recovery.
-- **Coverage is a floor** (95% lines, enforced), not the target.
-- **Parity is the contract worth naming:** for each tool parser, an e2e proving
-  the real tool *fails* without the suppression and *passes* with it, and that
-  notignored reports exactly that suppression. A parser without one is unproven.
+A parser is unproven until an e2e drives the **real** tool over a fixture and
+shows it *fails* without the suppression and *passes* with it, while notignored
+reports exactly that suppression. `tests/e2e/ruff_parity.rs` is the shape to
+copy; the tool is pinned so the proof is reproducible. Coverage (95%, enforced)
+is a floor that a mocked suite could also clear — parity is what makes the claim
+true.
 
 ## Keeping the allowlist current
 

@@ -86,7 +86,7 @@ setup-ruff:
 # just the data, moved.
 # Rewrite the checked-in golden report from the current output.
 bless:
-    NOTIGNORED_BLESS=1 cargo test --locked --test e2e json_format
+    @NOTIGNORED_BLESS=1 cargo test --quiet --locked --test e2e json_format
 
 # Upgrade dependencies, then re-run the full gate.
 upgrade:

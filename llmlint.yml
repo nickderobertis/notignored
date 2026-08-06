@@ -10,6 +10,12 @@ files:
   # List committed files that shouldn't be judged (lock files, generated output).
   exclude:
     - "**/.git/**"
+    # Composed verbatim by the create-repo skill (`compose_repo_plan.py
+    # --llmlint-config` and `assets/setup-llmlint.sh.template`). Editing them to
+    # local taste forks them from the template and loses the ability to
+    # re-compose, so they are generated output, not repo-authored code.
+    - "oneharness.toml"
+    - "scripts/setup-llmlint.sh"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-5.5
