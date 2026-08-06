@@ -13,7 +13,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || {
+  echo "$(basename "${BASH_SOURCE[0]}"): cannot enter the repository root $ROOT" >&2
+  echo "ACTION: run this from a checkout whose directories are readable, then re-run 'just bootstrap'" >&2
+  exit 1
+}
 
 MANIFEST="tests/js-toolchain"
 VENV=".dev/js"
