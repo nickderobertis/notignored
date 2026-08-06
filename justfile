@@ -88,13 +88,14 @@ doc:
 run *ARGS:
     cargo run --locked --quiet -- {{ARGS}}
 
-# Install the pinned ruff/mypy/pyright/ty the e2e parity suites drive (also run
-# by `bootstrap`).
+# Also run by `bootstrap`; this is the manual entry point. A recipe's doc is only
+# its LAST comment line, so the one-liners below have to stay one line.
+# Install the pinned ruff/mypy/pyright/ty the e2e parity suites drive.
 setup-python-tools:
     @bash scripts/setup-python-tools.sh
 
-# Install the pinned eslint/biome/tsc the e2e parity suite drives (also run by
-# `bootstrap`).
+# Also run by `bootstrap`; this is the manual entry point.
+# Install the pinned eslint/biome/tsc the e2e parity suites drive.
 setup-js:
     @bash scripts/setup-js.sh
 
