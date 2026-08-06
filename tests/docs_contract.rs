@@ -111,6 +111,37 @@ fn the_readme_report_example_is_a_valid_current_shape_report() {
     assert_eq!(parsed.version, notignored::REPORT_VERSION);
 }
 
+/// The TypeScript parity claim names the compiler it was proven against, and
+/// names the one actually installed.
+///
+/// TypeScript 7 is a different implementation from the 5.x compiler, so "we
+/// agree with tsc" is only true of a particular one. A version spelled out in
+/// prose rots the first time the pin moves; this is what makes moving the pin
+/// move the sentence.
+#[test]
+fn the_readme_names_the_typescript_the_parity_claim_is_pinned_to() {
+    let manifest =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/js-toolchain/package.json");
+    let pins: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&manifest)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", manifest.display())),
+    )
+    .expect("the JS toolchain manifest is valid JSON");
+    let pinned = pins["dependencies"]["typescript"]
+        .as_str()
+        .expect("the manifest pins a typescript version");
+
+    let tools = section(&readme(), "## Supported tools");
+    assert!(
+        tools.contains("tests/js-toolchain/package.json"),
+        "the README no longer says where the typescript parity pin lives"
+    );
+    assert!(
+        tools.contains(pinned),
+        "the README claims parity with a typescript other than the pinned {pinned}"
+    );
+}
+
 #[test]
 fn the_readme_documents_every_scope_the_contract_defines() {
     let output = section(&readme(), "## Output");

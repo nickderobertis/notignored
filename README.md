@@ -42,6 +42,13 @@ The installer honours `NOTIGNORED_VERSION` / `NOTIGNORED_INSTALL_DIR` (or the
 published beside it, and refuses to install a binary it cannot verify. Every
 tagged release attaches per-platform archives built on native runners.
 
+In CI there is nothing to install: the [GitHub Action](#on-a-pull-request-the-github-action)
+fetches the release binary itself and posts what the pull request added.
+
+```yaml
+      - uses: nickderobertis/notignored@main
+```
+
 ## Usage
 
 ```
@@ -230,6 +237,12 @@ Scope follows each tool's own rules, not a house convention:
 - **shellcheck** — a directive above the first command is `file`; anywhere else
   it is `next-line`. A directive ShellCheck itself rejects (trailing prose with
   no `#`, or one placed after a command) is reported by neither tool.
+- **typescript** — the parity claim is pinned to one compiler: the `typescript`
+  version in `tests/js-toolchain/package.json` — **7.0.2**, the Go port — which
+  is what `tests/e2e/typescript_parity.rs` drives. The 5.x compiler is a
+  different implementation of the same directives, and matches some of them more
+  strictly, so this repo claims parity with the pinned one rather than with
+  every `tsc` ever shipped.
 - **llmlint** — `ignore` is `line`, `ignore-file` is `file`, and
   `ignore-block` … `ignore-end` is one `block` record spanning both directives.
   A block left unclosed keeps a null `suppressed.end_line` and adds an `errors`

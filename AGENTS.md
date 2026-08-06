@@ -74,12 +74,17 @@ boundary — an envelope from a newer build — is rejected on deserialization.
 ## Adding a tool parser
 
 One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
-row in the README supported-tools table. Keep it to those three touch points so
-parallel branches don't conflict. Parsers consume the comments, attributes, and
-item punctuation `src/comments.rs` extracted — never re-scan raw lines, or string
-literals will be misread as comments. Grammar shared by a *family* of tools lives
-in a private sibling module (`src/tools/python.rs` serves mypy/pyright/ty); it is
-not a tool and stays out of the registry.
+row in the README supported-tools table, and one directive in
+`tests/fixtures/polyglot/` (re-bless with `just bless`). Keep it to those four
+touch points so parallel branches don't conflict. The fixture is not optional
+bookkeeping: `tests/e2e/polyglot.rs` fails when a registered tool is missing
+from that tree, and it is the only place a parser that quietly stopped applying
+— a narrowed language claim, a registry line lost in a merge — shows up, because
+every other suite asks its own parser directly. Parsers consume the comments,
+attributes, and item punctuation `src/comments.rs` extracted — never re-scan raw
+lines, or string literals will be misread as comments. Grammar shared by a
+*family* of tools lives in a private sibling module (`src/tools/python.rs` serves
+mypy/pyright/ty); it is not a tool and stays out of the registry.
 
 `ToolParser` is **fixed at three methods** returning directives and nothing else;
 `tests/tools_contract.rs` locks the signatures. A syntax that can be malformed in
