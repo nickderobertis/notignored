@@ -36,9 +36,9 @@ fn reported(stdout: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// Run the binary in `dir` with `args`, asserting the exit code and returning
-/// the suppressions it reported.
-fn diff_run(dir: &std::path::Path, args: &[&str], expected_code: i32) -> Vec<String> {
+/// Run the binary in `dir` with `args` and `--format json`, asserting the exit
+/// code and returning the suppressions it reported.
+fn run_json(dir: &std::path::Path, args: &[&str], expected_code: i32) -> Vec<String> {
     let output = notignored(dir)
         .args(args)
         .args(["--format", "json"])
@@ -67,11 +67,11 @@ fn bare_diff_reports_only_the_suppressions_the_change_added() {
         "import os  # noqa: F401\nvalue = 1\nurl = URL  # noqa: E501\n",
     );
 
-    assert_eq!(diff_run(root, &["--diff"], 0), vec!["app.py:3 E501"]);
+    assert_eq!(run_json(root, &["--diff"], 0), vec!["app.py:3 E501"]);
     // Without --diff the whole inventory is still reported: the flag narrows the
     // report, it does not change how anything is parsed.
     assert_eq!(
-        diff_run(root, &[], 0),
+        run_json(root, &[], 0),
         vec!["app.py:1 F401", "app.py:3 E501"]
     );
 }
@@ -98,14 +98,14 @@ fn a_plain_diff_base_compares_from_the_merge_base() {
     // Three-dot: only what this branch did. The base's later edit is not this
     // branch's suppression, even though the line differs from the base tip.
     assert_eq!(
-        diff_run(root, &["--diff", "--diff-base", "main"], 0),
+        run_json(root, &["--diff", "--diff-base", "main"], 0),
         vec!["app.py:2 F401"]
     );
 
     // An explicit range is the caller's own choice of semantics: git's raw
     // two-dot comparison against the base *tip*, base drift and all.
     assert_eq!(
-        diff_run(root, &["--diff", "--diff-base", "main..HEAD"], 0),
+        run_json(root, &["--diff", "--diff-base", "main..HEAD"], 0),
         vec!["app.py:2 F401", "base_only.py:1 E501"]
     );
 }
@@ -120,7 +120,7 @@ fn a_renamed_file_reports_only_what_the_change_added_to_it() {
 
     // A pure move: the suppression travelled, so nothing about it is new.
     git(root, &["mv", "old.py", "new.py"]);
-    assert!(diff_run(root, &["--diff"], 0).is_empty());
+    assert!(run_json(root, &["--diff"], 0).is_empty());
 
     // The same move, plus a line: only the added line is new.
     write(
@@ -128,7 +128,7 @@ fn a_renamed_file_reports_only_what_the_change_added_to_it() {
         "new.py",
         &format!("{original}url = URL  # noqa: E501\n"),
     );
-    assert_eq!(diff_run(root, &["--diff"], 0), vec!["new.py:7 E501"]);
+    assert_eq!(run_json(root, &["--diff"], 0), vec!["new.py:7 E501"]);
 }
 
 #[test]
@@ -145,16 +145,16 @@ fn staged_and_unstaged_changes_are_both_compared_against_head() {
 
     // `git diff HEAD` spans the index and the work tree, and so does this.
     assert_eq!(
-        diff_run(root, &["--diff"], 0),
+        run_json(root, &["--diff"], 0),
         vec!["staged.py:1 E501", "unstaged.py:1 F401"]
     );
 
     // Once committed there is nothing left to compare against HEAD...
     commit(root, "both suppressions");
-    assert!(diff_run(root, &["--diff"], 0).is_empty());
+    assert!(run_json(root, &["--diff"], 0).is_empty());
     // ...but the commit itself still is a change, against the commit before it.
     assert_eq!(
-        diff_run(root, &["--diff", "--diff-base", "HEAD~1"], 0),
+        run_json(root, &["--diff", "--diff-base", "HEAD~1"], 0),
         vec!["staged.py:1 E501", "unstaged.py:1 F401"]
     );
 }
@@ -170,11 +170,11 @@ fn positional_paths_narrow_the_change_and_an_empty_intersection_is_clean() {
     write(root, "tools/helper.py", "value = 2  # noqa: F401\n");
 
     assert_eq!(
-        diff_run(root, &["--diff", "src"], 0),
+        run_json(root, &["--diff", "src"], 0),
         vec!["src/app.py:1 E501"]
     );
     assert_eq!(
-        diff_run(root, &["--diff", "src/app.py", "tools"], 0),
+        run_json(root, &["--diff", "src/app.py", "tools"], 0),
         vec!["src/app.py:1 E501", "tools/helper.py:1 F401"]
     );
 
@@ -232,7 +232,7 @@ fn a_file_the_change_deleted_is_skipped_rather_than_reported_as_unreadable() {
     assert_eq!(reported(&output.stdout), vec!["kept.py:1 F401"]);
     // Naming the deleted path explicitly is accepted too — it is exactly what
     // `git diff --name-only` just said changed.
-    assert!(diff_run(root, &["--diff", "gone.py"], 0).is_empty());
+    assert!(run_json(root, &["--diff", "gone.py"], 0).is_empty());
 }
 
 /// The files a change did not touch are never even read — that is what keeps a
@@ -323,7 +323,7 @@ fn a_file_wide_suppression_above_the_change_is_not_reported_as_new() {
 
     // The added line is silenced by the file-wide directive, but the directive
     // itself is old: what the change added is a line, not a suppression.
-    assert!(diff_run(root, &["--diff"], 0).is_empty());
+    assert!(run_json(root, &["--diff"], 0).is_empty());
 }
 
 #[test]
@@ -373,6 +373,89 @@ fn diff_outside_a_git_repository_exits_two_with_a_way_out() {
     assert!(stderr.contains("not inside a git work tree"), "{stderr}");
     assert!(stderr.contains("hint:"), "{stderr}");
     assert!(stderr.contains("--diff"), "{stderr}");
+}
+
+/// A repository with nothing committed yet has no HEAD to compare against, so
+/// the comparison falls back to the index — a staged file is still a change
+/// someone is about to review, and must not fatal.
+#[test]
+fn a_repository_with_no_commit_yet_diffs_what_is_staged() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "import os  # noqa: F401\n");
+    git(root, &["add", "app.py"]);
+
+    assert_eq!(run_json(root, &["--diff"], 0), vec!["app.py:1 F401"]);
+}
+
+/// A base with no common ancestor cannot have a merge base, so the comparison
+/// falls back to git's plain two-dot diff: an unrelated base is still diffable
+/// rather than an error.
+#[test]
+fn a_base_sharing_no_history_is_still_compared() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "value = 1\n");
+    commit(root, "main baseline");
+
+    git(root, &["checkout", "-q", "--orphan", "unrelated"]);
+    write(root, "app.py", "value = 1  # noqa: E501\n");
+    commit(root, "unrelated baseline");
+
+    assert_eq!(
+        run_json(root, &["--diff", "--diff-base", "main"], 0),
+        vec!["app.py:1 E501"]
+    );
+}
+
+/// `--diff` needs git, and the way out has to be on the terminal: a missing git
+/// must not read as "this change added no suppressions".
+#[cfg(unix)]
+#[test]
+fn diff_without_git_on_the_path_exits_two_with_a_way_out() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "value = 1  # noqa: E501\n");
+    commit(root, "baseline");
+    let empty = tempfile::tempdir().unwrap();
+
+    let output = notignored(root)
+        .arg("--diff")
+        .env("PATH", empty.path())
+        .output()
+        .expect("run notignored");
+    assert_eq!(output.status.code(), Some(2), "{:?}", output.status);
+    assert!(
+        output.stdout.is_empty(),
+        "stdout should stay clean on error"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("git not found"), "{stderr}");
+    assert!(stderr.contains("install git"), "{stderr}");
+}
+
+/// A git that is on PATH but cannot be started is a different fault with a
+/// different fix, and says so.
+#[cfg(unix)]
+#[test]
+fn diff_with_a_git_that_cannot_be_started_exits_two_with_a_way_out() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "value = 1  # noqa: E501\n");
+    commit(root, "baseline");
+    // A `git` that is found but not executable.
+    let bin = tempfile::tempdir().unwrap();
+    fs::write(bin.path().join("git"), "#!/bin/sh\n").unwrap();
+
+    let output = notignored(root)
+        .arg("--diff")
+        .env("PATH", bin.path())
+        .output()
+        .expect("run notignored");
+    assert_eq!(output.status.code(), Some(2), "{:?}", output.status);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("cannot run git"), "{stderr}");
+    assert!(stderr.contains("executable"), "{stderr}");
 }
 
 #[test]

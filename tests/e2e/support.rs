@@ -124,7 +124,8 @@ pub fn git_repo() -> tempfile::TempDir {
     dir
 }
 
-/// Stage everything and commit it.
+/// Commit the whole work tree, deletions included, so what a journey wrote is
+/// exactly what the next diff is taken against.
 pub fn commit(dir: &Path, message: &str) {
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "-m", message]);
