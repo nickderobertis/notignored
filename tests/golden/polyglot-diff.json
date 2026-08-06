@@ -8,14 +8,14 @@
         "ANN001"
       ],
       "reason": "the gateway fixes this signature",
-      "path": "api/service.py",
-      "line": 14,
-      "end_line": 14,
-      "column": 22,
+      "path": "api/clean.py",
+      "line": 4,
+      "end_line": 4,
+      "column": 20,
       "raw": "# noqa: ANN001  # the gateway fixes this signature",
       "suppressed": {
-        "start_line": 14,
-        "end_line": 14
+        "start_line": 4,
+        "end_line": 4
       }
     },
     {

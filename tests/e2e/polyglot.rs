@@ -229,11 +229,13 @@ fn polyglot_branch() -> tempfile::TempDir {
     commit(root, "the tree as it stands");
 
     git(root, &["checkout", "-q", "-b", "feature"]);
+    // A file that carried no suppression at all gains one: the review case a
+    // whole-tree inventory cannot distinguish from the twenty-odd it inherited.
     append(
         root,
-        "api/service.py",
-        "\n\ndef fetch_all(ids):  # noqa: ANN001  # the gateway fixes this signature\n\
-         \x20   return [fetch(one) for one in ids]\n",
+        "api/clean.py",
+        "\n\ndef widths(rows):  # noqa: ANN001  # the gateway fixes this signature\n\
+         \x20   return [len(row) for row in rows]\n",
     );
     append(
         root,
@@ -310,13 +312,13 @@ fn the_diff_reports_the_changes_own_suppressions_and_none_it_inherited() {
     };
 
     let inherited = described(&["--format", "json"]);
-    assert_eq!(inherited.len(), 28, "{inherited:#?}");
+    assert_eq!(inherited.len(), 29, "{inherited:#?}");
 
     let added = described(&["--diff", "--diff-base", "main", "--format", "json"]);
     assert_eq!(
         added,
         vec![
-            "api/service.py:14 ruff",
+            "api/clean.py:4 ruff",
             "crates/lexer.rs:1 rust",
             "web/widget.ts:17 typescript",
         ]

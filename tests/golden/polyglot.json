@@ -104,6 +104,23 @@
       }
     },
     {
+      "tool": "llmlint",
+      "scope": "file",
+      "rules": [
+        "suppressions_justified"
+      ],
+      "reason": "fixture input, not production",
+      "path": "api/service.py",
+      "line": 13,
+      "end_line": 13,
+      "column": 3,
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
       "tool": "ruff",
       "scope": "file",
       "rules": [

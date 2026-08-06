@@ -2,13 +2,13 @@
 
 ### notignored: 3 suppressions
 
-- **ruff ANN001** — _the gateway fixes this signature_ — [api/service.py:14](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/api/service.py#L14)
+- **ruff ANN001** — _the gateway fixes this signature_ — [api/clean.py:4](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/api/clean.py#L4)
 
   ```python
-  12 |
-  13 |
-  14 | def fetch_all(ids):  # noqa: ANN001  # the gateway fixes this signature
-  15 |     return [fetch(one) for one in ids]
+  2 |
+  3 |
+  4 | def widths(rows):  # noqa: ANN001  # the gateway fixes this signature
+  5 |     return [len(row) for row in rows]
   ```
 
 - **rust dead\_code** — _error recovery lands with the next parser_ — [crates/lexer.rs:1](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/crates/lexer.rs#L1)
