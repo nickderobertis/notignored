@@ -220,14 +220,14 @@ pub fn eslint_passes(file: &Path, rules: &[&str]) -> bool {
         .is_some_and(|messages| messages.is_empty())
 }
 
-/// Run the pinned biome over `file`, returning whether it found any violation.
+/// Run the pinned biome over `file` with `rule` as the sole rule in play.
 ///
 /// Biome resolves its configuration by walking up from the working directory, so
 /// the run happens inside the fixture directory with an explicit `--config-path`:
 /// that pins the linter to the fixture's own `biome.json` and keeps any config
 /// above the repo out of the result. `--only` makes the rule under test the sole
 /// one in play.
-pub fn biome_passes(file: &Path, rule: &str) -> bool {
+fn biome_lint(file: &Path, rule: &str, extra: &[&str]) -> std::process::Output {
     let directory = file.parent().expect("a fixture directory");
     let name = file.file_name().expect("a fixture file name");
     let output = Command::new(js_binary("biome"))
@@ -237,6 +237,7 @@ pub fn biome_passes(file: &Path, rule: &str) -> bool {
             "--config-path=biome.json",
             &format!("--only={rule}"),
         ])
+        .args(extra)
         .arg(name)
         .output()
         .expect("run biome lint");
@@ -249,7 +250,47 @@ pub fn biome_passes(file: &Path, rule: &str) -> bool {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    output.status.success()
+    output
+}
+
+/// Whether the pinned biome found any violation in `file`.
+pub fn biome_passes(file: &Path, rule: &str) -> bool {
+    biome_lint(file, rule, &[]).status.success()
+}
+
+/// Every diagnostic the pinned biome emits for `file`, as `(category, message,
+/// start line)`, newest-reported first as biome orders them.
+///
+/// The pretty output biome writes to stderr is meant for humans and re-flows; its
+/// JSON reporter carries the same text as data, so an assertion here is on
+/// biome's own wording rather than on a rendering of it.
+///
+/// This is what proves the `biome-ignore-start` / `-end` pairing rule: a
+/// mismatched or unclosed range is only a *warning*, so biome still exits 0 and
+/// [`biome_passes`] cannot tell the two apart.
+pub fn biome_diagnostics(file: &Path, rule: &str) -> Vec<(String, String, u64)> {
+    let output = biome_lint(file, rule, &["--reporter=json", "--colors=off"]);
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "biome did not emit a JSON report: {error}\n{}",
+                String::from_utf8_lossy(&output.stdout)
+            )
+        });
+    report["diagnostics"]
+        .as_array()
+        .unwrap_or_else(|| panic!("biome's JSON report has no diagnostics array: {report:#}"))
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic["category"].as_str().unwrap_or_default().into(),
+                diagnostic["message"].as_str().unwrap_or_default().into(),
+                diagnostic["location"]["start"]["line"]
+                    .as_u64()
+                    .unwrap_or_default(),
+            )
+        })
+        .collect()
 }
 
 /// Run the pinned tsc over `file`, returning whether it type-checked cleanly.
