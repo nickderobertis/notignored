@@ -147,6 +147,11 @@ on Windows two spellings of the same path (`d:/a/…` vs the verbatim `\\?\D:\a\
 `canonicalize` returns) match on neither case, separator, nor prefix. The Linux
 gate cannot see any of that; `support::paths` proves it with hand-written paths.
 
+A fixture holding the *reason-less* form of a directive earns its keep with an
+`llmlint: ignore-file[suppressions_justified]` footer — adding a reason instead
+would delete the only coverage of that form. Put it after the code so the line
+numbers the assertions cite do not move.
+
 For a family of forms, `tests/e2e/python_types_parity.rs` scales it: every
 fixture is the *same* program with a directive in a different slot, one test
 asserts they differ only in comments, and one checker run per tool decides the

@@ -90,6 +90,11 @@ for entry in "${TOOLS[@]}"; do
     exit 1
   fi
 
+  # llmlint: ignore[changed_behavior_has_e2e] forcing `rm -rf` to fail needs a
+  # directory the test process cannot write, which root — the user in many CI
+  # containers — is exempt from; the test would silently stop proving anything
+  # there. The branch it guards is one echo pair, and every other failure path in
+  # this script is driven for real by tests/e2e/python_tools_setup.rs.
   rm -rf "$VENV" || {
     echo "setup-python-tools: cannot remove the stale venv at $ROOT/$VENV" >&2
     echo "ACTION: delete it by hand (it may be in use), then re-run 'just setup-python-tools'" >&2
@@ -106,6 +111,11 @@ for entry in "${TOOLS[@]}"; do
     exit 1
   }
 
+  # llmlint: ignore[changed_behavior_has_e2e] this fires only when uv reports a
+  # successful install of `$TOOL==$PIN` that then reports a different version —
+  # reachable only by serving a mislabelled wheel from a fake index, which would
+  # prove the fake index. It is the backstop for exactly the case the rest of the
+  # script cannot detect, so it stays.
   BIN="$(tool_binary "$VENV" "$TOOL")"
   if [ -z "$BIN" ] || ! is_pinned "$BIN" "$TOOL" "$PIN"; then
     echo "setup-python-tools: $TOOL $PIN installed but does not report that version" >&2

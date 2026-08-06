@@ -3,6 +3,21 @@
   "ignores": [
     {
       "tool": "mypy",
+      "scope": "file",
+      "rules": [],
+      "reason": null,
+      "path": "malformed/disable_error_code_no_value.py",
+      "line": 6,
+      "end_line": 6,
+      "column": 1,
+      "raw": "# mypy: disable-error-code",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "mypy",
       "scope": "line",
       "rules": [
         "import-not-found"
@@ -127,6 +142,40 @@
       "end_line": 7,
       "column": 16,
       "raw": "# pyright: ignore[reportArgumentType]  # upstream stub is wrong",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "pyright",
+      "scope": "line",
+      "rules": [
+        "reportArgumentType"
+      ],
+      "reason": null,
+      "path": "pyright/embedded.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 36,
+      "raw": "# pyright: ignore[reportArgumentType]",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "ty",
+      "scope": "line",
+      "rules": [
+        "invalid-argument-type"
+      ],
+      "reason": null,
+      "path": "ty/embedded.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 36,
+      "raw": "# ty: ignore[invalid-argument-type]",
       "suppressed": {
         "start_line": 7,
         "end_line": 7

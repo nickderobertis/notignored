@@ -107,20 +107,7 @@ pub fn ruff_passes(file: &Path, rule: &str) -> bool {
 /// `--config-file` is explicit and the cache goes to a scratch directory: neither
 /// a developer's own mypy settings nor a stale cache may decide the verdict.
 pub fn mypy_failures(cwd: &Path, config: &str, targets: &[&str]) -> Vec<String> {
-    let cache = tempfile::tempdir().expect("scratch mypy cache");
-    let output = Command::new(tool_binary("mypy"))
-        .current_dir(cwd)
-        .args(["--config-file", config])
-        .args([
-            "--no-incremental",
-            "--no-error-summary",
-            "--no-color-output",
-        ])
-        .arg("--cache-dir")
-        .arg(cache.path())
-        .args(targets)
-        .output()
-        .expect("run mypy");
+    let output = run_mypy(cwd, config, targets);
     // 0 is clean and 1 is "found errors"; anything else (a missing fixture, a bad
     // config) would otherwise read as "every file passed".
     assert_checker_ran("mypy", &output);
@@ -134,6 +121,35 @@ pub fn mypy_failures(cwd: &Path, config: &str, targets: &[&str]) -> Vec<String> 
             .filter(|line| line.contains(": error:"))
             .filter_map(|line| split_path_field(line).map(|(path, _)| path)),
     )
+}
+
+/// Whether the pinned mypy gives `target` a clean bill of health.
+///
+/// [`mypy_failures`] insists mypy exited 0 or 1, because for a well-formed
+/// fixture anything else means the run itself broke. A *malformed* directive is
+/// the one case where that guard is wrong: mypy may refuse the file outright
+/// rather than diagnose it, and "mypy did not pass this" is the claim either way.
+pub fn mypy_passes(cwd: &Path, config: &str, target: &str) -> bool {
+    run_mypy(cwd, config, &[target]).status.success()
+}
+
+/// Run the pinned mypy over `targets` with the developer's own settings and any
+/// stale cache kept out of the verdict.
+fn run_mypy(cwd: &Path, config: &str, targets: &[&str]) -> std::process::Output {
+    let cache = tempfile::tempdir().expect("scratch mypy cache");
+    Command::new(tool_binary("mypy"))
+        .current_dir(cwd)
+        .args(["--config-file", config])
+        .args([
+            "--no-incremental",
+            "--no-error-summary",
+            "--no-color-output",
+        ])
+        .arg("--cache-dir")
+        .arg(cache.path())
+        .args(targets)
+        .output()
+        .expect("run mypy")
 }
 
 /// Which of `targets` the pinned ty still reports a diagnostic in.

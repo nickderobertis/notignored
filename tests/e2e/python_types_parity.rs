@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::support::{
-    fixture, mypy_failures, notignored, parse_report, pyright_failures, ruff_passes, ty_failures,
+    fixture, mypy_failures, mypy_passes, notignored, parse_report, pyright_failures, ruff_passes,
+    ty_failures,
 };
 
 fn family_dir() -> PathBuf {
@@ -99,14 +100,22 @@ fn record(
 /// code alone. The fixtures keep no `#` inside a string literal, which is what
 /// lets a cut at the first `#` stand in for a parse.
 fn without_comments(source: &str) -> String {
-    source
+    let mut code: Vec<&str> = source
         .lines()
         .map(|line| match line.find('#') {
             Some(hash) => line[..hash].trim_end(),
             None => line.trim_end(),
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect();
+    // Some fixtures close with a comment block (an `llmlint: ignore-file`
+    // directive earning the reason-less form its keep). That is not code, and it
+    // sits after every line these assertions cite, so it must not make two
+    // identical programs read as different. Blank lines *between* code still
+    // count: those shift the line numbers the parity tests pin.
+    while code.last().is_some_and(|line| line.is_empty()) {
+        code.pop();
+    }
+    code.join("\n")
 }
 
 fn read_fixture(path: &str) -> String {
@@ -121,6 +130,7 @@ const MYPY_FIXTURES: &[&str] = &[
     "mypy/line_codes.py",
     "mypy/ignore_errors.py",
     "mypy/disable_error_code.py",
+    "mypy/trailing_config.py",
 ];
 
 const PYRIGHT_FIXTURES: &[&str] = &[
@@ -128,6 +138,7 @@ const PYRIGHT_FIXTURES: &[&str] = &[
     "pyright/blanket.py",
     "pyright/codes.py",
     "pyright/mode_switch.py",
+    "pyright/embedded.py",
 ];
 
 const TY_FIXTURES: &[&str] = &[
@@ -136,6 +147,7 @@ const TY_FIXTURES: &[&str] = &[
     "ty/line_codes.py",
     "ty/file_header.py",
     "ty/next_line.py",
+    "ty/embedded.py",
 ];
 
 #[test]
@@ -155,13 +167,51 @@ fn fixtures_differ_only_in_their_comments() {
         without_comments(&read_fixture("mixed/suppressed.py")),
         without_comments(&read_fixture("mixed/unsuppressed.py"))
     );
+    assert_eq!(
+        without_comments(&read_fixture(MALFORMED_FIXTURE)),
+        without_comments(&read_fixture(MYPY_FIXTURES[0]))
+    );
+}
+
+/// `# mypy: disable-error-code` with nothing assigned to it.
+///
+/// It cannot join [`MYPY_FIXTURES`]: one mypy run decides that whole family, and
+/// mypy 2.3.0 does not merely reject this form — it aborts with an internal
+/// error, which would take every sibling verdict down with it.
+const MALFORMED_FIXTURE: &str = "malformed/disable_error_code_no_value.py";
+
+/// A directive that silences nothing is exactly what a reviewer needs to see, so
+/// the parser reports it rather than dropping it as unparseable.
+#[test]
+fn a_valueless_disable_error_code_suppresses_nothing_and_is_reported_anyway() {
+    assert!(
+        !mypy_passes(&family_dir(), "mypy.ini", MALFORMED_FIXTURE),
+        "real mypy now accepts `# mypy: disable-error-code` with no value — the \
+         form suppresses something after all, so its scope and rules have to be \
+         re-derived from the tool"
+    );
+    assert_eq!(
+        records_for(MALFORMED_FIXTURE),
+        vec![record(
+            "mypy",
+            "file",
+            &[],
+            None,
+            (6, 1),
+            "# mypy: disable-error-code",
+            None,
+        )]
+    );
 }
 
 #[test]
 fn real_mypy_is_flipped_by_every_directive_the_parser_claims() {
     assert_eq!(
         mypy_failures(&family_dir(), "mypy.ini", MYPY_FIXTURES),
-        vec!["mypy/violation.py"],
+        // `# mypy: ignore-errors` behind code on the same line is not inline
+        // config — mypy reads that form only from a comment owning its line, so
+        // the call is still an error and the parser must report nothing.
+        vec!["mypy/trailing_config.py", "mypy/violation.py"],
         "real mypy disagrees about which fixtures are suppressed; the fixtures, \
          the grammar, or the pin drifted"
     );
@@ -241,6 +291,9 @@ fn the_cli_describes_every_mypy_directive_exactly() {
                 None,
             )],
         ),
+        // Inline config behind code is not config; reporting it would put a
+        // suppression in front of a reviewer that suppresses nothing.
+        ("mypy/trailing_config.py", vec![]),
     ]);
 
     for (path, records) in expected {
@@ -275,6 +328,21 @@ fn the_cli_describes_every_pyright_directive_exactly() {
                 Some("upstream stub is wrong"),
                 (7, 16),
                 "# pyright: ignore[reportArgumentType]  # upstream stub is wrong",
+                Some(7),
+            )],
+        ),
+        (
+            // Real pyright honours a directive that opens no comment, so the
+            // record starts at the directive — not at the prose before it, which
+            // is someone else's comment and not this suppression's reason.
+            "pyright/embedded.py",
+            vec![record(
+                "pyright",
+                "line",
+                &["reportArgumentType"],
+                None,
+                (7, 36),
+                "# pyright: ignore[reportArgumentType]",
                 Some(7),
             )],
         ),
@@ -336,6 +404,21 @@ fn the_cli_describes_every_ty_directive_exactly() {
                 Some("the call below is deliberately wrong"),
                 (6, 1),
                 "# ty: ignore[invalid-argument-type]  # the call below is deliberately wrong",
+                Some(7),
+            )],
+        ),
+        (
+            // Real ty honours a directive that opens no comment. Behind code on
+            // the same line it is a `line` directive, not the `next-line` form —
+            // only a comment that owns its line reaches the line below.
+            "ty/embedded.py",
+            vec![record(
+                "ty",
+                "line",
+                &["invalid-argument-type"],
+                None,
+                (7, 36),
+                "# ty: ignore[invalid-argument-type]",
                 Some(7),
             )],
         ),
