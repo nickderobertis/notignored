@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: most jobs only need to read the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The full gate on a clean checkout: bootstrap from scratch, then `just check`
+  # (format, clippy, tests incl. e2e with the coverage threshold, docs).
+  # Linux-only because coverage is measured here; macOS/Windows prove the
+  # artifact via the `cross` job below.
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest,cargo-llvm-cov
+      - name: Bootstrap
+        run: just bootstrap
+      - name: Full gate (fmt, clippy, tests + coverage, docs)
+        run: just check
+      # A committed lockfile that `just bootstrap`/`just check` had to change is
+      # a stale generated file; fail rather than let it drift.
+      - name: Committed generated files are up to date
+        run: git diff --exit-code -- Cargo.lock
+
+  # Prove the artifact builds and its tests pass on macOS and Windows (without
+  # the coverage threshold, which is enforced on Linux).
+  cross:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest
+      - name: Format + lint
+        run: just fmt-check && just lint
+      - name: Install the pinned ruff the parity suite drives
+        run: bash scripts/setup-ruff.sh
+      - name: Tests (unit + integration + e2e)
+        run: cargo nextest run --locked
+
+  # Advisory + license audit and unused-dependency check. Its own Linux-only job:
+  # it needs a network advisory DB and must not be duplicated across the matrix.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete
+      - run: cargo deny check
+      - run: cargo machete
+
+  # Prove the end-user install path on every platform: install the binary the
+  # documented way and smoke-test the real artifact. `cargo install --path .` is
+  # the same code path as the documented `cargo install --git <url>`, minus the
+  # fetch — so the path users take is exercised on every PR, not only after a
+  # release.
+  install:
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install (recommended end-user method)
+        run: cargo install --path . --locked
+      - name: Smoke-test the installed binary
+        run: |
+          notignored --version
+          notignored --help >/dev/null
+          tmp="$(mktemp -d)"
+          printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
+          notignored "$tmp" --format json | grep -q '"E501"'
+          notignored "$tmp" --fail-if-found && exit 1 || [ $? -eq 1 ]
+
+  # Lint the PR title: under squash-merge it becomes the release-driving commit.
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The LLM-judge tier: a blocking PR check, separate from the deterministic
+  # `check` gate. It requires its harness credential and fails fast without it —
+  # a credential-less no-op would report unlinted files as clean. Fork PRs are
+  # gated by the repo's require-approval-for-fork-workflows setting.
+  llmlint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v6
+      - name: Install llmlint toolchain
+        run: ./scripts/setup-llmlint.sh
+      - name: Validate llmlint config
+        run: just lint-llm-validate --diff-base origin/main
+      - name: Lint changed files
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::llmlint needs OPENAI_API_KEY for the Codex harness" >&2
+            exit 1
+          fi
+          just lint-llm-diff origin/main

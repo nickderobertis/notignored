@@ -1,0 +1,125 @@
+name: Release
+
+# Build, archive, checksum, and attach the cross-platform binaries for a
+# published GitHub Release.
+#
+# The Release itself is created by release-plz (see release-plz.yml) when a
+# version-bump PR merges. Because release-plz authenticates with a PAT, that
+# Release fires the `release: published` event below — the default GITHUB_TOKEN
+# would not, and the binaries would silently never build.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # crates.io publishing self-activates once the CARGO_REGISTRY_TOKEN secret
+  # exists. `secrets` cannot be read in a job `if:`, so read it into an env var
+  # here and expose its presence as an output the publish job gates on.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - id: check
+        env:
+          TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "CARGO_REGISTRY_TOKEN not set; skipping crates.io publish." >&2
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Re-gate the release on the same checks CI enforces, so a tag can never
+  # publish an artifact that would not pass the gate.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest
+      - run: just lint
+      - run: bash scripts/setup-ruff.sh
+      - run: cargo nextest run --locked
+
+  upload:
+    name: upload (${{ matrix.target }})
+    needs: test
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Native runners per target so nothing needs cross-compilation.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build, archive, checksum, and upload
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: notignored
+          target: ${{ matrix.target }}
+          # The asset-naming contract. scripts/install.sh spells this template
+          # identically (see its ASSET_NAME_TEMPLATE marker) and
+          # tests/install_contract.rs fails the build if the two ever drift.
+          archive: $bin-$tag-$target
+          checksum: sha256
+          include: README.md,LICENSE,CHANGELOG.md
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # crates.io publishing: runs whenever CARGO_REGISTRY_TOKEN is set. Gated on the
+  # same `test` job as the binary upload, but NOT on `upload` — a flaky
+  # per-platform upload must not block the immutable crate publish, and vice
+  # versa. Kept out of release-plz (publish = false there) so versioning/tagging
+  # stays decoupled from the registry push.
+  publish-crate:
+    needs: [guard, test]
+    if: ${{ needs.guard.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Idempotent: a version already live on crates.io is skipped rather than
+      # failing the release, so re-running after a partial failure is safe.
+      - name: Publish (skip a version already live)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          ver="$(cargo metadata --no-deps --format-version 1 \
+                 | sed -n 's/.*"name":"notignored","version":"\([^"]*\)".*/\1/p')"
+          if curl -fsSL "https://index.crates.io/no/ti/notignored" 2>/dev/null \
+             | grep -q "\"vers\":\"$ver\""; then
+            echo "notignored $ver is already on crates.io; nothing to publish."
+            exit 0
+          fi
+          cargo publish --locked
