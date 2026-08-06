@@ -21,10 +21,11 @@ files:
     - "tests/fixtures/llmlint-parity/**"
     # Generated output, and unfixable in place: a block record folds its closing
     # `ignore-end` in rather than emitting a second record (the ignore-record
-    # contract), so this file quotes an ignore-block's text with no matching end
+    # contract), so these files quote an ignore-block's text with no matching end
     # and `check-ignores` reads it as unclosed. `tests/golden/report.json` is NOT
     # exempt — it holds no block — and neither is any hand-written file.
     - "tests/golden/tools-report.json"
+    - "tests/golden/polyglot.json"
     # Composed verbatim by the create-repo skill (`compose_repo_plan.py
     # --llmlint-config` and `assets/setup-llmlint.sh.template`). Editing them to
     # local taste forks them from the template and loses the ability to

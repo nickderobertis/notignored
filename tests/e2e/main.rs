@@ -16,6 +16,7 @@ mod eslint_parity;
 mod installer;
 mod llmlint_parity;
 mod markdown;
+mod polyglot;
 mod python_tools_setup;
 mod python_types_parity;
 mod ruff_grammar;
