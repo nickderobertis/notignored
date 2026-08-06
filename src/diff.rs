@@ -340,14 +340,19 @@ fn parse_name_status(output: &str, command: &str) -> Result<Vec<ChangedFile>, Di
     let mut fields = output.split('\0').filter(|field| !field.is_empty());
     let mut files = Vec::new();
     while let Some(status) = fields.next() {
-        let paired = status.starts_with('R') || status.starts_with('C');
-        // A record cut short means git named a change without naming its file.
-        // Answering from the records that did arrive would report on a change we
-        // only partly know, so it is a failure instead.
-        let truncated = || DiffError::Malformed {
+        // A record cut short, or one whose status this build does not know,
+        // means git described a change in terms we cannot act on. Answering from
+        // the records that did arrive would report on a change we only partly
+        // know, so either is a failure instead.
+        let malformed = |detail: String| DiffError::Malformed {
             command: command.to_string(),
-            detail: format!("record {status:?} names no path"),
+            detail,
         };
+        let paired = match status_kind(status) {
+            Some(paired) => paired,
+            None => return Err(malformed(format!("unknown status {status:?}"))),
+        };
+        let truncated = || malformed(format!("record {status:?} names no path"));
         let first = fields.next().ok_or_else(truncated)?;
         if !paired {
             files.push(ChangedFile {
@@ -363,6 +368,25 @@ fn parse_name_status(output: &str, command: &str) -> Result<Vec<ChangedFile>, Di
         });
     }
     Ok(files)
+}
+
+/// Whether a `--name-status` status field names a two-path (rename or copy)
+/// change, or `None` when git named a status this build does not know.
+///
+/// Only `R`/`C` carry a similarity score and a second path; `X` is git's own
+/// "this is a bug" marker and is not something to report a change from.
+fn status_kind(status: &str) -> Option<bool> {
+    let (letter, score) = status.split_at(
+        status
+            .char_indices()
+            .nth(1)
+            .map_or(status.len(), |(i, _)| i),
+    );
+    match letter {
+        "R" | "C" if score.chars().all(|c| c.is_ascii_digit()) => Some(true),
+        "A" | "D" | "M" | "T" | "U" if score.is_empty() => Some(false),
+        _ => None,
+    }
 }
 
 /// Whether `selector` names `candidate` or a directory holding it.
@@ -707,6 +731,31 @@ mod tests {
             let error = parse_name_status(truncated, command).unwrap_err();
             assert!(matches!(error, DiffError::Malformed { .. }), "{error:?}");
             assert!(error.to_string().contains("names no path"), "{error}");
+        }
+
+        // A status this build does not know — git's own "unknown" marker, or a
+        // field that is not a status at all — is not read as a plain change.
+        for unknown in ["X\0a.py\0", "M100\0a.py\0", "a.py\0M\0"] {
+            let error = parse_name_status(unknown, command).unwrap_err();
+            assert!(error.to_string().contains("unknown status"), "{error}");
+        }
+        // Every status git does define is understood.
+        for (record, renamed_from) in [
+            ("A\0a.py\0", None),
+            ("D\0a.py\0", None),
+            ("T\0a.py\0", None),
+            ("U\0a.py\0", None),
+            ("C75\0old.py\0a.py\0", Some("old.py")),
+            ("R\0old.py\0a.py\0", Some("old.py")),
+        ] {
+            let files = parse_name_status(record, command).unwrap();
+            assert_eq!(files.len(), 1, "{record:?}");
+            assert_eq!(files[0].path, PathBuf::from("a.py"), "{record:?}");
+            assert_eq!(
+                files[0].renamed_from,
+                renamed_from.map(PathBuf::from),
+                "{record:?}"
+            );
         }
         assert_eq!(
             parse_name_status("M\0a.py\0A\0b.py\0", command).unwrap(),
