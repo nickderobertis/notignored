@@ -85,6 +85,10 @@ notignored: 1 ignore in 1 file
 - Only the files the change touched are read, so a diff run stays fast on a
   large repository. Files the change deleted are skipped; a renamed file reports
   what the change added to it, not the lines that merely moved.
+- Git names a file in bytes and a report names it with a string, so a path that
+  is not valid UTF-8 has no faithful spelling here. It becomes an `errors` entry
+  (and exit 2) rather than a file quietly dropped from the review — the lossy
+  spelling would name a file that does not exist.
 
 `--diff` shells out to `git` — infrastructure, not one of the linters whose
 directives are parsed natively — so it needs `git` on `PATH` and a work tree.
