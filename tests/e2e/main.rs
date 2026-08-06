@@ -13,6 +13,7 @@ mod biome_parity;
 mod cli;
 mod diff;
 mod eslint_parity;
+mod examples;
 mod installer;
 mod js_tools_setup;
 mod llmlint_parity;
