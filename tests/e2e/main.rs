@@ -25,4 +25,5 @@ mod ruff_grammar;
 mod ruff_parity;
 mod rust_parity;
 mod shellcheck_parity;
+mod symlinked_root;
 mod typescript_parity;
