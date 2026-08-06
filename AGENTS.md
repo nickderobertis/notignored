@@ -158,7 +158,22 @@ asserts they differ only in comments, and one checker run per tool decides the
 whole family. That keeps a slow checker (pyright) to a single invocation and
 makes `violation.py` a control rather than a separate program.
 
-Pin each checker in `.<tool>-version` and add it to `scripts/setup-python-tools.sh`.
+Two installers, both run by `just bootstrap` and both installing under the
+gitignored `.dev/`: `scripts/setup-python-tools.sh` reads a `.<tool>-version`
+pin per Python checker (needs `uv`), and `scripts/setup-js.sh` reads
+`tests/js-toolchain/package.json` for eslint/biome/tsc (needs Node). Pin a new
+checker in whichever of the two owns its ecosystem — never add a third.
+
+Where a tool parses its own reason — eslint's ` -- ` description, in
+`suppressedMessages[].suppressions[].justification` — the e2e asserts our
+extraction against *its* reading, not against a literal.
+
+Not every parity proof can be a pass/fail flip. A mismatched or unclosed
+`biome-ignore-start` is only a *warning* in biome, which still exits 0 and still
+honours the range to end-of-file, so exit status cannot discriminate it. Those
+journeys assert on biome's own diagnostic text via `--reporter=json`
+(`support::biome_diagnostics`) instead. Reach for that shape only where the tool
+genuinely has no failing exit to offer.
 
 ## Keeping the allowlist current
 

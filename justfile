@@ -24,7 +24,7 @@ default:
     @just --list
 
 # Installs toolchain components, the pinned cargo dev tools, deps, and the
-# pinned Python tools the e2e parity suites drive.
+# pinned Python and JS/TS tools the e2e parity suites drive.
 # Set up the project from a clean clone.
 bootstrap:
     @rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
@@ -34,6 +34,7 @@ bootstrap:
     @just _ensure-tool cargo-llvm-cov
     @cargo fetch --locked --quiet
     @bash scripts/setup-python-tools.sh
+    @bash scripts/setup-js.sh
 
 # These are test runners, not rules: their version cannot change the gate's
 # verdict, so both here and CI take the latest rather than keeping two pins that
@@ -74,7 +75,7 @@ test:
 test-quick:
     @cargo nextest run --locked --status-level fail
 
-# Drives the compiled binary and the real pinned Python tools — never a stub.
+# Drives the compiled binary and the real pinned checkers — never a stub.
 # The end-to-end binary journeys in isolation (also run by `test`/`check`).
 test-e2e:
     @cargo nextest run --locked -E 'binary(e2e)' --status-level fail
@@ -87,10 +88,16 @@ doc:
 run *ARGS:
     cargo run --locked --quiet -- {{ARGS}}
 
-# Install the pinned ruff/mypy/pyright/ty the e2e parity suites drive (also run
-# by `bootstrap`).
+# Also run by `bootstrap`; this is the manual entry point. A recipe's doc is only
+# its LAST comment line, so the one-liners below have to stay one line.
+# Install the pinned ruff/mypy/pyright/ty the e2e parity suites drive.
 setup-python-tools:
     @bash scripts/setup-python-tools.sh
+
+# Also run by `bootstrap`; this is the manual entry point.
+# Install the pinned eslint/biome/tsc the e2e parity suites drive.
+setup-js:
+    @bash scripts/setup-js.sh
 
 # Only after reviewing the diff — and bump REPORT_VERSION when the shape, not
 # just the data, moved.
