@@ -9,6 +9,18 @@ use std::io::{self, Write};
 
 use crate::model::{IgnoreDirective, Report};
 
+/// Report every scan error on `err`.
+///
+/// Called for **both** formats: a JSON run pipes stdout to a file, so leaving
+/// its errors only inside the envelope would exit 2 with nothing on the
+/// terminal to explain why.
+pub fn narrate_errors(report: &Report, err: &mut dyn Write) -> io::Result<()> {
+    for error in &report.errors {
+        writeln!(err, "notignored: error: {}: {}", error.path, error.message)?;
+    }
+    Ok(())
+}
+
 /// Write the report as one line per suppression, with a summary on `err`.
 pub fn render_human(report: &Report, out: &mut dyn Write, err: &mut dyn Write) -> io::Result<()> {
     for directive in &report.ignores {
@@ -16,9 +28,6 @@ pub fn render_human(report: &Report, out: &mut dyn Write, err: &mut dyn Write) -
     }
     out.flush()?;
 
-    for error in &report.errors {
-        writeln!(err, "notignored: error: {}: {}", error.path, error.message)?;
-    }
     let files: BTreeSet<&str> = report.ignores.iter().map(|d| d.path.as_str()).collect();
     writeln!(
         err,
@@ -145,9 +154,10 @@ mod tests {
             path: "a.py".into(),
             message: "boom".into(),
         });
-        let (out, err) = human(&report);
-        assert!(out.is_empty());
-        assert!(err.contains("notignored: error: a.py: boom"), "{err}");
+        let mut err = Vec::new();
+        narrate_errors(&report, &mut err).unwrap();
+        let err = String::from_utf8(err).unwrap();
+        assert_eq!(err, "notignored: error: a.py: boom\n");
     }
 
     #[test]

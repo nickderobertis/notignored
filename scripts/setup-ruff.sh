@@ -18,14 +18,9 @@ cd "$ROOT"
 PIN="$(tr -d '[:space:]' < .ruff-version)"
 # `.ruff-version` feeds a package requirement, so validate its shape before use
 # rather than letting arbitrary file contents reach the resolver.
-# Reject anything outside digits and dots before checking the X.Y.Z shape, so no
-# extra requirement specifier or shell metacharacter can reach the resolver.
-case "$PIN" in
-  *[!0-9.]* | *..*) PIN="" ;;
-  [0-9]*.[0-9]*.[0-9]*) ;;
-  *) PIN="" ;;
-esac
-if [ -z "$PIN" ]; then
+# Exactly three numeric components: a glob alone would let `1.2.3.4` — or a
+# trailing requirement specifier — reach the resolver.
+if ! printf '%s' "$PIN" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "setup-ruff: .ruff-version must hold a version like 0.16.1" >&2
   echo "ACTION: write a published ruff version (see https://pypi.org/project/ruff/#history)" >&2
   exit 1

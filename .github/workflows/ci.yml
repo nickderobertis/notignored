@@ -25,9 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy, llvm-tools
+      - name: Install the toolchain pinned in rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v6
       - uses: taiki-e/install-action@v2
@@ -55,9 +54,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install the toolchain pinned in rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v6
       - uses: taiki-e/install-action@v2
@@ -120,7 +118,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain pinned in rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Install (recommended end-user method)
         run: cargo install --path . --locked

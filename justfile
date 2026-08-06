@@ -6,12 +6,6 @@
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
-# Pinned cargo dev tools the gate drives but the toolchain doesn't ship.
-# `just bootstrap` installs these; CI installs the latest via
-# taiki-e/install-action. Keep in sync with .github/workflows/ci.yml.
-nextest-version := "0.9.140"
-llvmcov-version := "0.8.7"
-
 # The MSRV has one source of truth — Cargo.toml's `rust-version` — so `just msrv`
 # cannot promise a floor the manifest no longer declares. CI reads the same field.
 msrv-version := `sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml`
@@ -28,15 +22,17 @@ default:
 # Set up the project from a clean clone.
 bootstrap:
     @rustup component add rustfmt clippy llvm-tools >/dev/null
-    @just _ensure-tool cargo-nextest {{nextest-version}}
-    @just _ensure-tool cargo-llvm-cov {{llvmcov-version}}
+    @just _ensure-tool cargo-nextest
+    @just _ensure-tool cargo-llvm-cov
     @cargo fetch --locked --quiet
     @bash scripts/setup-ruff.sh
 
-# Install a pinned cargo tool if it is missing. Quiet when already present.
-_ensure-tool tool version:
-    @command -v {{tool}} >/dev/null 2>&1 \
-      || cargo install {{tool}} --version {{version}} --locked --quiet
+# These are test runners, not rules: their version cannot change the gate's
+# verdict, so both here and CI take the latest rather than keeping two pins that
+# drift apart.
+# Install a cargo dev tool if it is missing. Quiet when already present.
+_ensure-tool tool:
+    @command -v {{tool}} >/dev/null 2>&1 || cargo install {{tool}} --locked --quiet
 
 # Format check, lint, tests (unit + integration + e2e) with coverage enforced,
 # and docs. Fails on any issue; no warnings-only mode.

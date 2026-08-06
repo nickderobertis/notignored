@@ -86,23 +86,34 @@ detect_target() {
 fetch() {
     if have curl; then curl -fsSL ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} "$1" -o "$2"
     elif have wget; then wget -qO "$2" "$1"
-    else err "neither curl nor wget is available"
+    else err "neither curl nor wget is available; install one and re-run the installer"
     fi
 }
 
 resolve_latest() {
     api="https://api.github.com/repos/$REPO/releases/latest"
     tmp="$WORK/latest.json"
-    fetch "$api" "$tmp" || err "cannot reach the GitHub API to resolve the latest release"
+    fetch "$api" "$tmp" \
+        || err "cannot reach the GitHub API; re-run with --version vX.Y.Z to skip the lookup"
     VERSION="$(sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' "$tmp" | head -n1)"
-    [ -n "$VERSION" ] || err "no published release found for $REPO"
+    [ -n "$VERSION" ] \
+        || err "no published release for $REPO yet; install from source: cargo install --git https://github.com/$REPO --locked"
+}
+
+# Exactly three numeric components — a glob alone would let `v1.2.3.4` through.
+is_semver() {
+    case "$1" in *[!0-9.]* | .* | *. | *..* | "") return 1 ;; esac
+    IFS=. read -r major minor patch extra <<SEMVER
+$1
+SEMVER
+    [ -n "$major" ] && [ -n "$minor" ] && [ -n "$patch" ] && [ -z "$extra" ]
 }
 
 sha256_of() {
     if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
     elif have shasum; then shasum -a 256 "$1" | cut -d' ' -f1
     elif have openssl; then openssl dgst -sha256 "$1" | sed 's/.*= *//'
-    else err "no SHA-256 tool found (install coreutils, shasum, or openssl); refusing to install unverified"
+    else err "no SHA-256 tool found; install coreutils, shasum, or openssl and re-run — refusing to install unverified"
     fi
 }
 
@@ -112,16 +123,10 @@ trap 'rm -rf "$WORK"' EXIT
 detect_target
 [ -n "$VERSION" ] || resolve_latest
 
-# The tag becomes a URL path segment, so validate its shape at the boundary
-# instead of trusting the flag, the env var, or the API response.
+# The tag becomes a URL path segment, so validate it at the boundary rather than
+# trusting the flag, the env var, or the API response.
 case "$VERSION" in
-    # Reject anything outside `v` + digits + dots before checking the X.Y.Z
-    # shape, so no path traversal or shell metacharacter can reach the URL.
-    # Anything outside `v`, digits, and single dots is rejected outright, so no
-    # path traversal or shell metacharacter can reach the URL; the second pattern
-    # then requires the vX.Y.Z shape.
-    *[!0-9.v]* | *..*) err "invalid release tag: $VERSION (expected vX.Y.Z)" ;;
-    v[0-9]*.[0-9]*.[0-9]*) ;;
+    v*) is_semver "${VERSION#v}" || err "invalid release tag: $VERSION (expected vX.Y.Z)" ;;
     *) err "invalid release tag: $VERSION (expected vX.Y.Z)" ;;
 esac
 
@@ -129,12 +134,12 @@ ARCHIVE="$BIN-$VERSION-$TARGET.$EXT"
 fetch "$BASE_URL/$VERSION/$ARCHIVE" "$WORK/$ARCHIVE" \
     || err "cannot download $ARCHIVE — check that release $VERSION publishes this target"
 fetch "$BASE_URL/$VERSION/$ARCHIVE.sha256" "$WORK/$ARCHIVE.sha256" \
-    || err "cannot download the checksum for $ARCHIVE; refusing to install unverified"
+    || err "cannot download the checksum for $ARCHIVE; refusing to install unverified — retry, or install from source: cargo install --git https://github.com/$REPO --locked"
 
 expected="$(cut -d' ' -f1 < "$WORK/$ARCHIVE.sha256")"
 actual="$(sha256_of "$WORK/$ARCHIVE")"
 [ "$expected" = "$actual" ] \
-    || err "checksum mismatch for $ARCHIVE (expected $expected, got $actual); refusing to install"
+    || err "checksum mismatch for $ARCHIVE (expected $expected, got $actual); refusing to install — retry the download, and report it at https://github.com/$REPO/issues if it persists"
 
 extract_failed="cannot extract $ARCHIVE (truncated download?); re-run the installer"
 case "$EXT" in
@@ -144,7 +149,8 @@ case "$EXT" in
 esac
 
 extracted="$(find "$WORK" -name "$BIN_FILE" -type f | head -n1)"
-[ -n "$extracted" ] || err "$BIN_FILE not found inside $ARCHIVE"
+[ -n "$extracted" ] \
+    || err "$BIN_FILE not found inside $ARCHIVE; report it at https://github.com/$REPO/issues"
 
 cannot_write="cannot write $INSTALL_DIR/$BIN_FILE; re-run with --to <a directory you can write to>"
 mkdir -p "$INSTALL_DIR" || err "$cannot_write"

@@ -194,6 +194,10 @@ fn an_unreadable_source_file_exits_two_and_is_reported_not_panicked() {
     assert_eq!(errors.len(), 1, "{report:#}");
     assert_eq!(errors[0]["path"], "broken.py");
     assert!(!errors[0]["message"].as_str().unwrap().is_empty());
+
+    // Piping JSON to a file must not hide why the run exited 2.
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("notignored: error: broken.py"), "{stderr}");
 }
 
 #[test]

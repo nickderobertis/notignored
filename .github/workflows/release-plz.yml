@@ -71,7 +71,8 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain pinned in rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
 
       - name: Install release-plz

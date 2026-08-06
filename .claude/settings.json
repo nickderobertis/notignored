@@ -50,8 +50,6 @@
       "Bash(cargo fetch:*)",
       "Bash(cargo update:*)",
       "Bash(cargo update --dry-run)",
-      "Bash(uv run:*)",
-      "Bash(uvx:*)",
       "Bash(rustup show:*)",
       "Bash(rustup component add:*)",
       "Bash(git status)",

@@ -15,7 +15,7 @@ use crate::scan::{self, ScanError, ScanOptions};
 
 mod render;
 
-pub use render::{render_human, render_json};
+pub use render::{narrate_errors, render_human, render_json};
 
 /// The scan completed and nothing forced a failure.
 pub const EXIT_OK: u8 = 0;
@@ -101,6 +101,9 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     };
 
     let report = scan::scan_files(&files, &cli.scan_options());
+    // Errors first, so a human sees what went wrong above the summary and a JSON
+    // run still gets them on the terminal when stdout is redirected.
+    let _ = narrate_errors(&report, err);
     let rendered = match cli.format {
         Format::Human => render_human(&report, out, err),
         Format::Json => render_json(&report, out),
