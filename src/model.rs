@@ -321,7 +321,8 @@ mod tests {
     #[test]
     fn only_the_registered_tools_report_as_implemented() {
         assert!(Tool::Ruff.is_implemented());
-        assert!(!Tool::Eslint.is_implemented());
+        assert!(Tool::Eslint.is_implemented());
+        assert!(!Tool::Mypy.is_implemented());
     }
 
     #[test]

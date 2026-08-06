@@ -110,16 +110,29 @@ The `json` format emits the full report envelope:
 
 | Tool | Directives | Status |
 | --- | --- | --- |
-| `eslint` | `// eslint-disable-next-line rule -- reason` | Planned |
-| `biome` | `// biome-ignore lint/group/rule: reason` | Planned |
+| `eslint` | `// eslint-disable-line rule`, `// eslint-disable-next-line rule -- reason`, `/* eslint-disable rule -- reason */` … `/* eslint-enable rule */` | **Supported** |
+| `biome` | `// biome-ignore lint/group/rule: reason`, `// biome-ignore-all lint/group/rule: reason`, `// biome-ignore-start lint/group/rule: reason` … `// biome-ignore-end lint/group/rule: reason` | **Supported** |
 | `ruff` | `# noqa`, `# noqa: E501, F401`, `# ruff: noqa`, `# ruff: noqa: E501` | **Supported** |
-| `typescript` | `// @ts-ignore`, `// @ts-expect-error` | Planned |
+| `typescript` | `// @ts-ignore`, `// @ts-expect-error reason`, `/* @ts-ignore */`, `// @ts-nocheck` | **Supported** |
 | `mypy` | `# type: ignore`, `# type: ignore[arg-type]` | Planned |
 | `pyright` | `# pyright: ignore[reportAny]` | Planned |
 | `ty` | `# ty: ignore[unresolved-import]` | Planned |
 | `rust` | `#[allow(…)]`, `#[expect(…, reason = "…")]` | Planned |
 | `shellcheck` | `# shellcheck disable=SC2086` | Planned |
 | `llmlint` | its inline `ignore[rule] reason` suppression directive | Planned |
+
+Each tool's own reason syntax is what gets captured: ESLint's ` -- description`,
+Biome's mandatory `: explanation`, ruff's trailing `# comment`, and — for
+TypeScript, which defines no separator — whatever text trails the directive. A
+directive that lists no rules is a blanket suppression (`rules: []`).
+
+Scope follows the tool rather than the syntax. `// eslint-disable-line` is
+`line`; `// eslint-disable-next-line`, `// biome-ignore` and
+`// @ts-expect-error` are `next-line`; `# ruff: noqa`, `// biome-ignore-all` and
+`// @ts-nocheck` are `file`; and the delimited pairs
+(`/* eslint-disable */` … `/* eslint-enable */`,
+`// biome-ignore-start` … `// biome-ignore-end`) are `block`, running to
+end-of-file with `suppressed.end_line: null` when they are never closed.
 
 Adding one is three touch points: a module under `src/tools/`, one line in
 `src/tools/mod.rs::registry()`, and one row above.
@@ -141,8 +154,10 @@ just --list      # everything else
 ```
 
 `just check` runs the end-to-end suite, which drives the compiled binary as a
-subprocess and the **real, pinned** `ruff` (see `.ruff-version`) to prove that
-what `notignored` reports is what `ruff` actually suppresses.
+subprocess and the **real, pinned** linters — `ruff` (see `.ruff-version`) and
+`eslint` / `biome` / `tsc` (see `tests/js-toolchain/package.json`) — to prove
+that what `notignored` reports is what those tools actually suppress. `just
+bootstrap` installs them; it needs `uv` and Node.js 20+ on `PATH`.
 
 ## License
 

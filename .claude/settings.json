@@ -36,6 +36,8 @@
       "Bash(llmlint doctor)",
       "Bash(llmlint history:*)",
       "Bash(llmlint --version)",
+      "Bash(just setup-ruff)",
+      "Bash(just setup-js)",
       "Bash(./scripts/session-setup.sh)",
       "Bash(./scripts/setup-llmlint.sh)",
       "Bash(./scripts/install.sh:*)",

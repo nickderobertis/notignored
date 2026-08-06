@@ -129,6 +129,13 @@ copy; the tool is pinned so the proof is reproducible. Coverage (95%, enforced)
 is a floor that a mocked suite could also clear — parity is what makes the claim
 true.
 
+Two pins, two installers, both run by `just bootstrap`: `.ruff-version` +
+`scripts/setup-ruff.sh` (needs `uv`), and `tests/js-toolchain/package.json` +
+`scripts/setup-js.sh` for eslint/biome/tsc (needs Node). Both install under
+`.dev/`, which is gitignored. Where a tool parses its own reason — eslint's
+` -- ` description, in `suppressedMessages[].suppressions[].justification` — the
+e2e asserts our extraction against *its* reading, not against a literal.
+
 ## Keeping the allowlist current
 
 Grant `just` recipes, not raw `cargo`/`uv` wildcards: a wildcard on a build tool

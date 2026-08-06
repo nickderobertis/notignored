@@ -24,7 +24,7 @@ default:
     @just --list
 
 # Installs toolchain components, the pinned cargo dev tools, deps, and the
-# pinned ruff the e2e parity suite drives.
+# pinned linters the e2e parity suite drives (ruff, eslint, biome, tsc).
 # Set up the project from a clean clone.
 bootstrap:
     @rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
@@ -34,6 +34,7 @@ bootstrap:
     @just _ensure-tool cargo-llvm-cov
     @cargo fetch --locked --quiet
     @bash scripts/setup-ruff.sh
+    @bash scripts/setup-js.sh
 
 # These are test runners, not rules: their version cannot change the gate's
 # verdict, so both here and CI take the latest rather than keeping two pins that
@@ -90,6 +91,11 @@ run *ARGS:
 # Install the pinned ruff the e2e parity suite drives (also run by `bootstrap`).
 setup-ruff:
     @bash scripts/setup-ruff.sh
+
+# Install the pinned eslint/biome/tsc the e2e parity suite drives (also run by
+# `bootstrap`).
+setup-js:
+    @bash scripts/setup-js.sh
 
 # Only after reviewing the diff — and bump REPORT_VERSION when the shape, not
 # just the data, moved.
