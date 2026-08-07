@@ -647,6 +647,14 @@ fn the_package_builder_refuses_input_it_cannot_turn_into_a_package() {
     }
 }
 
+// llmlint: ignore-block[tests_mirror_real_usage] the two journeys below reach the
+// launcher's last two branches — a child it cannot start, and one the kernel killed —
+// and the only way into either is to put the *child* in that state. What is under test
+// is the shim's handling, not notignored: substituting the binary it spawns is the same
+// move as the loopback registry in tests/e2e/publish_npm.rs, one layer down. Everything
+// around them is real — npm assembled and installed the tree, and the command that runs
+// is the one npm linked. `changed_behavior_has_e2e` requires these branches be covered,
+// and no user-facing input reaches them; leaving them untested is the alternative.
 /// A platform package whose binary will not exec fails legibly, not with a stack
 /// trace.
 ///
@@ -797,3 +805,4 @@ fn the_npm_launcher_re_raises_a_signal_that_killed_the_binary() {
         output.status.code()
     );
 }
+// llmlint: ignore-end[tests_mirror_real_usage]
