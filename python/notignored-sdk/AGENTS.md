@@ -6,10 +6,13 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
   two enums, and the error hierarchy — `tests/test_api.py` asserts `__all__` is
   exactly that set, and asserts both entry points' parameters against the
   approved `(paths, *, diff, diff_base, tools, cwd)` spelled out as a literal.
-  **Which binary runs is not an argument**: `NOTIGNORED_BIN` is the explicit
-  override and `PATH` is the fallback, so the signature carries the flags the CLI
-  has and nothing else. Anything else is an implementation detail behind a `_`
-  module; adding to the surface is a deliberate decision, not a side effect.
+  **Which binary runs is not an argument.** The approved contract asks for both
+  a fixed five-parameter signature and "an explicit path argument or env
+  override"; those cannot both hold, and the resolved reading is that
+  `NOTIGNORED_BIN` *is* the explicit override, with `PATH` as the fallback. Do
+  not re-add a `binary=` parameter to close that gap — it was proposed, weighed,
+  and settled. Anything else is an implementation detail behind a `_` module;
+  adding to the surface is a deliberate decision, not a side effect.
 - **`Tool` and `Scope` are real `enum.StrEnum`s**, which is why
   `requires-python` is `>=3.11`. A `(str, Enum)` lookalike compares equal to its
   wire value but stringifies as `Tool.RUFF` — a near-miss that reaches a log line
@@ -33,13 +36,16 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
   without it, a crate change would replay a cached green from before the contract
   moved. It names the crate's *sources*, not the crate *project*: that project's
   root is the repository root, so depending on it would make every file outside
-  the SDK trees affect this one. **Nothing here stands in for the CLI.** The
-  contract-error branches cannot be reached through a working `notignored`, so
-  they are proven two ways instead: `tests/test_contract.py` calls the strict
-  reader directly with the payload a broken or newer build would emit, and
-  `tests/test_errors.py` points `NOTIGNORED_BIN` at a real unrelated program —
-  the misconfiguration a user actually hits — to prove the plumbing carries that
-  verdict out through `scan()`.
+  the SDK trees affect this one. **Nothing here stands in for the CLI**, and the
+  dividing line is what the workspace binary can actually produce: every state it
+  *can* reach — reports, `--diff`, the tool filter, a non-zero exit — is covered
+  by driving that binary, and nothing else may stand in for those. The two states
+  it *cannot* reach are covered without fabricating one: `tests/test_contract.py`
+  calls the strict reader directly with the payload a broken or newer build would
+  emit, and `tests/test_errors.py` points `NOTIGNORED_BIN` at real unrelated
+  programs (`echo`, `true`) — the misconfiguration a user actually hits — to
+  prove the plumbing carries that verdict out through `scan()`. A patched second
+  build of the crate, or test-only behaviour in the CLI, is not the answer.
 - **Its lockfile is its own.** `uv.lock` here pins the dev tier; the repo root has
   no uv project. `bootstrap` runs `uv sync --locked`, so a dependency change
   means committing the refreshed lock in the same commit.

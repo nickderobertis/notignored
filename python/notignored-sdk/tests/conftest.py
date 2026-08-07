@@ -6,12 +6,15 @@ compiled from the crate beside this project — so a report shape that moved in
 it on `NOTIGNORED_BIN`, which is how the SDK is told where a binary is now that
 its public signature carries no binary argument.
 
-The contract-error branches cannot be reached through a working `notignored` at
-all: it never prints a malformed report. They are proven two ways, neither of
-which fabricates a CLI — the strict reader is called directly with the payload a
-broken or newer build would produce (`test_contract.py`), and one real journey
-points `NOTIGNORED_BIN` at a real, unrelated program to show the plumbing turns
-unreadable stdout into a typed error (`test_errors.py`).
+The dividing line is what that binary can actually produce. Every state it *can*
+reach — a report, `--diff`, the tool filter, a non-zero exit — is driven with it
+and with nothing else. Two states it *cannot* reach are covered without
+fabricating a CLI to fake them: it never prints a malformed report, and with
+`--format json` it never prints nothing. Those are proven by calling the strict
+reader directly with the payload a broken or newer build would emit
+(`test_contract.py`), and by pointing `NOTIGNORED_BIN` at real unrelated programs
+— the misconfiguration a user actually hits — to show the plumbing turns their
+stdout into a typed error (`test_errors.py`).
 """
 
 from __future__ import annotations

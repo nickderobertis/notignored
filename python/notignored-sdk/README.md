@@ -65,9 +65,15 @@ await ascan(...)  # the same call, on an event loop
 | `tools` | Report only these tools (`Tool` members or their names); `None` reports all of them. |
 | `cwd` | Directory to run in. Report paths are relative to it. |
 
-Which binary runs is not an argument: set `NOTIGNORED_BIN` to name one
-explicitly, otherwise the `notignored` on `PATH` is used. `pip install
-notignored-sdk` puts the pinned one there for you.
+### Which binary runs
+
+Resolution is, in order: **`NOTIGNORED_BIN`**, then the `notignored` on `PATH`.
+
+`NOTIGNORED_BIN` *is* the explicit override — the entry points deliberately take
+no binary argument, so their signatures carry the CLI's flags and nothing else.
+`pip install notignored-sdk` puts the pinned binary on `PATH` for you, so most
+callers never set it; point it at a specific build when you need one, as this
+repository's own suite does.
 
 The records mirror the CLI's JSON contract exactly, as frozen dataclasses:
 

@@ -1,12 +1,13 @@
 """Every way a call can fail, and the typed error it fails with.
 
-All of these go through a real subprocess. The spawn and exit branches use the
-real binary — a path that does not exist really does make it exit 2. The two
-branches a working `notignored` can never reach use a real, unrelated program on
-`NOTIGNORED_BIN`, which is not a fabricated CLI but the misconfiguration a user
-actually hits: `coreutils`' `echo` prints something that is not a report, and
-`true` prints nothing at all. What each malformed *payload* means is proven
-against the reader itself in `test_contract.py`.
+All of these go through a real subprocess. Everything the workspace binary can
+itself produce is driven with that binary: a path that does not exist really does
+make it exit 2, and so does a file it cannot read. The two states it can never
+reach — output that is not a report, and no output at all — use a real, unrelated
+program on `NOTIGNORED_BIN`, which is not a fabricated CLI but the
+misconfiguration a user actually hits: coreutils' `echo` prints something that is
+not a report, and `true` prints nothing. What each malformed *payload* means is
+proven against the reader itself in `test_contract.py`.
 """
 
 from __future__ import annotations
