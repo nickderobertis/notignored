@@ -191,8 +191,19 @@ jobs:
       # oneharness.toml's primary harness. Without a harness binary on PATH,
       # llmlint has nothing to drive and the job would fail with no findings —
       # which reads like a clean run.
+      # Pinned 2026-08-06: unpinned, @openai/codex 0.147.0 took this required
+      # check down for every PR ("codex (nonzero)"). 0.145.0 is the version
+      # proven working. Revisit when a newer release is shown green here — bump
+      # deliberately, never float.
       - name: Install the Codex harness
-        run: npm install -g @openai/codex
+        run: npm install -g @openai/codex@0.145.0
+      # oneharness only falls through to a harness it can actually spawn, so the
+      # secondary in the chain is a resilience claim the runner cannot honour
+      # unless `claude` is on PATH too. With it installed, an exhausted or broken
+      # codex degrades to claude-code instead of failing the check. Pinned for
+      # the same reason as above; 2.1.220 is the version proven working.
+      - name: Install the Claude Code harness (oneharness fallback)
+        run: npm install -g @anthropic-ai/claude-code@2.1.220
       - name: Install llmlint toolchain
         run: just setup-llmlint
       - name: Validate llmlint config
@@ -200,6 +211,7 @@ jobs:
       - name: Lint changed files
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           if [ -z "${OPENAI_API_KEY:-}" ]; then
             echo "::error::llmlint needs OPENAI_API_KEY for the Codex harness" >&2
