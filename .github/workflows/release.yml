@@ -55,13 +55,14 @@ name: Release
 # release-plz stays the single version driver.
 #
 # llmlint: ignore-file[changed_behavior_has_e2e] the publish and verify jobs are steps
-# in a GitHub Actions job on a published Release: polling a registry until it indexes a
-# version, installing that exact version, and smoke-testing it. Driving them from a test
+# in a GitHub Actions job on a published Release: installing an exact version until the
+# registry serves it, and smoke-testing what it installed. Driving them from a test
 # would mean standing up a runner and a public release, or replacing both with a
 # simulation — and a simulation is what would then be under test. They are proven the
 # only way they can be, by running on every real release, and everything they call that
-# *can* be driven locally is: scripts/publish-npm.sh in tests/e2e/publish_npm.rs, and
-# both packages' build-and-install in tests/e2e/packaging.rs.
+# *can* be driven locally is: scripts/publish-npm.sh in tests/e2e/publish_npm.rs,
+# scripts/retry-install.sh in tests/e2e/retry_install.rs, and both packages'
+# build-and-install in tests/e2e/packaging.rs.
 #
 # llmlint: ignore-file[live_tier_compiles_and_requires_credential] the publish and
 # verify jobs are deliberately switched by the PYPI_PUBLISH / NPM_PUBLISH repository
@@ -296,9 +297,10 @@ jobs:
           skip-existing: true
 
   # Post-publish gate: prove the just-published version is pip-installable on
-  # every OS a user installs it on. PyPI propagation is not instant, so poll the
-  # JSON API until the version is queryable, then install the real wheel and hand
-  # the binary it put on PATH to scripts/smoke-published.sh — the same script,
+  # every OS a user installs it on. PyPI propagation is not instant, so the
+  # install itself retries through scripts/retry-install.sh until the index a
+  # user resolves from serves the version, then the real wheel it put on PATH
+  # goes to scripts/smoke-published.sh — the same script,
   # fixture tree, and golden report tests/e2e/smoke.rs runs against the build
   # under test, so what a release asserts cannot drift from what ships. A failure
   # here means a broken release, not a blocked publish — the wheel is public
@@ -344,25 +346,22 @@ jobs:
             echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"
             exit 1
           fi
-      - name: Wait for the version to land on PyPI
-        run: |
-          ver="${GITHUB_REF_NAME#v}"
-          url="https://pypi.org/pypi/notignored-cli/${ver}/json"
-          echo "Waiting for notignored-cli $ver on PyPI..."
-          for i in $(seq 1 30); do
-            if curl -fsSL -o /dev/null "$url" 2>/dev/null; then
-              echo "notignored-cli $ver is available on PyPI."
-              exit 0
-            fi
-            echo "  attempt $i: not indexed yet; sleeping 10s..."
-            sleep 10
-          done
-          echo "::error::notignored-cli $ver did not appear on PyPI within ~5 minutes"
-          exit 1
+      # The install is the propagation probe, and the only one: `pip install`
+      # resolves through the simple index behind a CDN, which converges later
+      # and per edge than the JSON API a separate wait step used to poll — so
+      # that step printed "available" and this one then failed to find the
+      # version, three releases running. scripts/retry-install.sh records them.
+      #
+      # `--no-cache-dir` because pip caches the index response it reads: a retry
+      # that re-read its own cached "no such version" page would spend the whole
+      # budget polling its own memory.
       - name: Install the published wheel
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          pip install "notignored-cli==${ver}"
+          bash scripts/retry-install.sh \
+            --label "PyPI notignored-cli $ver on $RUNNER_OS/$RUNNER_ARCH" \
+            --action "check https://pypi.org/project/notignored-cli/ — publish-pypi may have uploaded no wheel for this platform" \
+            -- pip install --no-cache-dir "notignored-cli==${ver}"
       - name: Smoke-test what PyPI served
         run: |
           ver="${GITHUB_REF_NAME#v}"
@@ -434,11 +433,17 @@ jobs:
   verify-python-sdk:
     needs: publish-python-sdk
     if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
     steps:
+      # For scripts/retry-install.sh, which every post-publish install goes
+      # through — this job asserts in Python rather than through the smoke
+      # script, but it races the same index.
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -451,25 +456,21 @@ jobs:
             echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"
             exit 1
           fi
-      - name: Wait for the version to land on PyPI
+      # Two packages have to have propagated for this to resolve — the SDK and
+      # the `notignored-cli==<version>` it pins — and the install is what asks
+      # both. Same probe, same cache reasoning, as verify-pypi.
+      - name: Install the published SDK
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          url="https://pypi.org/pypi/notignored-sdk/${ver}/json"
-          echo "Waiting for notignored-sdk $ver on PyPI..."
-          for i in $(seq 1 30); do
-            if curl -fsSL -o /dev/null "$url" 2>/dev/null; then
-              echo "notignored-sdk $ver is available on PyPI."
-              exit 0
-            fi
-            echo "  attempt $i: not indexed yet; sleeping 10s..."
-            sleep 10
-          done
-          echo "::error::notignored-sdk $ver did not appear on PyPI within ~5 minutes"
-          exit 1
-      - name: Install the published SDK and scan with the CLI it brought
+          bash scripts/retry-install.sh \
+            --label "PyPI notignored-sdk $ver on $RUNNER_OS/$RUNNER_ARCH" \
+            --action "check https://pypi.org/project/notignored-sdk/ and https://pypi.org/project/notignored-cli/ — the SDK pins the CLI at the same version, so either one missing fails this" \
+            -- pip install --no-cache-dir "notignored-sdk==${ver}"
+      # Single-shot on purpose: the install is what races the registry, and a
+      # wrong version or a broken scan must fail now rather than be retried.
+      - name: Scan with the CLI the SDK brought
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          pip install "notignored-sdk==${ver}"
           python - "$ver" <<'PY'
           import sys
           from importlib.metadata import version
@@ -657,10 +658,10 @@ jobs:
   # Post-publish gate: prove the just-published version is npm-installable on
   # every OS a user installs it on, the same promise verify-pypi makes for the
   # wheel and on the same matrix, for the same reasons. Registry propagation is
-  # not instant, so poll until the launcher resolves, then install it globally
-  # and smoke-test the real binary its optional dependency pulled in — which is
-  # the resolution this job exists to prove, since npm picks a different platform
-  # package on each runner.
+  # not instant, so the global install retries through scripts/retry-install.sh
+  # until it resolves, and the smoke test then drives the real binary its
+  # optional dependency pulled in — which is the resolution this job exists to
+  # prove, since npm picks a different platform package on each runner.
   verify-npm:
     name: verify-npm (${{ matrix.os }})
     needs: publish-npm
@@ -693,25 +694,18 @@ jobs:
             echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"
             exit 1
           fi
-      - name: Wait for the versions to land on npm
-        run: |
-          ver="${GITHUB_REF_NAME#v}"
-          echo "Waiting for notignored-cli@$ver and notignored-sdk@$ver on npm..."
-          for i in $(seq 1 30); do
-            if npm view "notignored-cli@${ver}" version >/dev/null 2>&1 \
-               && npm view "notignored-sdk@${ver}" version >/dev/null 2>&1; then
-              echo "notignored-cli@$ver and notignored-sdk@$ver are available on npm."
-              exit 0
-            fi
-            echo "  attempt $i: not indexed yet; sleeping 10s..."
-            sleep 10
-          done
-          echo "::error::notignored-cli@$ver and/or notignored-sdk@$ver did not appear on npm within ~5 minutes"
-          exit 1
+      # Same probe as verify-pypi: the install is what resolves the packument
+      # and its platform dependency, so it is what waits for them rather than a
+      # separate `npm view` poll that can answer from a different edge.
+      # `--prefer-online` for the reason pip gets `--no-cache-dir` — npm will
+      # otherwise serve the metadata it cached on the attempt that failed.
       - name: Install the published package
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          npm install -g "notignored-cli@${ver}"
+          bash scripts/retry-install.sh \
+            --label "npm notignored-cli $ver on $RUNNER_OS/$RUNNER_ARCH" \
+            --action "check https://www.npmjs.com/package/notignored-cli — the platform package for this runner may not have published" \
+            -- npm install -g --prefer-online "notignored-cli@${ver}"
       - name: Smoke-test what npm served
         run: |
           ver="${GITHUB_REF_NAME#v}"
@@ -728,7 +722,11 @@ jobs:
           work="$(mktemp -d)"
           cd "$work"
           npm init --yes >/dev/null
-          npm install "notignored-sdk@${ver}" "notignored-cli@${ver}"
+          # An absolute path: this runs from a temp directory, not the checkout.
+          bash "$GITHUB_WORKSPACE/scripts/retry-install.sh" \
+            --label "npm notignored-sdk $ver on $RUNNER_OS/$RUNNER_ARCH" \
+            --action "check https://www.npmjs.com/package/notignored-sdk — publish-npm publishes the SDK last, so it propagates last too" \
+            -- npm install --prefer-online "notignored-sdk@${ver}" "notignored-cli@${ver}"
           printf 'x = 1  # noqa: E501  # smoke test\n' > app.py
           node --input-type=module -e '
             import { scan } from "notignored-sdk";
