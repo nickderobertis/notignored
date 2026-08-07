@@ -315,14 +315,20 @@ fn diff_json(root: &std::path::Path) -> std::process::Output {
 ///
 /// Whether such a file can exist at all is a property of the **filesystem**, not
 /// of the operating system: Linux passes the name through as bytes, while APFS
-/// and HFS+ reject it outright, so one `#[cfg(unix)]` build cannot assume it.
-/// This journey therefore asks the filesystem rather than the target. Where the
-/// name is permitted it drives the whole thing for real against a committed
-/// baseline; where it is not, it proves the refusal is about *these bytes* — the
-/// same content under a decodable name in the same directory writes fine — and
-/// that the review survives it. The behaviour itself is still proven there,
-/// through the index, by
-/// [`an_undecodable_path_staged_in_the_index_is_reported_rather_than_dropped`].
+/// and HFS+ reject it at `write` with `EILSEQ`, so one `#[cfg(unix)]` build
+/// cannot assume it. This journey therefore asks the filesystem rather than the
+/// target. Where the name is permitted it drives the whole thing for real
+/// against a committed baseline; where it is not, it proves the refusal is about
+/// *these bytes* — the same content under a decodable name in the same directory
+/// writes fine — and that the review survives it.
+///
+/// The behaviour itself is not left to one platform. The decoding is covered on
+/// every target by
+/// `src/diff.rs::a_path_that_is_not_utf8_is_set_aside_rather_than_guessed_at`,
+/// and the whole journey — real git, real binary, same report error — is proven
+/// wherever a file cannot carry the name by
+/// [`an_undecodable_path_staged_in_the_index_is_reported_rather_than_dropped`],
+/// which reaches it through the index instead of the work tree.
 #[cfg(unix)]
 #[test]
 fn a_changed_path_that_is_not_utf8_is_reported_rather_than_dropped() {

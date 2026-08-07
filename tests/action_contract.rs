@@ -69,6 +69,92 @@ fn every_step_of_the_composite_declares_the_shell_it_runs_in() {
     }
 }
 
+/// Every array expansion, and whether it survives the oldest bash the action
+/// runs under.
+///
+/// A macOS runner's `/bin/bash` is 3.2, where `set -u` rejects `"${a[@]}"` as an
+/// unbound variable whenever the array is empty — the state an unset `paths`
+/// input leaves the scan step in. Bash 4.4 and later expand it to nothing, so
+/// the fault is invisible on Linux and Windows. The `${a[@]+"${a[@]}"}`
+/// alternate form means the same thing to every bash, and is what this insists
+/// on; the inner half of that form is itself an expansion, so it is recognized
+/// rather than reported.
+fn unguarded_array_expansions(script: &str) -> Vec<String> {
+    let mut unguarded = Vec::new();
+    for subscript in ["[@]", "[*]"] {
+        for (at, _) in script.match_indices(subscript) {
+            let head = &script[..at];
+            let Some(open) = head.rfind("${") else {
+                continue;
+            };
+            let name = &head[open + 2..];
+            let guard = format!("${{{name}{subscript}+\"");
+            let outer = format!("+\"${{{name}{subscript}}}\"}}");
+            if head[..open].ends_with(&guard) || script[at + subscript.len()..].starts_with(&outer)
+            {
+                continue;
+            }
+            unguarded.push(format!("${{{name}{subscript}}}"));
+        }
+    }
+    unguarded
+}
+
+/// The action's own scripts, as the shell receives them.
+fn action_scripts() -> Vec<(String, String)> {
+    let mut scripts: Vec<(String, String)> = action()
+        .get("runs")
+        .get("steps")
+        .to_vec()
+        .iter()
+        .filter_map(|step| {
+            let name = step.find("name").map_or("a step", Node::scalar).to_string();
+            step.find("run").map(|run| (name, run.scalar().to_string()))
+        })
+        .collect();
+    scripts.push((
+        "scripts/action/comment.sh".to_string(),
+        read("scripts/action/comment.sh"),
+    ));
+    scripts
+}
+
+#[test]
+fn no_array_expansion_breaks_on_the_bash_a_macos_runner_ships() {
+    for (name, script) in action_scripts() {
+        assert_eq!(
+            unguarded_array_expansions(&script),
+            Vec::<String>::new(),
+            "`{name}` expands an array in a form bash 3.2 rejects under `set -u` \
+             when it is empty; write it as ${{name[@]+\"${{name[@]}}\"}}"
+        );
+    }
+}
+
+/// The recognizer above, on the two forms it has to tell apart.
+#[test]
+fn the_guarded_array_form_is_the_only_one_that_passes() {
+    assert_eq!(
+        unguarded_array_expansions(r#"cmd ${paths[@]+"${paths[@]}"} > out"#),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        unguarded_array_expansions(r#"cmd "${paths[@]}" "${other[*]}""#),
+        vec!["${paths[@]}", "${other[*]}"]
+    );
+    // A guard that names a different array is not a guard.
+    assert_eq!(
+        unguarded_array_expansions(r#"cmd ${paths[@]+"${other[@]}"}"#),
+        vec!["${paths[@]}", "${other[@]}"]
+    );
+    // `$@` is special-cased by every bash, and a subscript that is not an
+    // expansion at all is left alone.
+    assert_eq!(
+        unguarded_array_expansions(r#"cmd "$@" # see foo[@]"#),
+        Vec::<String>::new()
+    );
+}
+
 /// The two ways the binary can arrive, and the one guarantee each owes: `local`
 /// builds the source that ships with the action (which is what makes a pull
 /// request here test its own code), and every other value goes through the
@@ -134,67 +220,6 @@ fn no_untrusted_event_value_is_interpolated_into_a_script() {
             );
         }
     }
-}
-
-/// Every array a script expands is expanded unset-safe.
-///
-/// The action's steps run under `set -u`, and bash before 4.4 — which is what
-/// macOS runners still ship as `/bin/bash` — treats `"${a[@]}"` on an empty array
-/// as an unbound variable and aborts the step. Every optional input arrives as an
-/// array that is empty by default, so the bug fires on the *default*
-/// configuration and only on one runner OS: exactly the shape that reaches users
-/// before it reaches a Linux gate. `${a[@]+"${a[@]}"}` is the portable form, and
-/// this is what keeps a future script from reintroducing the bare one.
-#[test]
-fn no_run_script_expands_an_array_that_may_be_empty() {
-    for file in ["action.yml", ".github/workflows/notignored.yml"] {
-        let parsed = parse(&read(file));
-        let steps: Vec<Node> = match file {
-            "action.yml" => parsed.get("runs").get("steps").list().to_vec(),
-            _ => parsed
-                .get("jobs")
-                .get("suppressions")
-                .get("steps")
-                .list()
-                .to_vec(),
-        };
-        for step in run_steps(&steps) {
-            let script = step.get("run").scalar();
-            let unguarded = unguarded_array_expansions(script);
-            assert!(
-                unguarded.is_empty(),
-                "{file} expands {unguarded:?} as a bare `${{name[@]}}`; write \
-                 `${{name[@]+\"${{name[@]}}\"}}` so an empty array does not abort \
-                 the step under bash 3.2"
-            );
-        }
-    }
-}
-
-/// The names of every `${name[@]}` in `script` that is not wrapped in the
-/// unset-safe `${name[@]+…}` guard.
-///
-/// Checked per occurrence rather than per name: one guarded expansion elsewhere
-/// in the script says nothing about this one, and the two calls in `action.yml`
-/// are exactly the case where a fix could land on only one of them.
-fn unguarded_array_expansions(script: &str) -> Vec<String> {
-    script
-        .match_indices("[@]}")
-        .filter_map(|(at, _)| {
-            let head = &script[..at];
-            let open = head.rfind("${")?;
-            let name = &head[open + 2..];
-            // Only a plain identifier is an array expansion; anything else is
-            // some other use of `[@]`.
-            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                return None;
-            }
-            // The guard opens immediately before this expansion, separated at
-            // most by the quote that protects the expanded words.
-            let guard = format!("${{{name}[@]+");
-            (!head[..open].trim_end_matches('"').ends_with(&guard)).then(|| name.to_string())
-        })
-        .collect()
 }
 
 /// The action finds its own comment by the marker the renderer writes; drift
