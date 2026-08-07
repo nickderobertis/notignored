@@ -64,35 +64,34 @@ follow-ups.
 ## The project graph
 
 Three projects, one graph: `notignored` (the crate, rooted at the repo root),
-`notignored-sdk-python`, `notignored-sdk-npm`. Each carries its own nested
-`AGENTS.md` and a `.github/CODEOWNERS` line routing its reviews.
-`notignored-sdk-npm` publishes `notignored-sdk` to npm (see "The registry
-packages"); `notignored-sdk-python` is still a wired-but-empty scaffold whose
-placeholder suite proves the graph and CI.
-
-The SDKs drive the binary as a subprocess, so their suites need one — but the
-crate's sources are deliberately **not** among their Nx inputs: affected
-selection maps each tree to its own project (`tests/e2e/nx_workspace.rs`), and
-widening that would make every parser change re-run every project. A change under
-`src/tools/` that could move an SDK's expectations is re-run with
-`--skip-nx-cache`, not by coupling the graph.
+`notignored-sdk-python` and `notignored-sdk-npm` — each shipped, and each with
+its own nested `AGENTS.md` and a `.github/CODEOWNERS` line routing its reviews.
+They publish `notignored-sdk` to PyPI and to npm respectively; see "The registry
+packages".
 
 Nx **runs** targets; it never decides what one does. A target names its project's
-own language-native tool (`_crate-*` recipes for cargo, ruff for the Python SDK,
-biome for the TS SDK), and the repo-wide verbs — `bootstrap`, `check`, `lint`,
-`test`, `format`, `fmt-check`, `upgrade` — shell out to `nx run-many`/`nx affected`
-rather than looping over projects. Adding a project means a `project.json`
-declaring the same six target names (`bootstrap`, `format`, `format-check`,
-`lint`, `test`, `check`) plus one `scope:` tag, a nested `AGENTS.md`, a
-`CODEOWNERS` line, and a line in `tests/e2e/nx_workspace.rs`; nothing in the
-justfile has to change.
+own language-native tool (`_crate-*` recipes for cargo, ruff/mypy for the Python
+SDK, biome for the TS SDK), and the repo-wide verbs — `bootstrap`, `check`,
+`lint`, `test`, `format`, `fmt-check`, `upgrade` — shell out to
+`nx run-many`/`nx affected` rather than looping over projects. Adding a project
+means a `project.json` declaring the same six target names (`bootstrap`,
+`format`, `format-check`, `lint`, `test`, `check`) plus one `scope:` tag, a
+nested `AGENTS.md`, a `CODEOWNERS` line, and a line in
+`tests/e2e/nx_workspace.rs`; nothing in the justfile has to change. A seventh
+target is a project's own business — the Python SDK's `typecheck` is one, folded
+into its `check` rather than into a repo-wide verb, because only it has one.
 
 Affected selection rests on **project roots, not `namedInputs`** — Nx maps a
 changed file to the project whose root is its longest prefix, and treats a
 `{workspaceRoot}` glob in a project's inputs as touching that whole project. The
 crate's root *is* the repo root, so a `{workspaceRoot}/**/*` input would make it
 affected by every SDK-only change; `nx.json` therefore keeps `default` for it and
-names shared pins per project (`pythonToolchain`, `jsToolchain`).
+names shared pins per project (`pythonToolchain`, `jsToolchain`). The one
+deliberate cross-project input is `crateSource` — `src/`, `Cargo.toml`,
+`Cargo.lock` — which **both** SDKs' `test` targets name, because each suite
+compiles and drives that binary, and a cached green from before a contract moved
+would prove nothing. It names the crate's *sources* rather than depending on the
+crate *project*, which would drag in the whole repo root.
 `tests/e2e/nx_workspace.rs` locks that mapping, because CI skips the `cross`,
 `msrv`, `deny`, and `install` matrices on `just affected-crate` and a file that
 stopped mapping to the crate would turn a skipped matrix into an unproven
@@ -207,17 +206,27 @@ is the committed launcher and `scripts/npm-build.mjs` generates the five
 Those platform names stay **unscoped**: a `@scope/` name needs an npm org, which a
 publish token cannot create.
 
-`notignored-sdk` is the fourth npm package and the one that carries no binary:
-`npm/notignored-sdk` compiles to JavaScript and *resolves* whichever `notignored`
-its consumer installed, so `notignored-cli` is deliberately not a dependency of
-it. It rides the same `NPM_PUBLISH` / `NPM_TOKEN` gating through `release.yml`'s
-`build-sdk-npm` job and the existing `publish-npm` / `verify-npm` pair.
+The two SDKs are the fourth and fifth packages, and the only ones that are not
+the binary. `pip install notignored-sdk` is a pure-Python client that *drives*
+it, so it depends on `notignored-cli==<the same version>` and one `py3-none-any`
+wheel serves every platform; its gate is the proof — `tests/test_packaging.py`
+runs `scripts/python-sdk-build.mjs` and `uv build` on every gate run and reads
+the version and the pin back out of the wheel's metadata, so the release job only
+has to run the same two commands. `npm install notignored-sdk` compiles to
+JavaScript and *resolves* whichever `notignored` its consumer installed, so
+`notignored-cli` is deliberately not a dependency of it; it rides the
+`NPM_PUBLISH` / `NPM_TOKEN` gating through `release.yml`'s `build-sdk-npm` job
+and the existing `publish-npm` / `verify-npm` pair. Keep each SDK's public
+surface, its strict parsing, and its forms as its nested `AGENTS.md` describes
+them.
 
 **Cargo.toml is the only version source.** The wheel takes it via `dynamic =
-["version"]`, the npm packages via `npm-build.mjs`, the SDK via
-`npm/notignored-sdk/scripts/pack.mjs`, and every committed npm manifest carries
-`0.0.0-managed` so none can become a second one — release-plz bumps `Cargo.toml`
-alone. Adding a target means the release matrices, `npm-build.mjs`,
+["version"]`, the npm packages via `npm-build.mjs`, the Python SDK via
+`python-sdk-build.mjs`, the TypeScript SDK via
+`npm/notignored-sdk/scripts/pack.mjs`; the committed npm manifests carry
+`0.0.0-managed` and the committed Python SDK manifest `0.0.0.dev0` with an
+*unpinned* `notignored-cli`, so none can become a second one — release-plz bumps
+`Cargo.toml` alone. Adding a target means the release matrices, `npm-build.mjs`,
 and the launcher's `PACKAGES` map together; `tests/packaging_contract.rs` fails
 the build when they disagree, and `tests/e2e/packaging.rs` builds and installs
 both packages from the real binary on every gate run. A test never spells a

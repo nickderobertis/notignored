@@ -50,10 +50,10 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
   finds `target/{debug,release}/notignored` and builds it if it is not there.
   `test/fixtures/not-notignored.mjs` is not a stand-in for it: it is a program
   that deliberately *is not* `notignored`, for the resolution and contract
-  branches the real binary cannot produce. Nx caches this project's `test`, and
-  the crate's sources are not among its inputs — a parser change re-runs the
-  crate's suite, not this one — so re-run `just nx run notignored-sdk-npm:test
-  --skip-nx-cache` after touching `src/tools/`.
+  branches the real binary cannot produce. Nx caches this project's `test`, so
+  its inputs name `crateSource` (`src/`, `Cargo.toml`, `Cargo.lock`) alongside
+  `default` — the same input the Python SDK names, for the same reason: a cached
+  green from before a parser moved would prove nothing.
 - **`node --test` is given an explicit glob** (`test/*.test.mjs`). Its default
   discovery treats every file under `test/` as a suite, which would run
   `support.mjs` and the fixture as tests.

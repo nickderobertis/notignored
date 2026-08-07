@@ -13,9 +13,12 @@
 # Interpreter and runner scratch from the Python SDK's suite.
 __pycache__/
 .pytest_cache/
-# Assembled by scripts/npm-build.mjs and maturin; the committed sources are
-# npm/notignored/ and pyproject.toml.
+.coverage
+# Assembled by scripts/npm-build.mjs, scripts/python-sdk-build.mjs, and maturin;
+# the committed sources are npm/notignored/, python/notignored-sdk/, and
+# pyproject.toml.
 /npm/dist
+/python/dist
 /dist
 # The TypeScript SDK's compiled output, re-created by that project's `build`
 # target. What publishes is the version-stamped copy under /npm/dist.

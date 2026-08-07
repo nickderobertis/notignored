@@ -12,7 +12,13 @@
     "default": ["{projectRoot}/**/*", "sharedGlobals"],
     "pythonToolchain": [
       "{workspaceRoot}/.ruff-version",
+      "{workspaceRoot}/.mypy-version",
       "{workspaceRoot}/scripts/setup-python-tools.sh"
+    ],
+    "crateSource": [
+      "{workspaceRoot}/src/**/*",
+      "{workspaceRoot}/Cargo.toml",
+      "{workspaceRoot}/Cargo.lock"
     ],
     "jsToolchain": [
       "{workspaceRoot}/tests/js-toolchain/package.json",

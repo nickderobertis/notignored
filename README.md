@@ -400,8 +400,7 @@ just --list      # everything else
 ```
 
 This is an Nx monorepo of three projects — the `notignored` crate at the repo
-root, plus the `npm/notignored-sdk` TypeScript SDK and the scaffolded
-`python/notignored-sdk`.
+root, plus the `python/notignored-sdk` and `npm/notignored-sdk` SDKs.
 The repo-wide verbs above fan out across all of them; `just nx run
 notignored-sdk-python:check` runs one project's gate alone, and `just nx show
 projects` lists the graph. Pull-request CI narrows the gate to the projects the
