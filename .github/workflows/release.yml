@@ -29,6 +29,11 @@ name: Release
 #   * verify-pypi   — on Linux, both macOS architectures, and Windows,
 #                     pip-install the exact version just published and run
 #                     scripts/smoke-published.sh over it.
+#   * build-python-sdk / publish-python-sdk / verify-python-sdk — the same three
+#                     steps for notignored-sdk, the pure-Python client.
+#                     scripts/python-sdk-build.mjs stamps Cargo.toml's version
+#                     and pins notignored-cli to it exactly; publishing waits on
+#                     publish-pypi so that pin is resolvable.
 #   * build-npm     — wrap the same prebuilt binary in per-platform npm packages
 #                     (notignored-cli-<platform>-<arch>) via scripts/npm-build.mjs.
 #                     Runs unconditionally, same rationale as the wheels.
@@ -360,6 +365,130 @@ jobs:
           bash scripts/smoke-published.sh \
             --expect-version "$ver" \
             --label "PyPI notignored-cli $ver on $RUNNER_OS/$RUNNER_ARCH"
+
+  # The Python SDK: pure Python, so there is nothing to compile and one wheel
+  # serves every platform. `scripts/python-sdk-build.mjs` stamps Cargo.toml's
+  # version into the manifest and pins `notignored-cli` to that exact version,
+  # which is what makes `pip install notignored-sdk` bring a binary that speaks
+  # the report contract the SDK reads. Unconditioned like the other build jobs,
+  # so a packaging break reddens a release even while publishing is off — and
+  # `tests/test_packaging.py` builds this same wheel on every gate run, so what
+  # ships here is what a pull request already proved.
+  build-python-sdk:
+    needs: test
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Stamp the crate version in and build the distributions
+        run: |
+          pkgdir="$(node scripts/python-sdk-build.mjs --out python/dist)"
+          uv build --out-dir python-sdk-dist "$pkgdir"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdk
+          path: python-sdk-dist/*
+
+  # Published after `publish-pypi`, not beside it: the SDK's dependency is an
+  # exact `notignored-cli==<version>`, so that version has to be resolvable
+  # before this one is installable. Gated and tokened exactly like the wheels.
+  publish-python-sdk:
+    needs: [publish-pypi, build-python-sdk]
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      # Same rule as publish-pypi: the live tier requires its credential rather
+      # than discovering it missing at the registry.
+      - name: Require the publishing credential
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          if [ -z "${PYPI_TOKEN:-}" ]; then
+            echo "::error::PYPI_PUBLISH is on but the PYPI_TOKEN secret is empty; add it (see gh-secrets.json) or unset PYPI_PUBLISH" >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-sdk
+          path: python-sdk-dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python-sdk-dist
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true
+
+  # Post-publish gate: install what PyPI served and drive the SDK's public
+  # surface through the binary its own dependency pulled in — the resolution this
+  # job exists to prove. One runner, unlike verify-pypi's four: the SDK is a
+  # single `py3-none-any` wheel, and the per-platform artifact underneath it is
+  # the `notignored-cli` wheel that verify-pypi already installs on all four.
+  verify-python-sdk:
+    needs: publish-python-sdk
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # A Release can be cut by hand with any tag, and the version below is
+      # sliced straight out of it — so check the shape before it becomes a
+      # package specifier.
+      - name: Check the release tag is a version
+        run: |
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"
+            exit 1
+          fi
+      - name: Wait for the version to land on PyPI
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          url="https://pypi.org/pypi/notignored-sdk/${ver}/json"
+          echo "Waiting for notignored-sdk $ver on PyPI..."
+          for i in $(seq 1 30); do
+            if curl -fsSL -o /dev/null "$url" 2>/dev/null; then
+              echo "notignored-sdk $ver is available on PyPI."
+              exit 0
+            fi
+            echo "  attempt $i: not indexed yet; sleeping 10s..."
+            sleep 10
+          done
+          echo "::error::notignored-sdk $ver did not appear on PyPI within ~5 minutes"
+          exit 1
+      - name: Install the published SDK and scan with the CLI it brought
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          pip install "notignored-sdk==${ver}"
+          python - "$ver" <<'PY'
+          import sys
+          from importlib.metadata import version
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from notignored_sdk import Scope, Tool, scan
+
+          expected = sys.argv[1]
+          assert version("notignored-sdk") == expected, version("notignored-sdk")
+          assert version("notignored-cli") == expected, version("notignored-cli")
+
+          with TemporaryDirectory() as tmp:
+              Path(tmp, "app.py").write_text("u = URL  # noqa: E501  # long URL\n")
+              report = scan(cwd=tmp)
+
+          assert report.version == 1, report
+          assert [d.tool for d in report.ignores] == [Tool.RUFF], report
+          assert report.ignores[0].rules == ("E501",), report
+          assert report.ignores[0].reason == "long URL", report
+          assert report.ignores[0].scope is Scope.LINE, report
+          PY
+          echo "PyPI install + packaged-CLI smoke test passed for notignored-sdk $ver"
 
   # npm packages: scripts/npm-build.mjs wraps the prebuilt binary in a
   # per-platform package (notignored-cli-<platform>-<arch>), the direct analogue

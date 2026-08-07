@@ -13,9 +13,12 @@
 # Interpreter and runner scratch from the Python SDK's suite.
 __pycache__/
 .pytest_cache/
-# Assembled by scripts/npm-build.mjs and maturin; the committed sources are
-# npm/notignored/ and pyproject.toml.
+.coverage
+# Assembled by scripts/npm-build.mjs, scripts/python-sdk-build.mjs, and maturin;
+# the committed sources are npm/notignored/, python/notignored-sdk/, and
+# pyproject.toml.
 /npm/dist
+/python/dist
 /dist
 # Coverage instrumentation writes these wherever an instrumented binary happens
 # to run, which for the e2e journeys is a fixture directory. They are raw counter
