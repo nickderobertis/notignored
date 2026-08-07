@@ -362,12 +362,12 @@ jobs:
           # npm reads a bare `dir/file.tgz` as a `user/repo` GitHub spec and tries
           # to git-clone it.
           for tgz in "$GITHUB_WORKSPACE"/npm-artifacts/*.tgz; do
-            scripts/publish-npm.sh "$tgz"
+            bash scripts/publish-npm.sh "$tgz"
           done
           # The launcher (notignored-cli) carries no binary, so it needs no
           # prebuilt target — just the version-stamped manifest.
           launcher="$(node scripts/npm-build.mjs launcher --out npm/dist)"
-          scripts/publish-npm.sh "$launcher"
+          bash scripts/publish-npm.sh "$launcher"
 
   # Post-publish gate: prove the just-published version is npm-installable, the
   # same promise verify-pypi makes for the wheel. Registry propagation is not
