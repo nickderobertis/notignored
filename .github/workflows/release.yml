@@ -26,8 +26,9 @@ name: Release
 #                     is switched off.
 #   * publish-pypi  — upload those wheels to notignored-cli with the PYPI_TOKEN
 #                     secret, gated on the PYPI_PUBLISH repo variable.
-#   * verify-pypi   — on Linux, macOS, and Windows, pip-install the exact version
-#                     just published and run scripts/smoke-published.sh over it.
+#   * verify-pypi   — on Linux, both macOS architectures, and Windows,
+#                     pip-install the exact version just published and run
+#                     scripts/smoke-published.sh over it.
 #   * build-npm     — wrap the same prebuilt binary in per-platform npm packages
 #                     (notignored-cli-<platform>-<arch>) via scripts/npm-build.mjs.
 #                     Runs unconditionally, same rationale as the wheels.
@@ -294,13 +295,14 @@ jobs:
   # here means a broken release, not a blocked publish — the wheel is public
   # either way, so this is what turns "we uploaded something" into "it works".
   #
-  # Three OS labels, not five targets: `pip install` resolves a *different wheel*
-  # per platform, and only a runner of that platform can prove the right one was
-  # picked. `aarch64-unknown-linux-gnu` and `x86_64-apple-darwin` have no leg
-  # here — the first because setup-python's arm64 Linux support is not something
-  # a release is the place to discover, the second because the hosted macOS
-  # image is arm64. Both are still built by the matrices above and installed for
-  # real by tests/e2e/packaging.rs on whichever host runs it.
+  # Four labels for five targets: `pip install` resolves a *different wheel* per
+  # platform AND architecture, so the matrix is keyed on the pair, not the OS.
+  # `macos-latest` is arm64 — `macos-15-intel` is the leg that installs the
+  # `x86_64-apple-darwin` wheel, which nothing else here does. The one target
+  # with no leg is `aarch64-unknown-linux-gnu`: setup-python's arm64 Linux
+  # support is not something a release is the place to discover. It is still
+  # built by the matrices above and installed for real by tests/e2e/packaging.rs
+  # on whichever host runs it.
   verify-pypi:
     name: verify-pypi (${{ matrix.os }})
     needs: publish-pypi
@@ -310,7 +312,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -491,7 +493,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:

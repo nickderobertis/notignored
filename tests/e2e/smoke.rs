@@ -1,10 +1,11 @@
 //! The published-package smoke, run over the binary this repo just built.
 //!
 //! `release.yml`'s verify jobs and `published-smoke.yml` prove `pip install
-//! notignored-cli` and `npm install -g notignored-cli` on Linux, macOS, and
-//! Windows — but what they assert is `scripts/smoke-published.sh`, and nothing
-//! on a runner can tell whether that script's golden still describes the parser
-//! that shipped inside the package. A release is the wrong place to find out.
+//! notignored-cli` and `npm install -g notignored-cli` on Linux, both macOS
+//! architectures, and Windows — but what they assert is
+//! `scripts/smoke-published.sh`, and nothing on a runner can tell whether that
+//! script's golden still describes the parser that shipped inside the package. A
+//! release is the wrong place to find out.
 //!
 //! So this journey runs the **same file** those workflows run, over the same
 //! fixture tree and the same golden, against the freshly compiled `notignored`
