@@ -44,19 +44,54 @@ follow-ups.
      rather than optional narrative. -->
 
 - **Product shape:** cli
-- **Language(s):** rust
+- **Language(s):** rust, python, typescript
 - **References composed:** base.md, shapes/cli.md, languages/rust.md,
-  intersections/rust-cli.md, ci.md, llmlint.md, releasing.md
+  intersections/rust-cli.md, ci.md, llmlint.md, releasing.md, monorepo.md
+- **Monorepo, since the SDKs:** three deliverables in three languages — the Rust
+  CLI, `python/notignored-sdk`, `npm/notignored-sdk` — is past the threshold where
+  monorepo.md applies, so it is composed rather than excluded. It was excluded
+  while there was one crate and one deliverable; that is no longer true.
 - **Excluded, and why:** *asdf / direnv* — `rust-toolchain.toml` already pins the
-  toolchain and rustup reads it, so a second pin would only drift. *Monorepo
-  orchestration* — one crate, one deliverable. *Bench tier* — deferred, not
-  dropped: speed is a product claim, so it lands once the parser set makes the
-  numbers meaningful.
+  toolchain and rustup reads it, so a second pin would only drift. *Bench tier* —
+  deferred, not dropped: speed is a product claim, so it lands once the parser set
+  makes the numbers meaningful.
 - **crates.io is dormant, not excluded:** `release-plz.toml` sets
   `publish = false` so versioning stays decoupled from the registry, and
   `release.yml`'s `publish-crate` job self-activates the day
   `CARGO_REGISTRY_TOKEN` is set. Until then the artifact ships via GitHub
   Releases, `install.sh`, `cargo install --git`, and the PyPI/npm packages below.
+
+## The project graph
+
+Three projects, one graph: `notignored` (the crate, rooted at the repo root),
+`notignored-sdk-python`, `notignored-sdk-npm`. The SDKs are wired-but-empty
+scaffolds — their placeholder suites prove the graph and CI, and each carries its
+own nested `AGENTS.md`.
+
+Nx **runs** targets; it never decides what one does. A target names its project's
+own language-native tool (`_crate-*` recipes for cargo, ruff for the Python SDK,
+biome for the TS SDK), and the repo-wide verbs — `bootstrap`, `check`, `lint`,
+`test`, `format`, `fmt-check`, `upgrade` — shell out to `nx run-many`/`nx affected`
+rather than looping over projects. Adding a project means a `project.json`
+declaring the same six target names (`bootstrap`, `format`, `format-check`,
+`lint`, `test`, `check`), a nested `AGENTS.md`, and a line in
+`tests/e2e/nx_workspace.rs`; nothing in the justfile has to change.
+
+Affected selection rests on **project roots, not `namedInputs`** — Nx maps a
+changed file to the project whose root is its longest prefix, and treats a
+`{workspaceRoot}` glob in a project's inputs as touching that whole project. The
+crate's root *is* the repo root, so a `{workspaceRoot}/**/*` input would make it
+affected by every SDK-only change; `nx.json` therefore keeps `default` for it and
+names shared pins per project (`pythonToolchain`, `jsToolchain`).
+`tests/e2e/nx_workspace.rs` locks that mapping, because CI skips the `cross`,
+`msrv`, `deny`, and `install` matrices on `just affected-crate` and a file that
+stopped mapping to the crate would turn a skipped matrix into an unproven
+artifact. Everything downstream of that fails **closed**: with no derivable merge
+base, `scripts/nx-affected.sh` runs the whole graph and says so.
+
+`just bootstrap` is serialized (`--parallel=1`): projects share the
+`scripts/setup-*.sh` installers, which recreate a `.dev/<tool>` tree from scratch
+when a pin moves, and two of those at once race on the same directory.
 
 ## The ignore-record contract (fixed)
 
@@ -186,7 +221,12 @@ matrices and `tests/e2e/packaging.rs`. `macos-15-intel` is hosted through August
   merges. Release-triggered and scheduled jobs (`release.yml`,
   `published-smoke.yml`) are the exception and must stay unrequired: they report
   no pull-request context, so requiring one would block every PR forever — the
-  same trap `notignored.yml` is kept out of.
+  same trap `notignored.yml` is kept out of. `ci.yml`'s `changes` job is the
+  third exception and stays unrequired: it exists only to answer whether the Rust
+  matrices run, it fails closed to "run them", and requiring it would add a
+  context that says nothing about the code. The names it gates — `gate`, `cross`,
+  `msrv`, `deny`, `install` — are unchanged, and a job skipped by an `if:`
+  satisfies its required context.
 - **The PR description becomes the squash commit body**, so it is history, not
   paperwork.
 - **Merging a PR is the only human action in a release.** Never hand-edit a

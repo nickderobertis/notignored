@@ -3,13 +3,20 @@
 # `just bootstrap` works from a clean clone; `just check` is the full quality
 # gate and fails on any issue (no warnings-only mode). Recipes are quiet on
 # success and specific on failure.
+#
+# This is a monorepo: the repo-wide verbs (bootstrap, check, lint, test, format,
+# fmt-check, upgrade) delegate to Nx, which fans the uniformly-named target out
+# across every project. They never loop over projects by hand. What a target
+# *does* stays with its project — the `_crate-*` recipes below are the Rust
+# crate's own tools, and the SDKs' project.json files name theirs.
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 # llmlint: ignore-file[tool_output_is_signal] recipes that hand straight to cargo,
 # clippy, rustdoc, or cargo-deny inherit those tools' diagnostics, which already
 # name the exact problem and its fix; a wrapper message would bury them. Recipes
-# whose failure needs project-level context (bootstrap, test, msrv, fmt-check) add
+# whose failure needs project-level context (_crate-bootstrap, _crate-test, msrv,
+# _crate-fmt-check) add
 # one explicitly.
 
 # The MSRV has one source of truth — Cargo.toml's `rust-version` — so `just msrv`
@@ -23,10 +30,23 @@ export CARGO_TERM_QUIET := "true"
 default:
     @just --list
 
-# Installs toolchain components, the pinned cargo dev tools, deps, and the
-# pinned linters and type checkers the e2e parity suites drive.
+# Every project's `bootstrap` target, so one clean-clone command provisions the
+# whole graph rather than the crate alone.
+#
+# Serialized on purpose. Projects share installers — the crate and the Python SDK
+# both need the pinned ruff, the crate and the TS SDK both need the pinned biome
+# — and `scripts/setup-*.sh` recreate a `.dev/<tool>` tree from scratch when the
+# pin moved. Two of those running at once race on the same directory and the
+# second one fails on a venv the first is still filling. They are idempotent, so
+# running them one at a time costs a no-op, not a reinstall.
 # Set up the project from a clean clone.
 bootstrap:
+    @bash scripts/nx.sh run-many -t bootstrap --parallel=1
+
+# Installs toolchain components, the pinned cargo dev tools, deps, and the
+# pinned linters and type checkers the e2e parity suites drive.
+# The Rust crate's own provisioning (the `notignored:bootstrap` target).
+_crate-bootstrap:
     @rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
     @rustup component add rustfmt clippy llvm-tools >/dev/null \
       || { echo "cannot add toolchain components — install rustup (https://rustup.rs/) and re-run" >&2; exit 1; }
@@ -44,28 +64,67 @@ bootstrap:
 _ensure-tool tool:
     @command -v {{tool}} >/dev/null 2>&1 || cargo install {{tool}} --locked --quiet
 
-# Format check, lint, tests (unit + integration + e2e) with coverage enforced,
-# and docs. Fails on any issue; no warnings-only mode.
-# Full quality gate.
+# The tiers run in fail-fast order as dependencies, each fanned across every
+# project by Nx. The body then runs the per-project `check` aggregate — the same
+# target `just check-affected` and a single project's gate
+# (`just nx run notignored-sdk-python:check`) use — which replays from the cache
+# in a second and is what stops the full sweep and the affected sweep from ever
+# covering different tiers.
+# Full quality gate, every project.
 check: fmt-check lint test doc
+    @bash scripts/nx.sh run-many -t check
     @echo "check: ok"
+
+# What PR CI runs: the same gate, scoped to the projects this branch's diff can
+# reach. Fails closed — with no derivable merge base it runs everything.
+# Full quality gate, affected projects only.
+check-affected:
+    @bash scripts/nx-affected.sh -t check
+    @echo "check-affected: ok"
+
+# `true` when this branch's diff can reach the Rust crate project, so CI can skip
+# the cross-platform and install matrices on an SDK-only change. Fails closed.
+# Whether the Rust crate is affected by this branch.
+affected-crate:
+    @bash scripts/nx-affected.sh --affects notignored
+
+# Escape hatch for Nx itself, e.g. `just nx show projects` or `just nx graph`.
+# Run an arbitrary Nx command against this workspace.
+nx *ARGS:
+    @bash scripts/nx.sh {{ARGS}}
 
 # Verify formatting without modifying files.
 fmt-check:
-    @cargo fmt --all -- --check || { echo "formatting drift above — run 'just format'" >&2; exit 1; }
+    @bash scripts/nx.sh run-many -t format-check
 
 # Format the codebase in place.
 format:
+    @bash scripts/nx.sh run-many -t format
+
+# Lint every project with its own linter; any warning is an error.
+lint:
+    @bash scripts/nx.sh run-many -t lint
+
+# Every project's test suite; the crate's enforces its coverage floor.
+test:
+    @bash scripts/nx.sh run-many -t test
+
+# Verify the crate's formatting without modifying files.
+_crate-fmt-check:
+    @cargo fmt --all -- --check || { echo "formatting drift above — run 'just format'" >&2; exit 1; }
+
+# Format the crate in place.
+_crate-format:
     @cargo fmt --all
 
-# Lint with clippy; any warning is an error.
-lint:
+# Lint the crate with clippy; any warning is an error.
+_crate-lint:
     @cargo clippy --all-targets --locked --quiet -- -D warnings
 
 # 95% line coverage is the gate; lower it only with a documented reason in
 # AGENTS.md.
-# Full test suite (unit + integration + e2e) with coverage enforced.
-test:
+# The crate's full test suite (unit + integration + e2e) with coverage enforced.
+_crate-test:
     @cargo llvm-cov nextest --locked --fail-under-lines 95 \
       --status-level fail --final-status-level fail \
       || { echo "tests failed, or coverage fell below 95% — cover the lines the table above counts as missed" >&2; exit 1; }
@@ -114,6 +173,7 @@ bless:
 # Upgrade dependencies, then re-run the full gate.
 upgrade:
     @cargo update --quiet
+    @npm update --silent --no-audit --no-fund
     @just check
 
 # Separate from `check`: `cargo deny` needs a network-fetched advisory DB.

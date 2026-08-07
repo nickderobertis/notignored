@@ -380,6 +380,13 @@ just check       # the full gate: format, clippy, tests + coverage, docs
 just --list      # everything else
 ```
 
+This is an Nx monorepo of three projects — the `notignored` crate at the repo
+root, plus the scaffolded `python/notignored-sdk` and `npm/notignored-sdk` SDKs.
+The repo-wide verbs above fan out across all of them; `just nx run
+notignored-sdk-python:check` runs one project's gate alone, and `just nx show
+projects` lists the graph. Pull-request CI narrows the gate to the projects the
+diff can reach.
+
 `just check` runs the end-to-end suite, which drives the compiled binary as a
 subprocess and the **real, pinned** tools — `ruff`, `mypy`, `pyright`, `ty`,
 `shellcheck`, and `llmlint` (see the `.<tool>-version` files), `eslint` /

@@ -1,0 +1,33 @@
+[project]
+name = "notignored-sdk"
+description = "Python SDK for notignored. Scaffolded and wired into the project graph; the SDK itself has not landed yet."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = []
+# Not `dynamic = ["version"]` off Cargo.toml like the `notignored-cli` wheel: this
+# package is not published yet, so it has no version to keep in step. Wire it to
+# the same single source (see AGENTS.md, "The registry packages") when it is.
+version = "0.0.0"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/notignored_sdk"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# ruff is not pinned here: `.ruff-version` is this repository's one source for it
+# and `scripts/dev-tool.sh` resolves the binary `just bootstrap` installed from
+# that pin. Only the rule selection lives with the project.
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

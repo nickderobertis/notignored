@@ -1,0 +1,35 @@
+{
+  "name": "notignored-sdk-npm",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "npm/notignored-sdk/src",
+  "tags": ["scope:sdk", "lang:typescript"],
+  "targets": {
+    "bootstrap": {
+      "command": "bash ../../scripts/setup-js.sh",
+      "options": { "cwd": "npm/notignored-sdk" }
+    },
+    "format": {
+      "command": "bash ../../scripts/dev-tool.sh biome format --write .",
+      "options": { "cwd": "npm/notignored-sdk" }
+    },
+    "format-check": {
+      "command": "bash ../../scripts/dev-tool.sh biome format .",
+      "options": { "cwd": "npm/notignored-sdk" },
+      "inputs": ["default", "jsToolchain"]
+    },
+    "lint": {
+      "command": "bash ../../scripts/dev-tool.sh biome lint .",
+      "options": { "cwd": "npm/notignored-sdk" },
+      "inputs": ["default", "jsToolchain"]
+    },
+    "test": {
+      "command": "node --test",
+      "options": { "cwd": "npm/notignored-sdk" }
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "test"]
+    }
+  }
+}
