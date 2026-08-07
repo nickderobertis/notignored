@@ -34,6 +34,19 @@ pub const DEFAULT_MAX_ENTRIES: u32 = 20;
 /// who wants the rest follows the permalink.
 const SNIPPET_LINES: u32 = 10;
 
+/// Lines of unsuppressed source shown either side of a **single** suppressed
+/// line.
+///
+/// One line on its own is not enough to judge — the reviewer cannot see which
+/// function or branch it sits in. A span of several lines already carries that
+/// context, so it gets none added and stays capped by [`SNIPPET_LINES`].
+const SNIPPET_CONTEXT: u32 = 2;
+
+/// The gutter each snippet line opens with: the suppressed line is marked, the
+/// context around it is aligned with spaces so the two cannot be confused.
+const SUPPRESSED_GUTTER: &str = "> ";
+const CONTEXT_GUTTER: &str = "  ";
+
 /// What the permalinks in a rendered body point at, and how much of the report
 /// it lists.
 ///
@@ -225,30 +238,51 @@ fn suppressed_range(directive: &IgnoreDirective, count: u32) -> Option<(u32, u32
 /// read it without reading the diff: the context is one click away for every
 /// entry rather than inline for a lucky few.
 ///
+/// A span of one line is shown in situ — [`SNIPPET_CONTEXT`] lines either side,
+/// clamped to the file, with the suppressed line marked in the gutter. A longer
+/// span, and a `file`-scope directive, carry their own context and are shown as
+/// they always were.
+///
 /// `None` when the file cannot be read or does not hold the range the record
 /// names — the entry then renders without its snippet rather than failing.
 fn snippet(directive: &IgnoreDirective, source: &dyn SnippetSource) -> Option<String> {
     let lines = source.lines(&directive.path)?;
     let count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
     let (first, last) = suppressed_range(directive, count)?;
-    let shown = last.min(first.saturating_add(SNIPPET_LINES - 1));
+    let single = first == last && directive.scope != Scope::File;
+    let (from, to) = if single {
+        (
+            first.saturating_sub(SNIPPET_CONTEXT).max(1),
+            last.saturating_add(SNIPPET_CONTEXT).min(count),
+        )
+    } else {
+        (first, last.min(first.saturating_add(SNIPPET_LINES - 1)))
+    };
 
-    let window = &lines[(first as usize - 1)..shown as usize];
+    let window = &lines[(from as usize - 1)..to as usize];
     let fence = fence_for(window);
-    let width = shown.to_string().len();
+    let width = to.to_string().len();
     let mut block = String::from("  <details>\n  <summary>suppressed code</summary>\n\n");
     if let Some(note) = note(directive, last - first + 1) {
         block.push_str(&format!("  {note}\n\n"));
     }
     block.push_str(&format!("  {fence}{}\n", language_tag(&directive.path)));
     for (offset, text) in window.iter().enumerate() {
-        let number = first + u32::try_from(offset).unwrap_or_default();
+        let number = from + u32::try_from(offset).unwrap_or_default();
+        let gutter = match (single, number == first) {
+            (true, true) => SUPPRESSED_GUTTER,
+            (true, false) => CONTEXT_GUTTER,
+            (false, _) => "",
+        };
         // An empty source line renders as a bare gutter: a trailing space here
         // is whitespace every editor in the repo is configured to strip, which
         // would break the checked-in golden bodies on the next save.
         match text.trim_end().is_empty() {
-            true => block.push_str(&format!("  {number:>width$} |\n")),
-            false => block.push_str(&format!("  {number:>width$} | {}\n", text.trim_end())),
+            true => block.push_str(&format!("  {gutter}{number:>width$} |\n")),
+            false => block.push_str(&format!(
+                "  {gutter}{number:>width$} | {}\n",
+                text.trim_end()
+            )),
         }
     }
     block.push_str(&format!("  {fence}\n\n  </details>\n"));
@@ -513,7 +547,11 @@ mod tests {
                 "  <summary>suppressed code</summary>\n",
                 "\n",
                 "  ```python\n",
-                "  4 | four\n",
+                "    2 | two\n",
+                "    3 | three\n",
+                "  > 4 | four\n",
+                "    5 | five\n",
+                "    6 | six\n",
                 "  ```\n",
                 "\n",
                 "  </details>\n",
@@ -521,6 +559,71 @@ mod tests {
             )),
             "{rendered}"
         );
+    }
+
+    /// A single suppressed line is unreadable alone — the reviewer cannot see
+    /// what it sits in — so it is shown with two lines either side, and marked
+    /// so the context around it cannot be mistaken for what is silenced.
+    #[test]
+    fn a_single_suppressed_line_is_shown_with_two_lines_of_context_either_side() {
+        let source =
+            Stub::default().with("src/app.py", "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+        let mut report = Report::new();
+        report.ignores.push(spanning(Scope::Line, 4, Some(4)));
+        let rendered = body(&report, &options(), &source);
+        assert!(
+            rendered.contains(concat!(
+                "  ```python\n",
+                "    2 | two\n",
+                "    3 | three\n",
+                "  > 4 | four\n",
+                "    5 | five\n",
+                "    6 | six\n",
+                "  ```\n",
+            )),
+            "{rendered}"
+        );
+        // Context is context: it must not read as one more suppression.
+        assert_eq!(rendered.matches("\n  > ").count(), 1, "{rendered}");
+        assert!(!rendered.contains("seven"), "{rendered}");
+    }
+
+    /// The window is clamped to the file rather than padded: a directive on the
+    /// first or last line has less than two lines on one side, and the marker
+    /// stays on the suppressed line wherever it lands.
+    #[test]
+    fn a_single_line_span_at_a_file_edge_is_clamped_to_it() {
+        let source =
+            Stub::default().with("src/app.py", "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+        for (start, expected) in [
+            (
+                1,
+                concat!("  > 1 | one\n", "    2 | two\n", "    3 | three\n"),
+            ),
+            (
+                2,
+                concat!(
+                    "    1 | one\n",
+                    "  > 2 | two\n",
+                    "    3 | three\n",
+                    "    4 | four\n",
+                ),
+            ),
+            (
+                7,
+                concat!("    5 | five\n", "    6 | six\n", "  > 7 | seven\n"),
+            ),
+        ] {
+            let mut report = Report::new();
+            report
+                .ignores
+                .push(spanning(Scope::Line, start, Some(start)));
+            let rendered = body(&report, &options(), &source);
+            assert!(
+                rendered.contains(&format!("  ```python\n{expected}  ```\n")),
+                "line {start} rendered:\n{rendered}"
+            );
+        }
     }
 
     /// The cap, at the two counts that decide it.
@@ -581,14 +684,21 @@ mod tests {
 
     /// What a snippet shows is the record's `suppressed` span, which is what
     /// each scope means: the directive's own line, the line below it, or the
-    /// whole delimited region.
+    /// whole delimited region. A one-line span carries its context and its
+    /// marker whichever scope produced it; a block is shown bare.
     #[test]
     fn each_scope_shows_the_span_it_suppresses() {
         let source =
             Stub::default().with("src/app.py", "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
         for (directive, expected) in [
-            (spanning(Scope::Line, 4, Some(4)), "  4 | four\n"),
-            (spanning(Scope::NextLine, 5, Some(5)), "  5 | five\n"),
+            (
+                spanning(Scope::Line, 4, Some(4)),
+                "    2 | two\n    3 | three\n  > 4 | four\n    5 | five\n    6 | six\n",
+            ),
+            (
+                spanning(Scope::NextLine, 5, Some(5)),
+                "    3 | three\n    4 | four\n  > 5 | five\n    6 | six\n    7 | seven\n",
+            ),
             (
                 spanning(Scope::Block, 3, Some(5)),
                 "  3 | three\n  4 | four\n  5 | five\n",

@@ -215,6 +215,47 @@ fn the_readme_embeds_every_scene_and_the_hero_gif() {
     );
 }
 
+/// The capture must not inherit git's hook environment.
+///
+/// `.githooks/pre-push` runs `scripts/screenshots.sh`, and git exports `GIT_DIR`
+/// (and friends) to the hooks it runs. Inherited, they aim the throwaway
+/// repository the `diff` and `pr-comment` scenes are driven inside back at the
+/// developer's checkout: `--diff` then reports "not inside a git work tree" and
+/// both scenes capture that instead of the review case — so the guard blocks
+/// every screenshot-relevant push on drift it created itself.
+///
+/// Asserted as text because the behaviour cannot be: reproducing it needs
+/// `freeze`, a release build, and a real capture, all of which are out of the
+/// gate for the reasons this file opens with.
+#[test]
+fn the_capture_drops_the_git_environment_a_hook_hands_it() {
+    let script = read("scripts/screenshots.sh");
+    let unset = script
+        .find("unset GIT_DIR")
+        .unwrap_or_else(|| panic!("scripts/screenshots.sh no longer unsets GIT_DIR:\n{script}"));
+    // The statement is one logical line, wrapped with a backslash continuation.
+    let mut statement = String::new();
+    for line in script[unset..].lines() {
+        statement.push_str(line);
+        if !line.ends_with('\\') {
+            break;
+        }
+    }
+    for variable in ["GIT_WORK_TREE", "GIT_INDEX_FILE"] {
+        assert!(
+            statement.contains(variable),
+            "scripts/screenshots.sh no longer unsets {variable}: {statement}"
+        );
+    }
+    let init = script
+        .find("git -c init.defaultBranch=main init")
+        .expect("the diff scene no longer builds a throwaway repository");
+    assert!(
+        unset < init,
+        "the git environment is dropped after the throwaway repository is built"
+    );
+}
+
 /// Screenshots are informational: a capture in the gate would make `just check`
 /// need `freeze`, a network fetch, and a release build.
 #[test]

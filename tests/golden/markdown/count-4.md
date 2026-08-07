@@ -30,7 +30,10 @@
   <summary>suppressed code</summary>
 
   ```typescript
-  2 | console.log("notignored");
+    1 | // eslint-disable-next-line no-console -- the banner is this program's output
+  > 2 | console.log("notignored");
+    3 |
+    4 | export function widget(name: string): string {
   ```
 
   </details>
@@ -41,7 +44,11 @@
   <summary>suppressed code</summary>
 
   ```typescript
-  9 | export const LEGACY = widget(undefined);
+     7 |
+     8 | // @ts-ignore
+  >  9 | export const LEGACY = widget(undefined);
+    10 |
+    11 | // llmlint: ignore-file[suppressions_justified] fixture input, not production code:
   ```
 
   </details>
@@ -52,7 +59,11 @@
   <summary>suppressed code</summary>
 
   ```python
-  5 | CATALOGUE = urllib.request.urlopen("https://example.invalid/a/very/long/vendor/catalogue.json")  # noqa: E501  # the vendor URL cannot be wrapped
+    3 | import urllib.request
+    4 |
+  > 5 | CATALOGUE = urllib.request.urlopen("https://example.invalid/a/very/long/vendor/catalogue.json")  # noqa: E501  # the vendor URL cannot be wrapped
+    6 |
+    7 |
   ```
 
   </details>

@@ -161,15 +161,24 @@ fn a_directive_alone_on_its_line_shows_the_code_below_it_not_itself() {
         .and_then(|(_, rest)| rest.split_once("\n  ```"))
         .map(|(snippet, _)| snippet)
         .unwrap_or_else(|| panic!("no fenced snippet in the comment body:\n{body}"));
+    let marked: Vec<&str> = snippet
+        .lines()
+        .filter(|line| line.starts_with("  > "))
+        .collect();
     assert_eq!(
-        snippet, "  2 | #[derive(Debug, Clone, PartialEq, Eq)]",
-        "the snippet does not show the line the directive silences:\n{body}"
+        marked,
+        vec!["  > 2 | #[derive(Debug, Clone, PartialEq, Eq)]"],
+        "the marker does not sit on the line the directive silences:\n{body}"
     );
-    // The keyword is never written out here; see `src/tools/llmlint.rs`.
-    assert!(
-        !snippet.contains(notignored::tools::llmlint::KEYWORD),
-        "the snippet quoted the directive back at the reviewer:\n{body}"
-    );
+    // The directive's own line is now readable *as context*, unmarked — the
+    // keyword is never written out here; see `src/tools/llmlint.rs`.
+    for line in snippet.lines() {
+        assert_eq!(
+            line.contains(notignored::tools::llmlint::KEYWORD),
+            line.starts_with("    1 | "),
+            "the directive is quoted as something other than context:\n{body}"
+        );
+    }
 }
 
 #[test]

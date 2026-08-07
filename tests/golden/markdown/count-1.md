@@ -8,7 +8,11 @@
   <summary>suppressed code</summary>
 
   ```python
-  5 | CATALOGUE = urllib.request.urlopen("https://example.invalid/a/very/long/vendor/catalogue.json")  # noqa: E501  # the vendor URL cannot be wrapped
+    3 | import urllib.request
+    4 |
+  > 5 | CATALOGUE = urllib.request.urlopen("https://example.invalid/a/very/long/vendor/catalogue.json")  # noqa: E501  # the vendor URL cannot be wrapped
+    6 |
+    7 |
   ```
 
   </details>

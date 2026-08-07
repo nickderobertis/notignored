@@ -8,7 +8,10 @@
   <summary>suppressed code</summary>
 
   ```python
-  4 | def widths(rows):  # noqa: ANN001  # the gateway fixes this signature
+    2 |
+    3 |
+  > 4 | def widths(rows):  # noqa: ANN001  # the gateway fixes this signature
+    5 |     return [len(row) for row in rows]
   ```
 
   </details>
@@ -31,7 +34,9 @@
   <summary>suppressed code</summary>
 
   ```typescript
-  18 | sdk.teardown();
+    16 |
+    17 | // @ts-expect-error the SDK's teardown hook is untyped
+  > 18 | sdk.teardown();
   ```
 
   </details>
