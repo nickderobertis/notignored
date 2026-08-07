@@ -120,6 +120,39 @@ fn required(program: &str) -> Command {
     Command::new(name)
 }
 
+/// Install the launcher and this platform's package into a scratch prefix,
+/// returning the prefix. The journeys that exercise the shim's own behaviour all
+/// need the same real npm-built tree.
+fn installed_launcher(scratch: &Path) -> PathBuf {
+    let binary = assert_cmd::cargo::cargo_bin("notignored");
+    let dist = scratch.join("dist");
+    let dist = dist.to_str().expect("a UTF-8 path");
+    let platform = npm_build(
+        "platform",
+        &[
+            "--target",
+            host_target(),
+            "--binary",
+            binary.to_str().expect("a UTF-8 binary path"),
+            "--out",
+            dist,
+        ],
+    );
+    let launcher = npm_build("launcher", &["--out", dist]);
+    let tarballs = scratch.join("tarballs");
+    let platform_tgz = npm_pack(&platform, &tarballs);
+    let launcher_tgz = npm_pack(&launcher, &tarballs);
+
+    let prefix = scratch.join("prefix");
+    let install = npm_install(&prefix, &[&platform_tgz, &launcher_tgz], &[]);
+    assert!(
+        install.status.success(),
+        "npm install failed\n{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    prefix
+}
+
 /// A file with one suppression in it, for smoke-testing an installed binary.
 fn smoke_file(dir: &Path) -> PathBuf {
     let path = dir.join("app.py");
@@ -682,5 +715,85 @@ fn the_npm_launcher_explains_a_binary_it_cannot_run() {
     assert!(
         stderr.contains("failed to launch the notignored binary"),
         "the launcher did not say it could not start the binary:\n{stderr}"
+    );
+}
+
+/// The launcher hands back the binary's own exit code.
+///
+/// `--fail-if-found` exits 1, and a CI job's whole verdict is that number. A shim
+/// that swallowed it — returning 0 because *it* succeeded in spawning — would
+/// turn every gate built on this package green while suppressions piled up.
+#[test]
+fn the_npm_launcher_returns_the_binarys_own_exit_code() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let prefix = installed_launcher(scratch.path());
+
+    // Exit 0: a tree with nothing to report.
+    let clean = scratch.path().join("clean");
+    std::fs::create_dir_all(&clean).expect("create the clean tree");
+    std::fs::write(clean.join("app.py"), "x = 1\n").expect("write a clean file");
+    let output = installed_npm_command(&prefix)
+        .current_dir(scratch.path())
+        .arg(&clean)
+        .arg("--fail-if-found")
+        .output()
+        .expect("run the launcher");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "nothing was suppressed, so --fail-if-found has nothing to fail on: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Exit 1: the same flag over a file that does carry one.
+    let fixture = smoke_file(scratch.path());
+    let output = installed_npm_command(&prefix)
+        .current_dir(scratch.path())
+        .arg(&fixture)
+        .arg("--fail-if-found")
+        .output()
+        .expect("run the launcher");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the launcher did not pass the binary's exit 1 through: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A binary killed by a signal takes the launcher down the same way.
+///
+/// `spawnSync` reports a signalled child as `status: null`, so a shim that just
+/// forwarded `status` would report 0 — success — for a process the kernel
+/// killed. The launcher re-raises the signal instead, and the only way to put a
+/// child in that state on purpose is to give it one that signals itself: what is
+/// under test is the shim's handling, not what notignored does.
+#[cfg(unix)]
+#[test]
+fn the_npm_launcher_re_raises_a_signal_that_killed_the_binary() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let prefix = installed_launcher(scratch.path());
+
+    let installed = prefix
+        .join("lib")
+        .join("node_modules")
+        .join(host_platform_package())
+        .join("bin")
+        .join("notignored");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(&installed, "#!/bin/sh\nkill -TERM $$\n").expect("replace the binary");
+    std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755))
+        .expect("make the replacement executable");
+
+    let output = installed_npm_command(&prefix)
+        .current_dir(scratch.path())
+        .arg("--version")
+        .output()
+        .expect("run the launcher");
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&output.status),
+        Some(15),
+        "the launcher did not die of the signal that killed its child; it exited {:?}",
+        output.status.code()
     );
 }
