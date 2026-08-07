@@ -409,3 +409,51 @@ fn the_platform_package_names_agree_across_the_manifest_shim_and_builder() {
          organization, which a publish token cannot create"
     );
 }
+
+/// The two READMEs name the platforms the release actually builds.
+///
+/// Both promise a prebuilt binary for a specific set, which is a second and third
+/// copy of the release matrices. A target added to the matrices and not to the
+/// prose leaves a user reading that their platform is unsupported while a package
+/// for it sits on the registry; one removed leaves the opposite, which is worse.
+/// The sentence is generated here from the same [`TARGETS`] the matrices are
+/// checked against, so it cannot be updated in one place only.
+#[test]
+fn the_readmes_name_the_platforms_the_release_builds() {
+    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (_, package) in TARGETS {
+        let facts = package
+            .strip_prefix("notignored-cli-")
+            .expect("a platform package is named after the launcher");
+        let (platform, arch) = facts.split_once('-').expect("a <platform>-<arch> tail");
+        let display = match platform {
+            "linux" => "Linux",
+            "darwin" => "macOS",
+            "win32" => "Windows",
+            other => panic!("no README spelling for the {other} platform"),
+        };
+        match groups.iter_mut().find(|(name, _)| *name == display) {
+            Some((_, arches)) => arches.push(arch),
+            None => groups.push((display, vec![arch])),
+        }
+    }
+    let phrases: Vec<String> = groups
+        .iter()
+        .map(|(display, arches)| format!("{display} ({})", arches.join(", ")))
+        .collect();
+    let (last, rest) = phrases.split_last().expect("at least one platform");
+    let sentence = format!("{}, and {last}", rest.join(", "));
+
+    for readme in ["README.md", "npm/notignored/README.md"] {
+        // Prose wraps, so compare against the text with its runs of whitespace
+        // collapsed: where the line breaks fall is not part of the contract.
+        let unwrapped = read(readme)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            unwrapped.contains(&sentence),
+            "{readme} does not name the released platforms as `{sentence}`"
+        );
+    }
+}

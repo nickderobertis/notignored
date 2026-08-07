@@ -274,10 +274,12 @@ jobs:
       # pipeline built.
       - name: Check the release tag is a version
         run: |
-          case "$GITHUB_REF_NAME" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"; exit 1 ;;
-          esac
+          # A glob cannot say "digits and nothing else" — `v[0-9]*.[0-9]*.[0-9]*`
+          # would take `v1x.2y.3z` — so match the whole tag against a pattern.
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"
+            exit 1
+          fi
       - name: Wait for the version to land on PyPI
         run: |
           ver="${GITHUB_REF_NAME#v}"
@@ -439,10 +441,12 @@ jobs:
       # pipeline built.
       - name: Check the release tag is a version
         run: |
-          case "$GITHUB_REF_NAME" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"; exit 1 ;;
-          esac
+          # A glob cannot say "digits and nothing else" — `v[0-9]*.[0-9]*.[0-9]*`
+          # would take `v1x.2y.3z` — so match the whole tag against a pattern.
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"
+            exit 1
+          fi
       - name: Wait for the version to land on npm
         run: |
           ver="${GITHUB_REF_NAME#v}"

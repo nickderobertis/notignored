@@ -4,7 +4,7 @@
 //! wrong is expensive in one direction and silent in the other: republishing a
 //! live version red-fails a release that already succeeded, and treating an
 //! auth or outage error as "not published yet" would push over a registry that
-//! was merely unreachable. Neither shows up locally, and neither can be
+//! merely could not answer. Neither shows up locally, and neither can be
 //! rehearsed against npmjs.com — a public publish cannot be taken back.
 //!
 //! So the registry is the one host these journeys cannot own, and it is the only
@@ -292,14 +292,14 @@ fn a_version_already_on_the_registry_is_not_published_again() {
     assert!(stdout.contains("already on npm"), "{stdout}");
 }
 
-/// A registry that cannot answer fails the release closed.
+/// A registry that answers, but not with an answer, fails the release closed.
 ///
 /// This is the branch that matters most. "Cannot read the metadata" and "the
 /// package is not published" look alike from the outside, and a script that
 /// conflated them would publish blind through an outage — or worse, through an
 /// authentication failure. Only a 404 is permission to publish.
 #[test]
-fn an_unreachable_registry_fails_the_release_rather_than_publishing() {
+fn a_registry_that_will_not_answer_fails_the_release_rather_than_publishing() {
     let registry = FakeRegistry::start(Registry::Unavailable);
     let (scratch, package) = fixture();
 
