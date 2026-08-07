@@ -19,17 +19,25 @@
       "inputs": ["default", "jsToolchain"]
     },
     "lint": {
-      "command": "bash ../../scripts/dev-tool.sh biome lint .",
+      "command": "bash ../../scripts/dev-tool.sh biome lint --error-on-warnings .",
       "options": { "cwd": "npm/notignored-sdk" },
       "inputs": ["default", "jsToolchain"]
     },
+    "build": {
+      "command": "bash ../../scripts/dev-tool.sh tsc -p tsconfig.json",
+      "options": { "cwd": "npm/notignored-sdk" },
+      "inputs": ["default", "jsToolchain"],
+      "outputs": ["{projectRoot}/dist"]
+    },
     "test": {
-      "command": "node --test",
-      "options": { "cwd": "npm/notignored-sdk" }
+      "command": "node --test --experimental-test-coverage --test-coverage-include='dist/**' --test-coverage-lines=95 --test-coverage-functions=95 'test/*.test.mjs'",
+      "options": { "cwd": "npm/notignored-sdk" },
+      "inputs": ["default", "jsToolchain"],
+      "dependsOn": ["build"]
     },
     "check": {
       "executor": "nx:noop",
-      "dependsOn": ["format-check", "lint", "test"]
+      "dependsOn": ["format-check", "lint", "build", "test"]
     }
   }
 }

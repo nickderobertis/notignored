@@ -32,10 +32,14 @@ name: Release
 #   * build-npm     — wrap the same prebuilt binary in per-platform npm packages
 #                     (notignored-cli-<platform>-<arch>) via scripts/npm-build.mjs.
 #                     Runs unconditionally, same rationale as the wheels.
+#   * build-sdk-npm — compile the TypeScript SDK and stamp Cargo.toml's version
+#                     into it (npm/notignored-sdk/scripts/pack.mjs). Carries no
+#                     binary, so it needs no target matrix. Unconditional too.
 #   * publish-npm   — publish the platform packages, then the launcher that
-#                     depends on them, with the NPM_TOKEN secret, gated on the
-#                     NPM_PUBLISH repo variable.
-#   * verify-npm    — the same, on the same matrix, for `npm install -g`.
+#                     depends on them, then the SDK, with the NPM_TOKEN secret,
+#                     gated on the NPM_PUBLISH repo variable.
+#   * verify-npm    — the same, on the same matrix, for `npm install -g` and for
+#                     `npm install notignored-sdk`.
 #
 # Both verify jobs run the version at publish time only. `published-smoke.yml`
 # runs the identical script against whatever the registries serve as `latest`, on
@@ -418,6 +422,42 @@ jobs:
           name: npm-${{ matrix.target }}
           path: npm-artifacts/*.tgz
 
+  # The TypeScript SDK (notignored-sdk). Pure JavaScript once compiled, so unlike
+  # the launcher and the platform packages it needs no target matrix and no
+  # prebuilt binary — it resolves whichever `notignored` its consumer installed.
+  # Its version is stamped from Cargo.toml by the project's own pack script, the
+  # same single-source rule the wheels and the launcher follow. Unconditioned for
+  # the same reason build-npm is: a packaging break must redden a release even
+  # while publishing is switched off.
+  build-sdk-npm:
+    needs: test
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: extractions/setup-just@v3
+      # The SDK compiles with the repository's one pinned tsc, which this
+      # installs; nothing else in this job needs a toolchain.
+      - name: Install the pinned JS toolchain
+        run: just setup-js
+      - name: Build and pack the version-stamped SDK
+        run: |
+          just nx run notignored-sdk-npm:build
+          pkgdir="$(node npm/notignored-sdk/scripts/pack.mjs --out npm/dist)"
+          mkdir -p sdk-artifact
+          (cd "$pkgdir" && npm pack --pack-destination "$GITHUB_WORKSPACE/sdk-artifact")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-npm
+          path: sdk-artifact/*.tgz
+
   # npm publishing activates when the NPM_PUBLISH repository variable is 'true'.
   # `registry-url` makes setup-node write an .npmrc that authenticates with
   # NODE_AUTH_TOKEN, so `npm publish` is token-authenticated (an npm automation
@@ -429,7 +469,7 @@ jobs:
   # without it rather than risk that; adding it later is a one-flag change plus
   # `id-token: write` on this job.
   publish-npm:
-    needs: build-npm
+    needs: [build-npm, build-sdk-npm]
     permissions:
       contents: read
     if: ${{ vars.NPM_PUBLISH == 'true' }}
@@ -460,7 +500,11 @@ jobs:
           pattern: npm-*
           path: npm-artifacts
           merge-multiple: true
-      - name: Publish the platform packages, then the launcher
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-npm
+          path: sdk-artifact
+      - name: Publish the platform packages, then the launcher, then the SDK
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -476,6 +520,10 @@ jobs:
           # prebuilt target — just the version-stamped manifest.
           launcher="$(node scripts/npm-build.mjs launcher --out npm/dist)"
           bash scripts/publish-npm.sh "$launcher"
+          # The SDK last: it depends on nothing here, but a consumer following
+          # its README installs the launcher alongside it, so that has to resolve
+          # by the time the SDK is on the registry.
+          bash scripts/publish-npm.sh "$GITHUB_WORKSPACE"/sdk-artifact/*.tgz
 
   # Post-publish gate: prove the just-published version is npm-installable on
   # every OS a user installs it on, the same promise verify-pypi makes for the
@@ -516,19 +564,20 @@ jobs:
             echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"
             exit 1
           fi
-      - name: Wait for the version to land on npm
+      - name: Wait for the versions to land on npm
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          echo "Waiting for notignored-cli@$ver on npm..."
+          echo "Waiting for notignored-cli@$ver and notignored-sdk@$ver on npm..."
           for i in $(seq 1 30); do
-            if npm view "notignored-cli@${ver}" version >/dev/null 2>&1; then
-              echo "notignored-cli@$ver is available on npm."
+            if npm view "notignored-cli@${ver}" version >/dev/null 2>&1 \
+               && npm view "notignored-sdk@${ver}" version >/dev/null 2>&1; then
+              echo "notignored-cli@$ver and notignored-sdk@$ver are available on npm."
               exit 0
             fi
             echo "  attempt $i: not indexed yet; sleeping 10s..."
             sleep 10
           done
-          echo "::error::notignored-cli@$ver did not appear on npm within ~5 minutes"
+          echo "::error::notignored-cli@$ver and/or notignored-sdk@$ver did not appear on npm within ~5 minutes"
           exit 1
       - name: Install the published package
         run: |
@@ -540,3 +589,25 @@ jobs:
           bash scripts/smoke-published.sh \
             --expect-version "$ver" \
             --label "npm notignored-cli $ver on $RUNNER_OS/$RUNNER_ARCH"
+      # The SDK's own promise: installed from the registry, with the launcher
+      # beside it, `scan` finds the binary and returns the record contract. That
+      # resolution is per-platform — npm picks a different platform package on
+      # each runner — so it is asserted on every leg rather than once.
+      - name: Install the SDK from npm and scan through its packaged CLI
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          work="$(mktemp -d)"
+          cd "$work"
+          npm init --yes >/dev/null
+          npm install "notignored-sdk@${ver}" "notignored-cli@${ver}"
+          printf 'x = 1  # noqa: E501  # smoke test\n' > app.py
+          node --input-type=module -e '
+            import { scan } from "notignored-sdk";
+            const report = await scan(["app.py"]);
+            const [directive] = report.ignores;
+            if (report.ignores.length !== 1 || directive.tool !== "ruff"
+                || directive.rules[0] !== "E501" || directive.reason !== "smoke test") {
+              throw new Error(`installed SDK returned ${JSON.stringify(report)}`);
+            }
+          '
+          echo "npm install + packaged-CLI smoke test passed for notignored-sdk $ver"

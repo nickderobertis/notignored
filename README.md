@@ -254,6 +254,25 @@ The `json` format emits the full report envelope:
 
 `version` is the envelope version; it changes only when the shape does.
 
+### From TypeScript
+
+[`notignored-sdk`](npm/notignored-sdk) hands the same envelope to Node as typed
+records, by running the same binary — so a vitest suite, a GitHub Actions step,
+and your terminal all report the same thing:
+
+```console
+npm install notignored-sdk notignored-cli
+```
+
+```ts
+import { scan } from "notignored-sdk";
+
+const added = await scan(["."], { diff: true, diffBase: "origin/main" });
+if (added.ignores.some((directive) => directive.reason === null)) {
+  throw new Error("this change adds a suppression with no stated reason");
+}
+```
+
 ## Supported tools
 
 | Tool | Directives |
@@ -381,7 +400,8 @@ just --list      # everything else
 ```
 
 This is an Nx monorepo of three projects — the `notignored` crate at the repo
-root, plus the scaffolded `python/notignored-sdk` and `npm/notignored-sdk` SDKs.
+root, plus the `npm/notignored-sdk` TypeScript SDK and the scaffolded
+`python/notignored-sdk`.
 The repo-wide verbs above fan out across all of them; `just nx run
 notignored-sdk-python:check` runs one project's gate alone, and `just nx show
 projects` lists the graph. Pull-request CI narrows the gate to the projects the

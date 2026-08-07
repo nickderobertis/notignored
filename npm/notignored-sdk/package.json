@@ -1,14 +1,25 @@
 {
   "name": "notignored-sdk",
   "version": "0.0.0-managed",
-  "private": true,
-  "description": "TypeScript SDK for notignored. Scaffolded and wired into the project graph; the SDK itself has not landed yet.",
+  "description": "Typed TypeScript SDK for notignored: every lint and type-check suppression in a source tree, as records.",
+  "keywords": ["lint", "noqa", "suppression", "code-review", "sdk", "typescript"],
+  "homepage": "https://github.com/nickderobertis/notignored",
+  "bugs": "https://github.com/nickderobertis/notignored/issues",
   "license": "MIT",
+  "author": "Nick DeRobertis",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.mjs"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
-  "files": ["src"],
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=20"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nickderobertis/notignored.git",

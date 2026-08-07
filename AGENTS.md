@@ -64,9 +64,18 @@ follow-ups.
 ## The project graph
 
 Three projects, one graph: `notignored` (the crate, rooted at the repo root),
-`notignored-sdk-python`, `notignored-sdk-npm`. The SDKs are wired-but-empty
-scaffolds — their placeholder suites prove the graph and CI, and each carries its
-own nested `AGENTS.md` and a `.github/CODEOWNERS` line routing its reviews.
+`notignored-sdk-python`, `notignored-sdk-npm`. Each carries its own nested
+`AGENTS.md` and a `.github/CODEOWNERS` line routing its reviews.
+`notignored-sdk-npm` publishes `notignored-sdk` to npm (see "The registry
+packages"); `notignored-sdk-python` is still a wired-but-empty scaffold whose
+placeholder suite proves the graph and CI.
+
+The SDKs drive the binary as a subprocess, so their suites need one — but the
+crate's sources are deliberately **not** among their Nx inputs: affected
+selection maps each tree to its own project (`tests/e2e/nx_workspace.rs`), and
+widening that would make every parser change re-run every project. A change under
+`src/tools/` that could move an SDK's expectations is re-run with
+`--skip-nx-cache`, not by coupling the graph.
 
 Nx **runs** targets; it never decides what one does. A target names its project's
 own language-native tool (`_crate-*` recipes for cargo, ruff for the Python SDK,
@@ -192,10 +201,17 @@ is the committed launcher and `scripts/npm-build.mjs` generates the five
 Those platform names stay **unscoped**: a `@scope/` name needs an npm org, which a
 publish token cannot create.
 
+`notignored-sdk` is the fourth npm package and the one that carries no binary:
+`npm/notignored-sdk` compiles to JavaScript and *resolves* whichever `notignored`
+its consumer installed, so `notignored-cli` is deliberately not a dependency of
+it. It rides the same `NPM_PUBLISH` / `NPM_TOKEN` gating through `release.yml`'s
+`build-sdk-npm` job and the existing `publish-npm` / `verify-npm` pair.
+
 **Cargo.toml is the only version source.** The wheel takes it via `dynamic =
-["version"]`, the npm packages via `npm-build.mjs`, and the committed npm manifest
-carries `0.0.0-managed` so it can never become a second one — release-plz bumps
-`Cargo.toml` alone. Adding a target means the release matrices, `npm-build.mjs`,
+["version"]`, the npm packages via `npm-build.mjs`, the SDK via
+`npm/notignored-sdk/scripts/pack.mjs`, and every committed npm manifest carries
+`0.0.0-managed` so none can become a second one — release-plz bumps `Cargo.toml`
+alone. Adding a target means the release matrices, `npm-build.mjs`,
 and the launcher's `PACKAGES` map together; `tests/packaging_contract.rs` fails
 the build when they disagree, and `tests/e2e/packaging.rs` builds and installs
 both packages from the real binary on every gate run. A test never spells a
