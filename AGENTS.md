@@ -333,6 +333,14 @@ single-shot, so a wrong version fails now instead of in ten minutes.
 - **`RELEASE_PLZ_TOKEN` must stay a PAT.** A tag pushed by the default
   `GITHUB_TOKEN` does not trigger other workflows, so `release.yml` would never
   build the binaries and the release would ship nothing — silently.
+- **`@v0` is the action's consumption ref, and the release maintains it.**
+  release-plz cuts only exact `vX.Y.Z`, so `release.yml`'s `major-tag` job
+  force-moves a floating major tag — derived from the release tag, so `v1` starts
+  moving at 1.0 with no edit — and it runs *last*, gated on every publish and
+  verify job, because `@v0` must never resolve to a release whose artifacts
+  failed to publish. `scripts/update-major-tag.sh` refuses a pre-release and
+  refuses to walk the tag backwards onto an older release. README examples use
+  `@v0`; the dogfood workflow stays `uses: ./`.
 - **We are pre-1.0**, so a breaking change is a minor bump, not a major.
   Revisit the mapping in `release-plz.toml` at 1.0.
 

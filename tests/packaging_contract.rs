@@ -56,6 +56,11 @@ const SMOKE: &str = ".github/workflows/published-smoke.yml";
 /// over the build under test.
 const SMOKE_SCRIPT: &str = "scripts/smoke-published.sh";
 
+/// The one script that moves the floating major tag (`v0`) the README tells
+/// action consumers to write. `tests/e2e/major_tag.rs` drives it over real
+/// repositories; this file only holds *when* the release runs it.
+const MAJOR_TAG_SCRIPT: &str = "scripts/update-major-tag.sh";
+
 /// The one bounded retry every install of a pinned version goes through, so a
 /// registry that has not finished propagating costs a retry rather than a red
 /// release. `tests/e2e/retry_install.rs` drives the script itself.
@@ -1025,4 +1030,82 @@ fn only_the_jobs_that_read_the_repository_may_in(file: &str) {
             }
         );
     }
+}
+
+/// The floating major tag moves last, after everything that publishes.
+///
+/// `uses: nickderobertis/notignored@v0` is what the README tells consumers to
+/// write and what generated repositories pin, so the moment `v0` moves it is
+/// live for all of them. `needs:` is the only thing sequencing that behind the
+/// publishes — an edge lost here would let `@v0` resolve to a release whose
+/// wheels or npm packages never reached a registry, with nothing red to show it.
+///
+/// The list is derived from the job names rather than spelled out, so a publish
+/// or verify job added later is covered without an edit here.
+#[test]
+fn the_floating_major_tag_moves_after_every_publish_and_verification() {
+    let jobs = jobs();
+    let waits_for = needs(jobs.get("major-tag"));
+    let mut expected: BTreeSet<String> = jobs
+        .keys()
+        .iter()
+        .filter(|name| name.starts_with("publish-") || name.starts_with("verify-"))
+        .map(|name| (*name).to_string())
+        .collect();
+    // The binaries the action itself downloads. Not `publish-`/`verify-`-named,
+    // and the one artifact a consumer of `@v0` cannot do without.
+    expected.insert("upload".to_string());
+    let missing: Vec<&String> = expected.difference(&waits_for).collect();
+    assert!(
+        missing.is_empty(),
+        "`major-tag` does not wait for {missing:?}; `@v0` could resolve to a \
+         release those jobs never finished"
+    );
+}
+
+/// Failed is not skipped, and a pre-release is not a release consumers follow.
+///
+/// Most of the jobs `major-tag` waits for are *skipped* whenever PYPI_PUBLISH or
+/// NPM_PUBLISH is off, and a skipped `needs:` skips its dependent too — so the
+/// job needs an `if:` to run at all, and that `if:` is then the only thing that
+/// still stops it after a failure. Getting it wrong in either direction is
+/// invisible until a release: too strict and the tag silently never moves, too
+/// loose and it moves over a failed publish.
+#[test]
+fn the_floating_major_tag_moves_only_when_nothing_failed() {
+    let job = job("major-tag");
+    assert_eq!(
+        job.get("if").scalar(),
+        "${{ !failure() && !cancelled() && !github.event.release.prerelease }}",
+        "`major-tag` must run when its publishes were skipped, never when one failed, \
+         and never for a pre-release"
+    );
+    assert_eq!(
+        job.get("permissions").get("contents").scalar(),
+        "write",
+        "moving a tag is a write to refs/tags"
+    );
+    let checkout = job
+        .get("steps")
+        .list()
+        .iter()
+        .find(|step| {
+            step.find("uses")
+                .is_some_and(|uses| uses.scalar().starts_with("actions/checkout@"))
+        })
+        .expect("`major-tag` checks the repository out")
+        .clone();
+    assert_eq!(
+        checkout.get("with").get("fetch-depth").scalar(),
+        "0",
+        "the script compares this release against every other tag, which a shallow \
+         checkout does not fetch"
+    );
+    assert!(
+        scripts(&job)
+            .iter()
+            .any(|script| script.contains(MAJOR_TAG_SCRIPT)),
+        "`major-tag` no longer runs {MAJOR_TAG_SCRIPT}; the tag logic must stay in the \
+         script tests/e2e/major_tag.rs drives, not inline in a workflow"
+    );
 }

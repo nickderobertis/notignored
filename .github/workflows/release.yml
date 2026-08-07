@@ -45,6 +45,9 @@ name: Release
 #                     gated on the NPM_PUBLISH repo variable.
 #   * verify-npm    — the same, on the same matrix, for `npm install -g` and for
 #                     `npm install notignored-sdk`.
+#   * major-tag     — move the floating `v0` (the ref README tells action
+#                     consumers to use) onto this release, LAST, after every
+#                     publish and verify job. See scripts/update-major-tag.sh.
 #
 # Both verify jobs run the version at publish time only. `published-smoke.yml`
 # runs the identical script against whatever the registries serve as `latest`, on
@@ -738,3 +741,45 @@ jobs:
             }
           '
           echo "npm install + packaged-CLI smoke test passed for notignored-sdk $ver"
+
+  # The GitHub Action's consumption ref. `uses: nickderobertis/notignored@v0` is
+  # what the README tells consumers to write and what generated repositories
+  # pin, so this is the last thing a release does: every publish and verify job
+  # is a `needs:` of it, and `!failure()` is what turns that list into "none of
+  # them failed". Without it a consumer could resolve `@v0` to a release whose
+  # wheels or npm packages never reached a registry.
+  #
+  # `!failure() && !cancelled()` rather than a bare dependency list because most
+  # of those jobs are *skipped* whenever PYPI_PUBLISH / NPM_PUBLISH is off, and a
+  # skipped `needs:` would skip this job too — the tag would then never move on a
+  # repository that publishes nothing but the GitHub Release. Skipped is fine;
+  # failed is not.
+  #
+  # The major is derived from the tag inside the script, so `v1` starts moving at
+  # 1.0.0 with nothing here to edit; tests/e2e/major_tag.rs drives that logic over
+  # real repositories.
+  major-tag:
+    needs:
+      - upload
+      - publish-crate
+      - publish-pypi
+      - verify-pypi
+      - publish-python-sdk
+      - verify-python-sdk
+      - publish-npm
+      - verify-npm
+    if: ${{ !failure() && !cancelled() && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    # Force-updating a tag is a write to refs/tags, and the only write this job
+    # makes; the default GITHUB_TOKEN is enough, and a tag it pushes triggers no
+    # workflow, which is what keeps this from re-entering the release.
+    permissions:
+      contents: write
+    steps:
+      # Full history and every tag: the script decides whether this release is
+      # the newest one with its major, which a shallow checkout cannot answer.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Move the floating major tag onto this release
+        run: bash scripts/update-major-tag.sh --tag "$GITHUB_REF_NAME"
