@@ -155,6 +155,20 @@ never add an `environment:` or OIDC claim expecting one. The *build* jobs stay
 ungated on purpose: a packaging break must redden a release even while publishing
 is off.
 
+What the registries actually serve is proven by installing from them, per OS:
+`release.yml`'s `verify-pypi`/`verify-npm` install the just-published version on
+`ubuntu-latest`, `macos-latest`, and `windows-latest`, and
+`.github/workflows/published-smoke.yml` sweeps `latest` the same way weekly so rot
+between releases surfaces without one. Both assert through **one**
+`scripts/smoke-published.sh` over `tests/fixtures/smoke/` and
+`tests/golden/smoke.json`; `tests/e2e/smoke.rs` runs that same file over the build
+under test, which is what keeps a workflow's expectations from drifting from the
+parser that ships (re-bless with `just bless`). Keep the sweep toolchain-free — a
+weekly job that compiled the crate is the first one switched off. `linux-arm64`
+and `darwin-x64` have no verify leg: no hosted runner label this repo already
+schedules covers them, so they rest on the build matrices and
+`tests/e2e/packaging.rs`.
+
 ## Commits, releases, and merging
 
 - **Squash-merge only, via PR, with auto-merge.** The default branch is
@@ -165,7 +179,10 @@ is off.
 - **A new CI job is advisory until it is required.** Branch protection lists
   contexts by name, so adding a job means re-running the create-repo skill's
   `setup_github_governance.py` with the new context — otherwise a red run still
-  merges.
+  merges. Release-triggered and scheduled jobs (`release.yml`,
+  `published-smoke.yml`) are the exception and must stay unrequired: they report
+  no pull-request context, so requiring one would block every PR forever — the
+  same trap `notignored.yml` is kept out of.
 - **The PR description becomes the squash commit body**, so it is history, not
   paperwork.
 - **Merging a PR is the only human action in a release.** Never hand-edit a
