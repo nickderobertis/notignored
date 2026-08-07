@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.8](https://github.com/nickderobertis/notignored/compare/v0.1.7...v0.1.8) - 2026-08-07
+
+### Added
+
+- colorize the human report and show it — screenshots, a hero GIF, and a drift gate ([#29](https://github.com/nickderobertis/notignored/pull/29))
+
 ## [0.1.7](https://github.com/nickderobertis/notignored/compare/v0.1.6...v0.1.7) - 2026-08-07
 
 ### Added

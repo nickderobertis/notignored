@@ -1,6 +1,6 @@
 [package]
 name = "notignored"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 rust-version = "1.88"
 description = "Extract lint and type-check suppression comments from source files natively and fast — no linter subprocesses."
