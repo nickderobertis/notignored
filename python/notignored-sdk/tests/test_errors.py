@@ -214,7 +214,7 @@ def test_an_argument_that_is_not_what_it_claims_is_rejected(
 ) -> None:
     """Validated before a process starts, so a typo never becomes a scan of the wrong tree."""
     with pytest.raises(TypeError, match=expected):
-        scan(**kwargs)  # type: ignore[arg-type]
+        scan(**kwargs)
 
 
 def test_an_unknown_tool_name_is_rejected_before_a_process_starts() -> None:

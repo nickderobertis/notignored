@@ -53,7 +53,7 @@ def test_the_records_are_frozen_so_a_caller_cannot_edit_the_report(
     directive = scan(cwd=tree, tools=["ruff"], binary=notignored_binary).ignores[0]
 
     with pytest.raises(AttributeError):
-        directive.line = 99  # type: ignore[misc]
+        directive.line = 99
 
 
 def test_the_async_form_returns_the_same_report(notignored_binary: Path, tree: Path) -> None:
