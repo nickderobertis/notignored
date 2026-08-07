@@ -23,9 +23,55 @@ use std::process::{Command, Output};
 
 use crate::support::{bash_program, repo_root};
 
+/// The log directory, spelled the way `preserved_log_open` spells it.
+///
+/// Asked of the script rather than assembled here, because a claim is compared
+/// as a string and the two spellings have to be byte-identical. On Windows they
+/// are not obviously so: the script canonicalizes through Git Bash and answers
+/// `D:/a/...` where Rust's own path is `D:\a\...`, and a claim that missed would
+/// quietly stop these journeys from nesting — which is the one thing keeping
+/// them off the log `just check` is writing around them.
+///
+/// Probed under a throwaway label for that same reason: asking about `nx` itself
+/// would truncate the real log.
+fn logs_dir() -> String {
+    let output = Command::new(bash_program())
+        .args([
+            "-c",
+            r#". scripts/preserved-log.sh; preserved_log_open "$PWD" nxprobe >/dev/null; printf '%s' "$PRESERVED_LOG""#,
+        ])
+        .current_dir(repo_root())
+        .env_remove("NOTIGNORED_PRESERVED_LOGS")
+        .output()
+        .expect("ask scripts/preserved-log.sh for its canonical log path");
+    assert!(
+        output.status.success(),
+        "preserved_log_open failed:\n{}",
+        stderr(&output)
+    );
+    let probe = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // The probe file is left where it is. Removing it would race the journeys
+    // running beside this one — each opens the same throwaway label, and one that
+    // deleted the file between another's create and its `chmod` made
+    // `preserved_log_open` fail and answer with nothing. Truncating it
+    // concurrently is harmless, deleting it is not, and `.logs/` is ignored
+    // scratch either way.
+    probe
+        .strip_suffix("/nxprobe.log")
+        .unwrap_or_else(|| {
+            panic!(
+                "preserved_log_open answered {probe:?}, not a path ending in \
+                 `nxprobe.log`\n\
+                 ACTION: it returns its path in PRESERVED_LOG; an empty answer \
+                 means one of its own guards failed"
+            )
+        })
+        .to_string()
+}
+
 /// The stable log every un-nested invocation writes.
-fn stable_log() -> PathBuf {
-    repo_root().join(".logs").join("nx.log")
+fn stable_log() -> String {
+    format!("{}/nx.log", logs_dir())
 }
 
 /// Run `scripts/nx.sh` as a *nested* invocation — one whose enclosing run has
@@ -177,8 +223,7 @@ fn a_failed_runs_evidence_is_readable_after_the_process_is_gone() {
 /// untouched.
 #[test]
 fn a_nested_run_diverts_rather_than_truncating_the_enclosing_log() {
-    let claimed = repo_root().join(".logs").join("nx-enclosing-fixture.log");
-    std::fs::create_dir_all(claimed.parent().expect("the log directory")).expect("create .logs");
+    let claimed = format!("{}/nx-enclosing-fixture.log", logs_dir());
     let sentinel = "evidence from the enclosing run\n";
     std::fs::write(&claimed, sentinel).expect("seed the enclosing run's log");
 
@@ -186,7 +231,7 @@ fn a_nested_run_diverts_rather_than_truncating_the_enclosing_log() {
     // the stable log because leaving it unclaimed would make this run the
     // *enclosing* one, free to prune the diverted logs its sibling journeys are
     // still writing.
-    let claims = format!("{}\n{}", stable_log().display(), claimed.display());
+    let claims = format!("{}\n{}", stable_log(), claimed);
     let output = Command::new(bash_program())
         .arg("scripts/nx.sh")
         .args(["show", "projects", "--json"])
@@ -199,11 +244,11 @@ fn a_nested_run_diverts_rather_than_truncating_the_enclosing_log() {
 
     assert_ne!(
         reported_log(&output),
-        claimed,
+        PathBuf::from(&claimed),
         "the nested run took the log its enclosing run is still writing"
     );
     assert_eq!(
-        read(&claimed),
+        read(Path::new(&claimed)),
         sentinel,
         "the nested run truncated the enclosing run's log\n\
          ACTION: divert to a distinct path when the stable one is already claimed"

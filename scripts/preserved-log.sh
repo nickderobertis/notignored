@@ -49,7 +49,13 @@ preserved_log_open() {
   # Canonicalized, because the claim is compared as a string and callers spell
   # one root several ways. Two spellings of the same file have to be recognized
   # as the same file, or a nested run truncates it after all.
-  if ! { mkdir -p "$dir" && chmod 700 "$dir" && dir=$(cd -- "$dir" && pwd -P); }; then
+  #
+  # `pwd -W` first because on Windows this runs under Git Bash, whose `pwd -P`
+  # answers `/d/a/...` — a spelling only MSYS resolves. Both messages below print
+  # this path for someone to open, and a path that Explorer, PowerShell, and
+  # every native tool reject is not one they can. `-W` gives `D:/a/...`, which
+  # Git Bash reads too; it does not exist off Windows, hence the fallback.
+  if ! { mkdir -p "$dir" && chmod 700 "$dir" && dir=$(cd -- "$dir" && { pwd -W 2>/dev/null || pwd -P; }); }; then
     echo "preserved-log: cannot prepare '$root/.logs'; repair its parent permissions and retry" >&2
     return 1
   fi
