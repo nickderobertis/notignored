@@ -20,15 +20,24 @@ cd "$ROOT" || {
 }
 
 # The base branch as GitHub names it on a pull request, or the local default.
+#
 # `GITHUB_BASE_REF` is workflow-controlled rather than attacker-controlled, but it
 # reaches `git fetch` as a refspec, so its shape is validated at the boundary
 # instead of trusted: a branch name is what a branch name may look like.
+#
+# In CI its absence is meaningful rather than missing: a push build is *on* the
+# base branch, so scoping against it would find nothing changed and skip every
+# check. There is no base there, and no base means run everything.
 base_branch() {
   local ref="${NOTIGNORED_NX_BASE_REF:-${GITHUB_BASE_REF:-}}"
-  [ -n "$ref" ] || {
+  if [ -z "$ref" ]; then
+    if [ -n "${CI:-}" ]; then
+      echo "nx-affected: no base branch — this is not a pull-request build" >&2
+      return 1
+    fi
     printf 'main'
     return 0
-  }
+  fi
   if ! printf '%s' "$ref" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$'; then
     echo "nx-affected: '$ref' is not a usable branch name" >&2
     return 1

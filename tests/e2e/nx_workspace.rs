@@ -161,6 +161,75 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
     }
 }
 
+/// `scripts/nx-affected.sh --affects <project>` — its verdict and its reasoning —
+/// with the environment a CI leg hands it.
+fn affects(project: &str, base_ref: Option<&str>) -> (String, String) {
+    let mut command = Command::new("bash");
+    command
+        .arg(repo_root().join("scripts/nx-affected.sh"))
+        .arg("--affects")
+        .arg(project)
+        .current_dir(repo_root())
+        .env("CI", "1")
+        .env_remove("NOTIGNORED_NX_BASE_REF")
+        .env_remove("GITHUB_BASE_REF");
+    if let Some(base_ref) = base_ref {
+        command.env("GITHUB_BASE_REF", base_ref);
+    }
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("run scripts/nx-affected.sh: {error}"));
+    assert!(
+        output.status.success(),
+        "`nx-affected.sh --affects {project}` failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    (
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// Affected selection is a speed optimisation; one that can silently skip a
+/// check is a correctness hole. Each of these is a real way the merge base goes
+/// missing on a runner, and every one of them has to answer "run it".
+///
+/// The push build is the one that bites: a build *on* `main` has no base to
+/// scope against, and comparing `main` with itself finds nothing changed — which
+/// would skip the cross-platform, MSRV, audit, and install matrices on exactly
+/// the commit that is about to be released.
+///
+/// The verdict alone would not prove this from a branch that genuinely touches
+/// the crate — `true` is also what a *scoped* answer says there. So each case
+/// asserts the reason too: that the script found no base and selected
+/// everything, rather than having scoped and happened to agree.
+#[test]
+fn a_missing_merge_base_selects_the_crate_rather_than_skipping_it() {
+    for (case, base_ref) in [
+        ("a push build, which is on the base branch already", None),
+        ("a base branch that does not exist", Some("no-such-branch")),
+        (
+            "a base ref that is not a usable branch name",
+            Some("../evil"),
+        ),
+    ] {
+        let (verdict, reasoning) = affects("notignored", base_ref);
+        assert_eq!(
+            verdict, "true",
+            "with {case}, CI would skip the Rust matrices\n\
+             ACTION: scripts/nx-affected.sh must fail closed — no derivable merge \
+             base means every project is affected"
+        );
+        assert!(
+            reasoning.contains("no merge base"),
+            "with {case}, the script scoped instead of failing closed; it said:\n\
+             {reasoning}\n\
+             ACTION: it must report that it could not derive a base and select \
+             everything, not answer from a comparison it should never have made"
+        );
+    }
+}
+
 /// A pinned tool is shared: the crate's parity suites drive it *and* an SDK's
 /// gate runs it. Both projects have to re-run when the pin moves, which only
 /// happens while each names the pin among its inputs.
