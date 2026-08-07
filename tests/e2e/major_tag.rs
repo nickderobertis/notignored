@@ -50,10 +50,15 @@ impl Origin {
 
     /// Commit, tag, and push a release the way release-plz does — the tag on
     /// origin is the only thing the script is allowed to work from.
+    ///
+    /// **Annotated**, because that is what release-plz creates: an annotated tag
+    /// names a tag object, not a commit, so anything that read it without
+    /// peeling would point the floating major at an object no consumer can check
+    /// out.
     fn release(&self, tag: &str) -> String {
         write(self.clone.path(), "CHANGELOG.md", &format!("## {tag}\n"));
         commit(self.clone.path(), &format!("chore: release {tag}"));
-        git(self.clone.path(), &["tag", tag]);
+        git(self.clone.path(), &["tag", "-a", tag, "-m", tag]);
         git(self.clone.path(), &["push", "-q", "origin", "main"]);
         git(
             self.clone.path(),
@@ -74,6 +79,14 @@ impl Origin {
             .status
             .success()
             .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// The kind of object a ref on origin names — `commit` for the floating tag,
+    /// `tag` for the annotated release tags it is derived from.
+    fn object_type(&self, reference: &str) -> String {
+        git_stdout(self.bare.path(), &["cat-file", "-t", reference])
+            .trim()
+            .to_string()
     }
 
     /// Run the release job's script against this origin, from the clone.
@@ -134,6 +147,14 @@ fn the_floating_major_tag_follows_the_newest_release() {
     assert!(
         log.contains("v0 -> v0.1.10"),
         "a release log has to name what moved: {log}"
+    );
+    // Release tags are annotated, so the release commit is one dereference down
+    // from the tag ref. `@v0` has to name the commit itself.
+    assert_eq!(origin.object_type("v0.1.10"), "tag");
+    assert_eq!(
+        origin.object_type("v0"),
+        "commit",
+        "v0 names the annotated tag object rather than the commit it points at"
     );
 }
 
