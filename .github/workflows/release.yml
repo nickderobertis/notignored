@@ -39,6 +39,15 @@ name: Release
 # (maturin via `dynamic = ["version"]`, npm via scripts/npm-build.mjs), so
 # release-plz stays the single version driver.
 #
+# llmlint: ignore-file[changed_behavior_has_e2e] the publish and verify jobs are steps
+# in a GitHub Actions job on a published Release: polling a registry until it indexes a
+# version, installing that exact version, and smoke-testing it. Driving them from a test
+# would mean standing up a runner and a public release, or replacing both with a
+# simulation — and a simulation is what would then be under test. They are proven the
+# only way they can be, by running on every real release, and everything they call that
+# *can* be driven locally is: scripts/publish-npm.sh in tests/e2e/publish_npm.rs, and
+# both packages' build-and-install in tests/e2e/packaging.rs.
+#
 # llmlint: ignore-file[live_tier_compiles_and_requires_credential] the publish and
 # verify jobs are deliberately switched by the PYPI_PUBLISH / NPM_PUBLISH repository
 # variables, which is the operator's control over whether a Release reaches a public
