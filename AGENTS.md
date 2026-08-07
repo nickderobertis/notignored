@@ -295,6 +295,16 @@ is not something a release is the place to discover; it rests on the build
 matrices and `tests/e2e/packaging.rs`. `macos-15-intel` is hosted through August
 2027 — when it retires, replace the label rather than dropping the leg.
 
+**The install is the propagation probe, and the only one.** A publish is not one
+event: PyPI's JSON API answers while `pip install` still resolves through a simple
+index that converges later and per CDN edge, so a wait step polling that API said
+"available" and the install then failed — v0.1.4, v0.1.5 and v0.1.6 each went red
+having published fine. Every pinned-version install therefore runs through
+`scripts/retry-install.sh` (bounded, ~10 minutes, last error shown) and carries
+its client's cache-bypass flag, or the retry re-reads the "no such version" page
+it just cached. Only the install retries — the smoke assertion after it stays
+single-shot, so a wrong version fails now instead of in ten minutes.
+
 ## Commits, releases, and merging
 
 - **Squash-merge only, via PR, with auto-merge.** The default branch is

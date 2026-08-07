@@ -56,6 +56,36 @@ const SMOKE: &str = ".github/workflows/published-smoke.yml";
 /// over the build under test.
 const SMOKE_SCRIPT: &str = "scripts/smoke-published.sh";
 
+/// The one bounded retry every install of a pinned version goes through, so a
+/// registry that has not finished propagating costs a retry rather than a red
+/// release. `tests/e2e/retry_install.rs` drives the script itself.
+const RETRY_SCRIPT: &str = "scripts/retry-install.sh";
+
+/// The only commands a retry loop may be handed, spelled with the flag that
+/// makes the retry read the registry instead of the client's own cache.
+///
+/// pip and npm both cache the index response they just read, so a second attempt
+/// without these would re-read the cached "no such version" page for the whole
+/// budget — a retry polling its own memory.
+const RETRIED_COMMANDS: [&str; 3] = [
+    "pip install --no-cache-dir ",
+    "npm install -g --prefer-online ",
+    "npm install --prefer-online ",
+];
+
+/// Every job that installs an *exact* version, as `(workflow, job)`.
+///
+/// The release's three verify jobs install the version the Release just
+/// published; the sweep's npm job pins whatever `npm view` reported, so it races
+/// the same index whenever it runs near a release. The sweep's PyPI job is not
+/// here on purpose: it installs `latest`, which has no version to wait for.
+const PINNED_INSTALLS: [(&str, &str); 4] = [
+    (RELEASE, "verify-pypi"),
+    (RELEASE, "verify-python-sdk"),
+    (RELEASE, "verify-npm"),
+    (SMOKE, "npm"),
+];
+
 /// The runner labels every post-publish verification uses.
 ///
 /// One leg per *installable artifact*, not per OS: `pip install` and `npm
@@ -424,8 +454,14 @@ fn every_published_package_is_smoke_tested_on_every_supported_os() {
 #[test]
 fn the_release_verification_installs_the_version_it_asserts() {
     for (name, specifier) in [
-        ("verify-pypi", "pip install \"notignored-cli==${ver}\""),
-        ("verify-npm", "npm install -g \"notignored-cli@${ver}\""),
+        (
+            "verify-pypi",
+            "pip install --no-cache-dir \"notignored-cli==${ver}\"",
+        ),
+        (
+            "verify-npm",
+            "npm install -g --prefer-online \"notignored-cli@${ver}\"",
+        ),
     ] {
         let job = job(name);
         let installs = scripts(&job)
@@ -435,6 +471,97 @@ fn the_release_verification_installs_the_version_it_asserts() {
             installs,
             "`{name}` no longer installs the released version with `{specifier}`"
         );
+    }
+}
+
+/// Every install of a pinned version retries until the registry serves it, and
+/// nothing else does.
+///
+/// A publish is not one event: PyPI's JSON API answers for a new version while
+/// `pip install` still resolves through a simple index that converges later and
+/// per CDN edge. Releases v0.1.4, v0.1.5 and v0.1.6 each went red in a verify
+/// leg — "No matching distribution found for notignored-cli==0.1.6" — *after* a
+/// wait step polling that JSON API had printed the version as available. Every
+/// publish had succeeded. So the install is the probe, through the one
+/// [`RETRY_SCRIPT`] rather than a hand-copy per job, and the two properties that
+/// make it a probe rather than a blanket retry are held here:
+///
+///   * only an install is retried — a smoke assertion inside the loop would
+///     retry a *wrong version* for ten minutes instead of failing on it;
+///   * each install bypasses its own client's cache, because pip and npm both
+///     cache the index response they just read, and a retry re-reading its own
+///     cached "no such version" page polls its memory rather than the registry.
+#[test]
+fn every_pinned_install_retries_until_the_registry_serves_it() {
+    assert!(
+        repo_root().join(RETRY_SCRIPT).is_file(),
+        "{RETRY_SCRIPT} is gone, and every pinned install below calls it"
+    );
+    for (file, name) in PINNED_INSTALLS {
+        let job = workflow(file).get("jobs").get(name).clone();
+        let scripts = scripts(&job);
+        assert!(
+            scripts.iter().any(|script| script.contains(RETRY_SCRIPT)),
+            "`{name}` in {file} installs a pinned version without {RETRY_SCRIPT}; \
+             a single attempt races the index the publish is still propagating to"
+        );
+        for script in &scripts {
+            // Every install is one the retry loop was handed: `-- ` is where its
+            // own arguments end and the command it runs begins.
+            for verb in ["pip install", "npm install"] {
+                for (at, _) in script.match_indices(verb) {
+                    // Not the same words inside a message about them: these
+                    // steps `echo "npm install + packaged-CLI smoke test
+                    // passed"` when they are done. An odd number of quotes
+                    // before the match means one is still open.
+                    if script[..at].matches('"').count() % 2 == 1 {
+                        continue;
+                    }
+                    assert!(
+                        script[..at].ends_with("-- "),
+                        "`{name}` in {file} runs `{verb} …` outside {RETRY_SCRIPT}; \
+                         that single attempt is what races an index the publish is \
+                         still propagating to"
+                    );
+                }
+            }
+            for (at, _) in script.match_indices("-- ") {
+                let command = &script[at + 3..];
+                assert!(
+                    RETRIED_COMMANDS
+                        .iter()
+                        .any(|allowed| command.starts_with(allowed)),
+                    "`{name}` in {file} retries `{}…`, which is not one of {RETRIED_COMMANDS:?}; \
+                     only an install may be retried — an assertion inside the loop would be \
+                     retried for the whole budget instead of failing now, and an install \
+                     without its cache-bypass flag would re-read the index response the \
+                     failed attempt cached",
+                    &command[..command.len().min(40)],
+                );
+            }
+        }
+    }
+}
+
+/// The release's verify jobs wait on the resolver a user hits, and on nothing
+/// else.
+///
+/// Two waiting mechanisms is how this broke: the JSON-API poll and the install
+/// disagreed about when a version existed, and the poll is the one that cannot
+/// be right — it reads an API no installer resolves through. Keeping it out is
+/// what makes the install the single source of "a user can install this now".
+#[test]
+fn the_release_verification_does_not_poll_a_second_index() {
+    for name in ["verify-pypi", "verify-python-sdk", "verify-npm"] {
+        for script in scripts(&job(name)) {
+            for poll in ["pypi.org/pypi/", "npm view"] {
+                assert!(
+                    !script.contains(poll),
+                    "`{name}` polls `{poll}` as well as installing; the install is the \
+                     only mechanism that answers for the index a user resolves through"
+                );
+            }
+        }
     }
 }
 
@@ -660,10 +787,9 @@ fn the_sdk_verification_proves_both_halves_of_the_pin() {
     let job = job("verify-python-sdk");
     let scripts = scripts(&job);
     assert!(
-        scripts.iter().any(
-            |script| script.contains("pip install \"notignored-sdk==${ver}\"")
-                && script.contains("${GITHUB_REF_NAME#v}")
-        ),
+        scripts.iter().any(|script| script
+            .contains("pip install --no-cache-dir \"notignored-sdk==${ver}\"")
+            && script.contains("${GITHUB_REF_NAME#v}")),
         "`verify-python-sdk` no longer installs the released version"
     );
     for evidence in [

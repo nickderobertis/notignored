@@ -131,12 +131,15 @@ jobs:
             exit 1
           fi
           # Pinned to what `npm view` just reported so the version asserted below
-          # is the one that was installed, even if latest moves mid-run.
-          if ! npm install -g "notignored-cli@${version}"; then
-            echo "::error::npm on $RUNNER_OS/$RUNNER_ARCH: npm install -g notignored-cli@$version failed"
-            echo "ACTION: the platform package for this runner is missing or unpublished; check the notignored-cli-* packages" >&2
-            exit 1
-          fi
+          # is the one that was installed, even if latest moves mid-run. That
+          # pin is also why this install retries: `npm view` and the install
+          # resolve independently, so a version published minutes ago can be on
+          # the edge one read and not the other — the same race that reddened
+          # three releases, which scripts/retry-install.sh records.
+          bash scripts/retry-install.sh \
+            --label "npm notignored-cli $version on $RUNNER_OS/$RUNNER_ARCH" \
+            --action "the platform package for this runner is missing or unpublished; check the notignored-cli-* packages" \
+            -- npm install -g --prefer-online "notignored-cli@${version}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Smoke-test what npm served
         env:

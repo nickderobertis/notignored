@@ -27,6 +27,7 @@ mod polyglot;
 mod publish_npm;
 mod python_tools_setup;
 mod python_types_parity;
+mod retry_install;
 mod ruff_grammar;
 mod ruff_parity;
 mod rust_parity;
