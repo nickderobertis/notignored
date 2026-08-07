@@ -10,9 +10,20 @@
 //!
 //! | Form | Scope | Rules | Reason |
 //! | --- | --- | --- | --- |
-//! | `ignore[rule] why` | line | `rule` | `why` |
+//! | `x = 1  # …ignore[rule] why` | line | `rule` | `why` |
+//! | `# …ignore[rule] why` alone on its line | next-line | `rule` | `why` |
 //! | `ignore-file[a, b] why` | file | `a`, `b` | `why` |
 //! | `ignore-block[rule] why` … `ignore-end[rule]` | block | `rule` | `why` |
+//!
+//! Where the directive sits is what decides between the first two rows, and it
+//! is the difference between a reviewer seeing the code a suppression silences
+//! and seeing the suppression quoted back at them:
+//!
+//! * **Trailing code** — it covers that line's code, which is right there.
+//! * **Alone on its line** (indentation and trailing whitespace aside) — the
+//!   code it silences is the line below, so that is what `suppressed` names. For
+//!   a directive inside a multi-line comment, "below" is the line after the
+//!   comment ends, because nothing before that is code.
 //!
 //! The keyword is lower-case, takes no space before its colon, and need not open
 //! the comment — matching what the real `llmlint check-ignores` accepts.
@@ -86,7 +97,7 @@ impl LlmlintParser {
                     close_blocks(&mut scanned, &mut open, &found.rules, line);
                     continue;
                 }
-                let scope = found.verb.scope();
+                let scope = found.verb.scope(alone_on_its_line(comment, line));
                 if scope == Scope::Block {
                     for rule in &found.rules {
                         if !open.iter().any(|(open_rule, _)| open_rule == rule) {
@@ -104,7 +115,7 @@ impl LlmlintParser {
                     end_line: line,
                     column,
                     raw: found.raw.to_string(),
-                    suppressed: suppressed_range(scope, line),
+                    suppressed: suppressed_range(scope, comment, line),
                 });
             }
         }
@@ -155,7 +166,17 @@ fn close_blocks(
     });
 }
 
-fn suppressed_range(scope: Scope, line: u32) -> Suppressed {
+/// True when nothing but whitespace and comment syntax shares the directive's
+/// line — so the code it silences cannot be on that line.
+///
+/// [`Comment::leading`] answers it for the line the comment opens on; every
+/// later line of a multi-line comment is wholly comment by construction, even
+/// when the comment itself started after code.
+fn alone_on_its_line(comment: &Comment, line: u32) -> bool {
+    comment.leading || line > comment.line
+}
+
+fn suppressed_range(scope: Scope, comment: &Comment, line: u32) -> Suppressed {
     match scope {
         Scope::File => Suppressed {
             start_line: 1,
@@ -166,7 +187,16 @@ fn suppressed_range(scope: Scope, line: u32) -> Suppressed {
             start_line: line,
             end_line: None,
         },
-        _ => Suppressed {
+        // The first line that can hold code: past the whole comment, not just
+        // past the directive's own line.
+        Scope::NextLine => {
+            let next = comment.end_line.saturating_add(1);
+            Suppressed {
+                start_line: next,
+                end_line: Some(next),
+            }
+        }
+        Scope::Line => Suppressed {
             start_line: line,
             end_line: Some(line),
         },
@@ -207,7 +237,8 @@ fn prefix_width(text: &str, at: usize) -> u32 {
 /// Which `ignore` form a directive uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verb {
-    /// `ignore` — the line the directive sits on.
+    /// `ignore` — the line the directive sits on, or the one below when the
+    /// directive has that line to itself.
     Line,
     /// `ignore-file` — the whole file.
     File,
@@ -227,8 +258,11 @@ impl Verb {
         ("ignore", Verb::Line),
     ];
 
-    fn scope(self) -> Scope {
+    /// The scope this verb takes, given whether the directive has its line to
+    /// itself. `End` never reaches a record; it closes the block it matches.
+    fn scope(self, alone: bool) -> Scope {
         match self {
+            Verb::Line | Verb::End if alone => Scope::NextLine,
             Verb::Line | Verb::End => Scope::Line,
             Verb::File => Scope::File,
             Verb::Block => Scope::Block,
@@ -349,10 +383,10 @@ mod tests {
     }
 
     #[test]
-    fn an_ignore_covers_the_line_it_sits_on() {
+    fn an_ignore_alone_on_its_line_covers_the_line_below() {
         let directive = only_hash("ignore[no_todo] tracked in issue 42");
         assert_eq!(directive.tool, Tool::Llmlint);
-        assert_eq!(directive.scope, Scope::Line);
+        assert_eq!(directive.scope, Scope::NextLine);
         assert_eq!(directive.rules, vec!["no_todo"]);
         assert_eq!(directive.reason.as_deref(), Some("tracked in issue 42"));
         assert_eq!(directive.path, "src/app.py");
@@ -364,11 +398,109 @@ mod tests {
             directive.raw,
             format!("{KEYWORD}: ignore[no_todo] tracked in issue 42")
         );
+        // The code, not the comment: `x = 1` is what a reviewer has to judge.
         assert_eq!(
             directive.suppressed,
             Suppressed {
-                start_line: 1,
-                end_line: Some(1)
+                start_line: 2,
+                end_line: Some(2)
+            }
+        );
+    }
+
+    #[test]
+    fn an_ignore_trailing_code_covers_that_code() {
+        let directive = only(&script(&[
+            "x = 0",
+            &format!("y = 1  # {KEYWORD}: ignore[no_todo] the line right here"),
+            "z = 2",
+        ]));
+        assert_eq!(directive.scope, Scope::Line);
+        assert_eq!((directive.line, directive.column), (2, 10));
+        assert_eq!(
+            directive.suppressed,
+            Suppressed {
+                start_line: 2,
+                end_line: Some(2)
+            }
+        );
+    }
+
+    /// Indentation is whitespace, and trailing whitespace is not code either:
+    /// neither one puts anything on the line for the directive to cover.
+    #[test]
+    fn indentation_and_trailing_whitespace_leave_the_directive_alone_on_its_line() {
+        let indented = only(&script(&[
+            "def f():",
+            &format!("    # {KEYWORD}: ignore[no_print] the trace is the feature"),
+            "    print(1)",
+        ]));
+        assert_eq!(indented.scope, Scope::NextLine);
+        assert_eq!((indented.line, indented.column), (2, 7));
+        assert_eq!(
+            indented.suppressed,
+            Suppressed {
+                start_line: 3,
+                end_line: Some(3)
+            }
+        );
+
+        let padded = only(&script(&[
+            &format!("# {KEYWORD}: ignore[no_print] the trace is the feature   "),
+            "print(1)",
+        ]));
+        assert_eq!(padded.scope, Scope::NextLine);
+        assert_eq!(
+            padded.suppressed,
+            Suppressed {
+                start_line: 2,
+                end_line: Some(2)
+            }
+        );
+    }
+
+    /// A directive inside a multi-line comment reaches past the whole comment:
+    /// the lines between it and the closing delimiter cannot hold code.
+    #[test]
+    fn a_directive_in_a_multi_line_comment_covers_the_line_after_the_comment() {
+        let directive = LlmlintParser
+            .parse(&SourceFile::new(
+                "a.rs",
+                script(&[
+                    "/*",
+                    &format!("  {KEYWORD}: ignore[dead_code] generated, and read by the parser"),
+                    "*/",
+                    "struct Tables;",
+                ]),
+            ))
+            .remove(0);
+        assert_eq!(directive.scope, Scope::NextLine);
+        assert_eq!(
+            directive.suppressed,
+            Suppressed {
+                start_line: 4,
+                end_line: Some(4)
+            }
+        );
+
+        // The comment opened after code, but the directive's own line is still
+        // wholly comment, so the code it covers is the one below.
+        let trailing_open = LlmlintParser
+            .parse(&SourceFile::new(
+                "a.rs",
+                script(&[
+                    "let a = 1; /* prose",
+                    &format!("  {KEYWORD}: ignore[dead_code] deliberate */"),
+                    "let b = 2;",
+                ]),
+            ))
+            .remove(0);
+        assert_eq!(trailing_open.scope, Scope::NextLine);
+        assert_eq!(
+            trailing_open.suppressed,
+            Suppressed {
+                start_line: 3,
+                end_line: Some(3)
             }
         );
     }

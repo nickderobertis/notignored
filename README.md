@@ -351,10 +351,12 @@ Scope follows each tool's own rules, not a house convention:
   separate implementation of the same directives and is not guaranteed to read
   every form the same way, so the claim here is parity with the pinned compiler
   rather than with every `tsc` ever shipped.
-- **llmlint** — `ignore` is `line`, `ignore-file` is `file`, and
-  `ignore-block` … `ignore-end` is one `block` record spanning both directives.
-  A block left unclosed keeps a null `suppressed.end_line` and adds an `errors`
-  entry.
+- **llmlint** — `ignore` trailing code is `line`; alone on its line it is
+  `next-line`, because the code it silences is the one below (for a directive
+  inside a multi-line comment, the first line after the comment ends).
+  `ignore-file` is `file`, and `ignore-block` … `ignore-end` is one `block`
+  record spanning both directives. A block left unclosed keeps a null
+  `suppressed.end_line` and adds an `errors` entry.
 
 Each tool's own reason syntax is what gets captured: ESLint's ` -- description`,
 Biome's mandatory `: explanation`, ruff's trailing `# comment`, and — for

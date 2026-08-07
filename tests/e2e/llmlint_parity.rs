@@ -90,9 +90,18 @@ fn llmlint_validates_the_clean_fixture_and_notignored_reports_every_directive() 
             ("service.py", 1, "file", vec!["errors_are_contextualized"]),
             ("service.py", 4, "block", vec!["no_debug_prints"]),
             ("service.py", 11, "line", vec!["no_todo_comments"]),
+            ("service.py", 16, "next-line", vec!["no_debug_prints"]),
         ],
         "{report:#}"
     );
+
+    // Where an `ignore` sits is what its span has to answer for: the trailing
+    // one covers the code it shares a line with, the one that has its line to
+    // itself covers the code below — which is the only place that code can be.
+    assert_eq!(found[4]["suppressed"]["start_line"], 11);
+    assert_eq!(found[4]["suppressed"]["end_line"], 11);
+    assert_eq!(found[5]["suppressed"]["start_line"], 17);
+    assert_eq!(found[5]["suppressed"]["end_line"], 17);
 
     // llmlint validated every one of these, which means each names configured
     // rules and carries a reason. Both have to be visible in the record.
@@ -150,7 +159,10 @@ fn an_unclosed_block_and_a_missing_reason_are_flagged_by_both() {
     let no_reason = &found[0];
     assert_eq!(no_reason["path"], "no_reason.py");
     assert_eq!(no_reason["line"], 1);
-    assert_eq!(no_reason["scope"], "line");
+    // Alone on its line, so what it silences is the `TODO` on the line below.
+    assert_eq!(no_reason["scope"], "next-line");
+    assert_eq!(no_reason["suppressed"]["start_line"], 2);
+    assert_eq!(no_reason["suppressed"]["end_line"], 2);
     assert_eq!(no_reason["rules"], serde_json::json!(["no_todo_comments"]));
     assert!(
         no_reason["reason"].is_null(),
