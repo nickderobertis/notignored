@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.6](https://github.com/nickderobertis/notignored/compare/v0.1.5...v0.1.6) - 2026-08-07
+
+### Added
+
+- *(sdk)* ship the typed TypeScript SDK for notignored ([#21](https://github.com/nickderobertis/notignored/pull/21))
+
 ## [0.1.5](https://github.com/nickderobertis/notignored/compare/v0.1.4...v0.1.5) - 2026-08-07
 
 ### Fixed
