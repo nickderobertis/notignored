@@ -46,6 +46,10 @@ fn nx(args: &[&str]) -> String {
         .arg("scripts/nx.sh")
         .args(args)
         .current_dir(repo_root())
+        // These read Nx's answer off stdout, so the wrapper streams instead of
+        // folding it into its one-line summary. `tests/e2e/nx_wrapper.rs` owns
+        // the quiet default and proves this mode still passes stdout through.
+        .env("NOTIGNORED_NX_SHOW_OUTPUT", "1")
         .output()
         .unwrap_or_else(|error| {
             panic!("run scripts/nx.sh {args:?}: {error}\nACTION: run `just bootstrap`")
@@ -162,6 +166,194 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
              ACTION: CI skips the cross/install matrices on `just affected-crate`; \
              fix the project roots or nx.json's namedInputs before merging"
         );
+    }
+}
+
+/// The layering every dependency in the graph has to respect, as
+/// `scope` -> the scopes it may depend on.
+///
+/// The CLI is the base: it is the published artifact, and the SDKs are clients
+/// that will wrap it. An edge the other way would make the crate's gate depend
+/// on an SDK's, which is how a monorepo turns into one indivisible build.
+///
+/// Enforced here rather than through Nx's `@nx/enforce-module-boundaries` lint
+/// rule, which is ESLint's and so can only see the one TypeScript project — a
+/// rule that cannot reach the Rust or Python project is not enforcing this
+/// graph's boundaries. The tags it keys on are the same ones that rule would use.
+const LAYERS: [(&str, &[&str]); 2] = [("scope:cli", &[]), ("scope:sdk", &["scope:cli"])];
+
+/// Whether a project in `source_scope` may depend on one in `target_scope`.
+fn may_depend_on(source_scope: &str, target_scope: &str) -> bool {
+    LAYERS
+        .iter()
+        .find(|(scope, _)| *scope == source_scope)
+        .is_some_and(|(_, allowed)| allowed.contains(&target_scope))
+}
+
+/// The one `scope:` tag a project declares, which is what the layering keys on.
+fn scope_of(tags: &[String], project: &str) -> String {
+    let scopes: Vec<&String> = tags
+        .iter()
+        .filter(|tag| tag.starts_with("scope:"))
+        .collect();
+    assert_eq!(
+        scopes.len(),
+        1,
+        "{project} declares {} `scope:` tags ({tags:?}); the boundary rule cannot \
+         decide what it may depend on\n\
+         ACTION: give every project exactly one scope in its project.json",
+        scopes.len()
+    );
+    assert!(
+        LAYERS.iter().any(|(scope, _)| scope == scopes[0]),
+        "{project} is tagged {} which the layering in tests/e2e/nx_workspace.rs \
+         knows nothing about\n\
+         ACTION: add it to LAYERS with the scopes it may depend on",
+        scopes[0]
+    );
+    scopes[0].clone()
+}
+
+/// The whole project graph as Nx computes it, nodes and dependency edges.
+fn graph() -> serde_json::Value {
+    let stdout = nx(&["graph", "--print"]);
+    let start = stdout
+        .find('{')
+        .unwrap_or_else(|| panic!("`nx graph --print` printed no JSON:\n{stdout}"));
+    serde_json::from_str::<serde_json::Value>(&stdout[start..])
+        .unwrap_or_else(|error| panic!("`nx graph --print` is not JSON: {error}"))["graph"]
+        .clone()
+}
+
+fn tags_by_project(graph: &serde_json::Value) -> std::collections::BTreeMap<String, Vec<String>> {
+    graph["nodes"]
+        .as_object()
+        .expect("the graph has nodes")
+        .iter()
+        .map(|(name, node)| {
+            let tags = node["data"]["tags"]
+                .as_array()
+                .map(|tags| {
+                    tags.iter()
+                        .filter_map(|tag| tag.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (name.clone(), tags)
+        })
+        .collect()
+}
+
+/// Every `source -> target` edge Nx resolved between projects.
+fn edges(graph: &serde_json::Value) -> Vec<(String, String)> {
+    graph["dependencies"]
+        .as_object()
+        .expect("the graph has a dependency map")
+        .iter()
+        .flat_map(|(source, targets)| {
+            targets
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(move |edge| {
+                    edge["target"]
+                        .as_str()
+                        .map(|target| (source.clone(), target.to_string()))
+                })
+        })
+        .collect()
+}
+
+#[test]
+fn every_project_declares_the_scope_its_boundaries_are_keyed_on() {
+    let graph = graph();
+    for (project, tags) in tags_by_project(&graph) {
+        scope_of(&tags, &project);
+    }
+}
+
+/// The boundary rule itself, applied to the graph Nx actually resolved.
+#[test]
+fn every_dependency_in_the_graph_respects_the_layering() {
+    let graph = graph();
+    let tags = tags_by_project(&graph);
+    for (source, target) in edges(&graph) {
+        let (source_scope, target_scope) = (
+            scope_of(&tags[&source], &source),
+            scope_of(&tags[&target], &target),
+        );
+        assert!(
+            may_depend_on(&source_scope, &target_scope),
+            "{source} ({source_scope}) depends on {target} ({target_scope}), which \
+             the layering does not allow\n\
+             ACTION: invert the dependency, or widen LAYERS deliberately — the CLI \
+             is the base and must not depend on an SDK"
+        );
+    }
+}
+
+/// The rule has to *reject* something, and today's graph has no cross-project
+/// edges to reject — so the decision is exercised on the edges a future change
+/// would introduce. Without this, the check above passes over an empty set and
+/// proves nothing.
+#[test]
+fn the_layering_rejects_an_edge_that_inverts_it() {
+    assert!(
+        may_depend_on("scope:sdk", "scope:cli"),
+        "an SDK wrapping the CLI is the dependency this graph is for"
+    );
+    assert!(
+        !may_depend_on("scope:cli", "scope:sdk"),
+        "the CLI must not depend on an SDK: its gate would then wait on theirs"
+    );
+    assert!(
+        !may_depend_on("scope:sdk", "scope:sdk"),
+        "the SDKs are siblings; one must not reach into the other"
+    );
+    assert!(
+        !may_depend_on("scope:cli", "scope:cli"),
+        "a scope must not depend on itself, which is where a cycle starts"
+    );
+}
+
+/// Layering keeps the graph acyclic only while it is actually acyclic — an Nx
+/// plugin that inferred an edge could still close a loop, and a cyclic graph is
+/// one whose targets cannot be ordered at all.
+#[test]
+fn the_project_graph_is_acyclic() {
+    let graph = graph();
+    let edges = edges(&graph);
+    let mut settled: std::collections::BTreeSet<String> = Default::default();
+    let mut path: Vec<String> = Vec::new();
+
+    fn walk(
+        project: &str,
+        edges: &[(String, String)],
+        settled: &mut std::collections::BTreeSet<String>,
+        path: &mut Vec<String>,
+    ) {
+        if settled.contains(project) {
+            return;
+        }
+        assert!(
+            !path.iter().any(|seen| seen == project),
+            "the project graph has a cycle: {} -> {project}\n\
+             ACTION: break it — Nx cannot order targets around a cycle",
+            path.join(" -> ")
+        );
+        path.push(project.to_string());
+        for (source, target) in edges {
+            if source == project {
+                walk(target, edges, settled, path);
+            }
+        }
+        path.pop();
+        settled.insert(project.to_string());
+    }
+
+    for project in tags_by_project(&graph).keys() {
+        walk(project, &edges, &mut settled, &mut path);
     }
 }
 

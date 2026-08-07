@@ -1,0 +1,27 @@
+# Review routing for the project graph. Last matching pattern wins.
+#
+# One maintainer owns everything today, so the per-project lines below are not
+# redundant with the catch-all: they are where a subtree's owner changes when an
+# SDK gains one, and they keep that change to a single line. Adding a project
+# means adding its line here, next to its `project.json` and nested `AGENTS.md`.
+
+* @nickderobertis
+
+# The Rust CLI — the published artifact and the versioned report contract.
+/src/                    @nickderobertis
+/tests/                  @nickderobertis
+/npm/notignored/         @nickderobertis
+/action.yml              @nickderobertis
+/Cargo.toml              @nickderobertis
+
+# The SDKs.
+/python/notignored-sdk/  @nickderobertis
+/npm/notignored-sdk/     @nickderobertis
+
+# The orchestration and release surfaces, where a mistake is repo-wide.
+/.github/                @nickderobertis
+/scripts/                @nickderobertis
+/nx.json                 @nickderobertis
+/project.json            @nickderobertis
+/justfile                @nickderobertis
+/release-plz.toml        @nickderobertis
