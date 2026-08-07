@@ -4,6 +4,13 @@
 //! one. The moment the two spell it differently, the documented install
 //! one-liner 404s — a failure local testing never catches because there is no
 //! release to try. This test compares the two templates directly.
+//!
+//! Comparing them to *each other* is not enough on its own, and v0.1.11 is the
+//! proof: both sides agreed on the archive stem, and the installer then asked for
+//! the checksum as `<archive>.sha256` while every release has ever published it
+//! as `<stem>.sha256`. So the rendered names are also held against
+//! `tests/fixtures/release-assets/v0.1.11.txt` — a real release's real asset
+//! listing, which no template in this repository can talk into agreeing with it.
 
 use std::path::{Path, PathBuf};
 
@@ -27,14 +34,49 @@ fn release_workflow_template(workflow: &str) -> String {
         .expect("release.yml declares an `archive:` template")
 }
 
-/// The template `scripts/install.sh` records for the name it builds.
-fn installer_template(script: &str) -> String {
+/// A `# <MARKER>:` template `scripts/install.sh` records for a name it builds.
+fn installer_marker(script: &str, marker: &str) -> String {
+    let prefix = format!("# {marker}:");
     script
         .lines()
-        .find_map(|line| line.trim().strip_prefix("# ASSET_NAME_TEMPLATE:"))
+        .find_map(|line| line.trim().strip_prefix(&prefix))
         .map(|value| value.trim().to_string())
-        .expect("install.sh records an ASSET_NAME_TEMPLATE marker")
+        .unwrap_or_else(|| panic!("install.sh records a {marker} marker"))
 }
+
+/// The template `scripts/install.sh` records for the archive stem it builds.
+fn installer_template(script: &str) -> String {
+    installer_marker(script, "ASSET_NAME_TEMPLATE")
+}
+
+/// Every asset name a real release carried, from a listing this repository did
+/// not generate. Comment lines let the fixture say where it came from.
+fn published_asset_names() -> Vec<String> {
+    read("tests/fixtures/release-assets/v0.1.11.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Fill a `$bin-$tag-$target` template in, the way both sides do at runtime.
+fn render(template: &str, target: &str) -> String {
+    template
+        .replace("$bin", "notignored")
+        .replace("$tag", "v0.1.11")
+        .replace("$target", target)
+}
+
+/// The five targets `release.yml` builds, with the archive extension each one's
+/// upload carries.
+const PUBLISHED_TARGETS: &[(&str, &str)] = &[
+    ("x86_64-unknown-linux-gnu", "tar.gz"),
+    ("aarch64-unknown-linux-gnu", "tar.gz"),
+    ("x86_64-apple-darwin", "tar.gz"),
+    ("aarch64-apple-darwin", "tar.gz"),
+    ("x86_64-pc-windows-msvc", "zip"),
+];
 
 #[test]
 fn the_installer_and_the_release_workflow_agree_on_the_archive_name() {
@@ -53,13 +95,71 @@ fn the_installer_builds_the_name_its_marker_promises() {
     let script = read("scripts/install.sh");
     // `$bin-$tag-$target` in the workflow is `$BIN-$VERSION-$TARGET` in the shell.
     assert!(
-        script.contains(r#"ARCHIVE="$BIN-$VERSION-$TARGET.$EXT""#),
-        "install.sh no longer builds the archive name from BIN/VERSION/TARGET"
+        script.contains(r#"ASSET="$BIN-$VERSION-$TARGET""#),
+        "install.sh no longer builds the asset stem from BIN/VERSION/TARGET"
     );
     assert!(
-        script.contains(r#""$BASE_URL/$VERSION/$ARCHIVE.sha256""#),
-        "install.sh must fetch the `.sha256` the release workflow publishes"
+        script.contains(r#"ARCHIVE="$ASSET.$EXT""#),
+        "install.sh must give the stem the archive's extension"
     );
+    assert!(
+        script.contains(r#"CHECKSUM="$ASSET.sha256""#),
+        "install.sh must give the stem the `.sha256` extension, not append one \
+         to the archive name — the release publishes the two as siblings"
+    );
+    assert!(
+        script.contains(r#""$BASE_URL/$VERSION/$CHECKSUM""#),
+        "install.sh must fetch the checksum name it built"
+    );
+    assert!(
+        !script.contains("$ARCHIVE.sha256"),
+        "install.sh appends `.sha256` to the archive name; no release has ever \
+         published that name (see tests/fixtures/release-assets/v0.1.11.txt)"
+    );
+}
+
+/// The checksum's name is the archive's *stem* plus `.sha256`, because that is
+/// how `taiki-e/upload-rust-binary-action` derives it from the `archive:` input.
+#[test]
+fn the_checksum_template_is_the_asset_stem_plus_sha256() {
+    let script = read("scripts/install.sh");
+    let stem = installer_template(&script);
+    let checksum = installer_marker(&script, "CHECKSUM_NAME_TEMPLATE");
+    assert_eq!(
+        checksum,
+        format!("{stem}.sha256"),
+        "the checksum template must extend the archive stem, not the archive name"
+    );
+}
+
+/// The names the installer would actually request, against the names a release
+/// actually carries. This is the check the v0.1.11 outage needed: an
+/// installer-versus-workflow comparison passed throughout it, because both
+/// spelled the stem the same and only the installer's checksum suffix was wrong.
+#[test]
+fn every_url_the_installer_builds_names_a_published_asset() {
+    let script = read("scripts/install.sh");
+    let stem = installer_template(&script);
+    let checksum = installer_marker(&script, "CHECKSUM_NAME_TEMPLATE");
+    let published = published_asset_names();
+    assert_eq!(
+        published.len(),
+        PUBLISHED_TARGETS.len() * 2,
+        "the release manifest should hold an archive and a checksum per target"
+    );
+
+    for (target, extension) in PUBLISHED_TARGETS {
+        for name in [
+            format!("{}.{extension}", render(&stem, target)),
+            render(&checksum, target),
+        ] {
+            assert!(
+                published.contains(&name),
+                "install.sh would request {name}, which release v0.1.11 does not \
+                 publish; its assets are {published:?}"
+            );
+        }
+    }
 }
 
 #[test]

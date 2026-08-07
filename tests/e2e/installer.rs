@@ -254,8 +254,14 @@ fn publish(tag: &str, corrupt_checksum: bool, with_checksum: bool) -> Release {
             sha256_of(&archive)
         };
         let name = archive.file_name().unwrap().to_string_lossy().to_string();
+        // `<stem>.sha256`, a sibling of the archive — the name
+        // taiki-e/upload-rust-binary-action actually publishes, not
+        // `<archive>.sha256`. This fixture spelled it the second way, which is
+        // why it agreed with an installer that 404'd against every real release:
+        // the layout under test was copied from the script rather than from the
+        // release. The digest line still names the archive, as the tool writes it.
         fs::write(
-            release.join(format!("{name}.sha256")),
+            release.join(format!("notignored-{tag}-{}.sha256", host_target())),
             format!("{digest}  {name}\n"),
         )
         .unwrap();
@@ -276,6 +282,46 @@ impl Release {
     fn requests(&self) -> String {
         fs::read_to_string(self.dir.join("requests.log")).unwrap_or_default()
     }
+
+    /// The path of every request, in order — `/v9.9.9/notignored-….sha256`.
+    fn requested_paths(&self) -> Vec<String> {
+        self.requests()
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split_whitespace();
+                let method = parts.next()?;
+                let path = parts.next()?;
+                (method == "GET" || method == "HEAD").then(|| path.to_string())
+            })
+            .collect()
+    }
+
+    /// The asset names this release actually carries.
+    fn published_names(&self) -> Vec<String> {
+        let dir = self.dir.join("releases").join(&self.tag);
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+/// The asset names a real release carried, with the tag rewritten to this
+/// fixture's. Read from `tests/fixtures/release-assets/`, which is a listing of
+/// a published GitHub Release rather than anything this repository generates.
+fn published_asset_names(tag: &str) -> Vec<String> {
+    let manifest = repo_root().join("tests/fixtures/release-assets/v0.1.11.txt");
+    fs::read_to_string(&manifest)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", manifest.display()))
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|name| name.replace("v0.1.11", tag))
+        .collect()
 }
 
 /// Run `install.sh` against a release, installing into `install_dir`.
@@ -321,6 +367,53 @@ fn the_installer_downloads_verifies_and_installs_a_runnable_binary() {
             .contains(env!("CARGO_PKG_VERSION")),
         "the installed binary is not the artifact we packaged"
     );
+}
+
+/// The layout these journeys serve has to be the layout GitHub serves, or every
+/// one of them proves the installer agrees with a fixture copied from the
+/// installer. It was: the checksum here was written as `<archive>.sha256`, the
+/// script asked for `<archive>.sha256`, the whole suite was green, and every
+/// release-install a user or the GitHub Action ever ran 404'd on the checksum.
+#[test]
+fn the_fixture_release_is_named_the_way_a_real_release_is() {
+    let release = publish("v9.9.9", false, true);
+    let real = published_asset_names("v9.9.9");
+    for name in release.published_names() {
+        assert!(
+            real.contains(&name),
+            "the fixture publishes {name}, which is not a name a real release \
+             carries; the real v9.9.9 would hold {real:?}"
+        );
+    }
+}
+
+/// Every URL the installer builds must name an asset the release publishes.
+///
+/// Asserting on the *request set* rather than on one literal is what makes this
+/// hold for the next name that drifts, whichever side moves it: an installer
+/// that asks for something nobody uploaded fails here with the name it asked for,
+/// rather than only as a 404 on a consumer's CI weeks later.
+#[test]
+fn the_installer_requests_only_asset_names_the_release_publishes() {
+    let release = publish("v9.9.9", false, true);
+    let target = tempfile::tempdir().unwrap();
+    let output = install(&release, target.path(), &[]);
+    assert!(output.status.success(), "{}", stderr_of(&output));
+
+    let published = release.published_names();
+    let requested = release.requested_paths();
+    assert!(
+        requested.iter().any(|path| path.ends_with(".sha256")),
+        "the installer never asked for a checksum at all: {requested:?}"
+    );
+    for path in &requested {
+        let name = path.rsplit('/').next().unwrap_or_default();
+        assert!(
+            published.contains(&name.to_string()),
+            "install.sh requested {path}, which the release does not publish; \
+             its assets are {published:?}"
+        );
+    }
 }
 
 #[test]
