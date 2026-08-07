@@ -1,16 +1,41 @@
 # notignored
 
+![A terminal session: `notignored src/` is typed and the suppressions appear one per line — each with its file and line in cyan, the tool in magenta, the silenced rules in yellow, the scope in blue and the stated reason dimmed — then `notignored --diff --diff-base main` reports only the two the change added](docs/screenshots/demo.gif)
+
 Find every lint and type-check suppression comment in a codebase — natively, and
 fast.
 
-```console
-$ notignored src/
-src/app.py:3:12 ruff F401 (line) -- re-exported for the public API
-src/app.py:5:58 ruff E501 (line) -- long wrapped URL
-src/app.py:10:17 ruff * (line)
-src/vendored.py:1:1 ruff E501 (file) -- vendored upstream, not ours to reformat
-notignored: 4 ignores in 2 files
-```
+![The default report: seven suppressions across seven tools — ruff, mypy, eslint, typescript, rust, shellcheck and llmlint — one per line as colorized `path:line:column tool rules (scope) -- reason`, closing with a summary counting them and the files they live in](docs/screenshots/scan.svg)
+
+A reviewer cares about the suppressions a change *introduces*, not the inventory
+it inherited, so `--diff` reports only those:
+
+![The same report under --diff: only the two suppressions the change added, a ruff E501 and a biome noExplicitAny, above a summary counting two ignores in two files](docs/screenshots/diff.svg)
+
+<details>
+<summary>Narrowing to particular tools, the JSON envelope, and the pull-request comment</summary>
+
+`--tool`, repeated, reports only the checkers you name:
+
+![The same scan narrowed with --tool ruff --tool mypy --tool shellcheck: three of the seven suppressions, the other four filtered out](docs/screenshots/tool-filter.svg)
+
+`--format json` emits the full report envelope — every field of every record,
+documented [below](#output):
+
+![The JSON report envelope for one file: a version, an ignores array whose two records carry tool, scope, rules, reason, path, line, end_line, column, the raw directive text and the suppressed range, and an empty errors array](docs/screenshots/json.svg)
+
+`--format markdown` renders the body the [GitHub Action](#on-a-pull-request-the-github-action)
+posts, with each suppression linked to its line and its silenced code one click
+away:
+
+![The pull-request comment body as markdown: a heading counting two suppressions, then one bullet per suppression naming its tool and rule, its reason in italics, a permalink to the line, and a collapsed details block holding the suppressed code](docs/screenshots/pr-comment.svg)
+
+</details>
+
+> These are real captures of the CLI, rendered from its actual colorized output
+> by [`just screenshots`](screenshots/AGENTS.md) and gated by
+> [screencomp](https://github.com/nickderobertis/screencomp) — so they change
+> only when the output does.
 
 ## Why
 

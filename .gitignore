@@ -1,5 +1,10 @@
 /target
 /.dev
+# screencomp: commit the digest baseline (shots/baseline/*.json) and the README
+# images (docs/screenshots/), but not the regenerated capture trees.
+/shots/current/
+/shots/verify/
+/shots/review/
 # The Nx orchestrator's own install and computation cache. `scripts/nx.sh`
 # re-creates node_modules from the committed lockfile whenever it is missing.
 /node_modules

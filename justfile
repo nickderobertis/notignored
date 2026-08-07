@@ -23,6 +23,12 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # cannot promise a floor the manifest no longer declares. CI reads the same field.
 msrv-version := `sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml`
 
+# Renderer for the terminal screenshots (`just screenshots`). NOT part of the
+# gate or `just bootstrap`: screenshots are informational. CI's Visual-docs
+# workflow installs the same pinned version, and `tests/screenshots_contract.rs`
+# fails the build if the two ever disagree.
+freeze-version := "0.2.2"
+
 # Keep the gate's own output to signal: successes are silent, failures are not.
 export CARGO_TERM_QUIET := "true"
 
@@ -175,6 +181,43 @@ upgrade:
     @cargo update --quiet
     @npm update --silent --no-audit --no-fund
     @just check
+
+# --- Terminal screenshots (informational; never part of `check` or CI's gate) -
+# Deterministic SVGs of the real CLI output, rendered by `freeze` from a vendored
+# pinned font, gated/galleried/PR-commented by screencomp (see
+# screenshots/AGENTS.md). Regenerating is out of the gate on purpose: `check`
+# stays offline and toolchain-only, and CI's Visual-docs workflow owns the
+# comparison.
+
+# Install the pinned screenshot renderer (`freeze`) on demand. Needs Go.
+screenshots-tools:
+    @command -v go >/dev/null || { echo "go not found: needed to install freeze; see https://go.dev/dl" >&2; exit 1; }
+    go install github.com/charmbracelet/freeze@v{{freeze-version}}
+    @echo "installed freeze to $(go env GOPATH)/bin (ensure it is on PATH)"
+
+# Capture the screenshots: drive the real release binary over the fixture, render
+# each scene to shots/current/<arch>/ + docs/screenshots/. Needs `freeze` on PATH.
+screenshots:
+    @bash scripts/screenshots.sh
+
+# Regenerate the animated demo GIF (docs/screenshots/demo.gif — the README hero).
+# Like the screenshots it drives the REAL release binary over the fixture, then
+# renders the frames a session would show with the vendored font (Pillow only —
+# no PTY recording, no ffmpeg). Informational and NOT hash-gated (a GIF is not
+# byte-reproducible across Pillow versions), so regenerate on demand and commit
+# the result. Needs Python 3 + Pillow (`pip install Pillow`).
+screenshots-gif:
+    @command -v python3 >/dev/null || { echo "python3 not found: needed to render the demo GIF" >&2; exit 1; }
+    @python3 -c "import PIL" 2>/dev/null || { echo "Pillow not installed: pip install Pillow" >&2; exit 1; }
+    @cargo build --release --locked --bin notignored
+    @python3 scripts/demo-gif.py
+
+# Refresh the committed baseline manifest from a fresh capture (after an
+# INTENDED output change). Commit shots/baseline/ + docs/screenshots/ alongside.
+screenshots-bless: screenshots
+    @command -v screencomp >/dev/null || { echo "screencomp not installed: https://github.com/nickderobertis/screencomp#install" >&2; exit 1; }
+    screencomp manifest --input shots/current --output shots/baseline/$(uname -m | sed 's/amd64/x86_64/;s/aarch64/arm64/').json
+    @echo "baseline refreshed; commit shots/baseline/ + docs/screenshots/"
 
 # Separate from `check`: `cargo deny` needs a network-fetched advisory DB.
 # Advisory + license audit and unused-dependency check.
