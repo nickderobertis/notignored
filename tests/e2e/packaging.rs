@@ -514,3 +514,102 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
         scratch.path(),
     );
 }
+
+/// Every argument the package builder refuses, and what it tells the caller.
+///
+/// These are the boundaries `scripts/npm-build.mjs` guards: an option it does not
+/// implement, a version neither registry could index, a target it has no package
+/// for, and a binary that is not there. It runs inside a release job, so the only
+/// diagnosis anyone gets is what it printed — which is why each refusal owes an
+/// `ACTION:` line as much as it owes a non-zero exit.
+#[test]
+fn the_package_builder_refuses_input_it_cannot_turn_into_a_package() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let out = scratch.path().join("dist");
+    let out = out.to_str().expect("a UTF-8 path");
+    let binary = assert_cmd::cargo::cargo_bin("notignored");
+    let binary = binary.to_str().expect("a UTF-8 binary path");
+
+    for (what, args, expected) in [
+        (
+            "an option no mode implements",
+            vec!["launcher", "--bogus", "x", "--out", out],
+            "unknown option --bogus",
+        ),
+        (
+            "an option given no value",
+            vec!["launcher", "--out"],
+            "--out needs a value",
+        ),
+        (
+            // The one that matters: a version carrying a specifier would publish
+            // under a name no consumer could ask for.
+            "a version neither registry can index",
+            vec![
+                "launcher",
+                "--version",
+                "1.2.3 --registry evil",
+                "--out",
+                out,
+            ],
+            "is not a version either registry can index",
+        ),
+        (
+            "a version with a repeated suffix",
+            vec!["launcher", "--version", "1.2.3+one+two", "--out", out],
+            "is not a version either registry can index",
+        ),
+        (
+            "a target with no platform package",
+            vec![
+                "platform",
+                "--target",
+                "sparc64-unknown-linux-gnu",
+                "--binary",
+                binary,
+                "--out",
+                out,
+            ],
+            "unknown target sparc64-unknown-linux-gnu",
+        ),
+        (
+            "a binary that was never built",
+            vec![
+                "platform",
+                "--target",
+                host_target(),
+                "--binary",
+                "target/debug/never-built",
+                "--out",
+                out,
+            ],
+            "binary not found",
+        ),
+        (
+            "a mode it does not have",
+            vec!["sideload"],
+            "unknown mode sideload",
+        ),
+    ] {
+        let output = required("node")
+            .current_dir(repo_root())
+            .arg("scripts/npm-build.mjs")
+            .args(&args)
+            .output()
+            .expect("run npm-build.mjs");
+        assert!(
+            !output.status.success(),
+            "{what} was accepted: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{what} was refused without saying why; wanted {expected:?}:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("ACTION:"),
+            "{what} was refused with no next action:\n{stderr}"
+        );
+    }
+}

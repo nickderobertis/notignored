@@ -264,7 +264,10 @@ fn a_version_the_registry_does_not_have_is_published() {
         "the registry did not receive exactly one publish"
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("published notignored-cli@"), "{stdout}");
+    assert!(
+        stdout.contains("published notignored-cli@") && stdout.contains("already on npm none"),
+        "the run's one summary line does not say what it published:\n{stdout}"
+    );
 }
 
 /// A version already live is left alone.
@@ -289,7 +292,15 @@ fn a_version_already_on_the_registry_is_not_published_again() {
         registry.publishes()
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("already on npm"), "{stdout}");
+    assert!(
+        stdout.contains("published none") && stdout.contains("already on npm notignored-cli@"),
+        "the run's one summary line does not say what it skipped:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "a successful run owes a release log one line, not a commentary:\n{stdout}"
+    );
 }
 
 /// A registry that answers, but not with an answer, fails the release closed.
@@ -317,5 +328,29 @@ fn a_registry_that_will_not_answer_fails_the_release_rather_than_publishing() {
     assert!(
         stderr.contains("cannot query") && stderr.contains("reachable"),
         "the failure does not say what to do about it:\n{stderr}"
+    );
+}
+
+/// Handed nothing to publish, the script says so rather than succeeding quietly.
+///
+/// The release job builds its argument list from a glob, and a glob that matched
+/// nothing would otherwise make "published no packages" look like a clean run.
+#[test]
+fn no_package_argument_is_refused() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let output = Command::new("bash")
+        .current_dir(repo_root())
+        .arg("scripts/publish-npm.sh")
+        .env("HOME", scratch.path())
+        .output()
+        .expect("run publish-npm.sh");
+    assert!(
+        !output.status.success(),
+        "an empty argument list is not a publish"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("at least one package"),
+        "the refusal does not say what was missing:\n{stderr}"
     );
 }

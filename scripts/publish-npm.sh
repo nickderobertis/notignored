@@ -20,6 +20,9 @@ fail() {
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+published=""
+skipped=""
+
 for package in "$@"; do
   if ! metadata="$(npm pack --dry-run --json "$package" 2>"$work/pack-error")"; then
     cat "$work/pack-error" >&2
@@ -43,15 +46,21 @@ for package in "$@"; do
   fi
 
   if npm view "$identity" version >/dev/null 2>"$work/view-error"; then
-    echo "$identity is already on npm; nothing to publish."
+    skipped="$skipped $identity"
   elif grep -Eq 'E404|404 Not Found' "$work/view-error"; then
     if ! npm publish "$package" --access public >"$work/publish-output" 2>&1; then
       cat "$work/publish-output" >&2
       fail "npm could not publish '$identity'; fix the reported authentication or package error, then re-run the release"
     fi
-    echo "published $identity"
+    published="$published $identity"
   else
     cat "$work/view-error" >&2
     fail "cannot query '$identity'; re-run the release when the npm registry is reachable"
   fi
 done
+
+# One line for the whole run, whatever it was handed: what a release log needs is
+# which versions this push added and which were already live, not a running
+# commentary. `# none` keeps the line readable when a re-run publishes nothing.
+printf 'publish-npm: published%s; already on npm%s\n' \
+  "${published:- none}" "${skipped:- none}"
