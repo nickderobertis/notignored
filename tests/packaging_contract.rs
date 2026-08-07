@@ -95,10 +95,6 @@ fn launcher_manifest() -> serde_json::Value {
         .expect("the launcher package.json is valid JSON")
 }
 
-// ---------------------------------------------------------------------------
-// The release pipeline
-// ---------------------------------------------------------------------------
-
 /// A Release, not a tag push, is what starts the pipeline.
 ///
 /// release-plz cuts the Release with a PAT, and that is the event this workflow
@@ -176,6 +172,26 @@ fn publishing_is_gated_on_a_repository_variable_but_building_is_not() {
     }
 }
 
+/// The secrets a workflow actually reads, as `${{ secrets.NAME }}` expressions.
+///
+/// Only inside an expression: this file is mostly comments, and `secrets.` also
+/// occurs in the prose that names the `gh-secrets.json` manifest. Reading the
+/// whole text would count that as a secret called `json`.
+fn secrets_referenced(workflow: &str) -> BTreeSet<&str> {
+    workflow
+        .match_indices("${{")
+        .filter_map(|(at, _)| {
+            let expression = workflow[at..].split_once("}}")?.0;
+            let name = expression.split_once("secrets.")?.1;
+            Some(
+                name.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .next()
+                    .expect("a name follows `secrets.`"),
+            )
+        })
+        .collect()
+}
+
 /// The publishing credentials are exactly the four provisioned secrets.
 ///
 /// `gh-secrets.json` is what puts a secret on the repository, so a workflow
@@ -184,15 +200,7 @@ fn publishing_is_gated_on_a_repository_variable_but_building_is_not() {
 #[test]
 fn every_secret_the_pipeline_uses_is_provisioned() {
     let workflow = read(".github/workflows/release.yml");
-    let used: BTreeSet<&str> = workflow
-        .match_indices("secrets.")
-        .map(|(at, _)| {
-            workflow[at + "secrets.".len()..]
-                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .next()
-                .expect("a secret name follows `secrets.`")
-        })
-        .collect();
+    let used = secrets_referenced(&workflow);
     assert_eq!(
         used,
         BTreeSet::from([
@@ -289,10 +297,6 @@ fn no_run_script_interpolates_an_untrusted_value() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The PyPI package
-// ---------------------------------------------------------------------------
-
 /// The wheel is `notignored-cli`, built by maturin, with no version of its own.
 ///
 /// A literal `version = ` in `pyproject.toml` would be a second version source:
@@ -320,10 +324,6 @@ fn the_wheel_takes_its_name_from_pyproject_and_its_version_from_cargo() {
         "pyproject.toml no longer packages the binary with maturin's bin bindings"
     );
 }
-
-// ---------------------------------------------------------------------------
-// The npm packages
-// ---------------------------------------------------------------------------
 
 /// The launcher installs the `notignored` command and carries nothing else.
 #[test]

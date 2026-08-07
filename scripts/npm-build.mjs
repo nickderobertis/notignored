@@ -60,10 +60,18 @@ const TARGETS = {
 
 const REPOSITORY = "https://github.com/nickderobertis/notignored";
 
-function die(msg) {
-  process.stderr.write(`npm-build: ${msg}\n`);
+// Every failure names what to do next: this runs inside a release job, where the
+// only diagnosis anyone gets is what it printed.
+function die(msg, action) {
+  process.stderr.write(`npm-build: ${msg}\nACTION: ${action}\n`);
   process.exit(1);
 }
+
+// The version both registries index this release under. npm rejects anything
+// that is not semver, and a version with a stray specifier would publish under a
+// name no consumer could ask for — so it is validated here rather than at the
+// registry, whichever source it came from.
+const VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*$/;
 
 // Read the crate version from the root Cargo.toml [package] section. A tiny hand
 // parser avoids a TOML dependency: take the first `version = "..."` after the
@@ -72,23 +80,50 @@ function die(msg) {
 function cargoVersion() {
   const toml = readFileSync(join(REPO_ROOT, "Cargo.toml"), "utf8");
   const pkg = toml.indexOf("[package]");
-  if (pkg === -1) die("no [package] section in Cargo.toml");
+  if (pkg === -1) {
+    die("no [package] section in Cargo.toml", "run this from the repository root");
+  }
   const rest = toml.slice(pkg);
   const end = rest.indexOf("\n[", 1);
   const section = end === -1 ? rest : rest.slice(0, end);
   const m = section.match(/^\s*version\s*=\s*"([^"]+)"/m);
-  if (!m) die("could not parse version from Cargo.toml [package]");
+  if (!m) {
+    die(
+      "could not parse version from Cargo.toml [package]",
+      "restore the `version = \"X.Y.Z\"` line release-plz maintains there"
+    );
+  }
   return m[1];
 }
 
-function parseArgs(argv) {
+// The release version: Cargo.toml's unless --version overrides it, validated
+// either way before it reaches a manifest.
+function resolveVersion(args) {
+  const version = args.version ?? cargoVersion();
+  if (!VERSION.test(version)) {
+    die(
+      `'${version}' is not a version either registry can index`,
+      args.version === undefined
+        ? "fix the `version` in Cargo.toml [package]; it must read X.Y.Z"
+        : "pass --version X.Y.Z (a -prerelease or +build suffix is allowed), or omit it to take Cargo.toml's"
+    );
+  }
+  return version;
+}
+
+// Options are allowlisted per mode: an unrecognized flag is a caller that meant
+// something this script will not do, and silently ignoring it would assemble a
+// package that is not the one they asked for.
+function parseArgs(argv, allowed) {
   const out = {};
+  const usage = allowed.map((name) => `--${name}`).join(", ");
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (!a.startsWith("--")) die(`unexpected argument: ${a}`);
+    if (!a.startsWith("--")) die(`unexpected argument: ${a}`, `pass options as ${usage}`);
     const key = a.slice(2);
+    if (!allowed.includes(key)) die(`unknown option --${key}`, `this mode takes ${usage}`);
     const val = argv[i + 1];
-    if (val === undefined || val.startsWith("--")) die(`--${key} needs a value`);
+    if (val === undefined || val.startsWith("--")) die(`--${key} needs a value`, `give --${key} a value`);
     out[key] = val;
     i += 1;
   }
@@ -100,10 +135,13 @@ function writeJson(path, obj) {
 }
 
 function buildPlatform(args) {
-  const target = args.target || die("platform: --target <triple> is required");
-  const binary = args.binary || die("platform: --binary <path> is required");
-  const facts = TARGETS[target] || die(`platform: unknown target ${target}`);
-  const version = args.version || cargoVersion();
+  const target =
+    args.target || die("platform: --target <triple> is required", `pass --target with one of: ${Object.keys(TARGETS).join(", ")}`);
+  const binary =
+    args.binary || die("platform: --binary <path> is required", "pass --binary the path to the built notignored for that target");
+  const facts =
+    TARGETS[target] || die(`platform: unknown target ${target}`, `pass one of: ${Object.keys(TARGETS).join(", ")}`);
+  const version = resolveVersion(args);
   const outRoot = resolve(args.out || join(REPO_ROOT, "npm", "dist"));
 
   const pkgName = `notignored-cli-${facts.platform}-${facts.arch}`;
@@ -116,7 +154,12 @@ function buildPlatform(args) {
   // transparently, but Node's copyFileSync needs the real name).
   let srcBin = resolve(binary);
   if (!existsSync(srcBin) && existsSync(`${srcBin}.exe`)) srcBin = `${srcBin}.exe`;
-  if (!existsSync(srcBin)) die(`platform: binary not found: ${binary}`);
+  if (!existsSync(srcBin)) {
+    die(
+      `platform: binary not found: ${binary}`,
+      `build it first: cargo build --release --locked --target ${target}`
+    );
+  }
 
   rmSync(pkgDir, { recursive: true, force: true });
   mkdirSync(binDir, { recursive: true });
@@ -150,7 +193,7 @@ function buildPlatform(args) {
 }
 
 function buildLauncher(args) {
-  const version = args.version || cargoVersion();
+  const version = resolveVersion(args);
   const outRoot = resolve(args.out || join(REPO_ROOT, "npm", "dist"));
   const src = join(REPO_ROOT, "npm", "notignored");
   const dest = join(outRoot, "notignored-cli");
@@ -175,7 +218,13 @@ function buildLauncher(args) {
 }
 
 const [mode, ...rest] = process.argv.slice(2);
-const args = parseArgs(rest);
-if (mode === "platform") buildPlatform(args);
-else if (mode === "launcher") buildLauncher(args);
-else die("usage: npm-build.mjs <platform|launcher> [--target ..] [--binary ..] [--version ..] [--out ..]");
+if (mode === "platform") {
+  buildPlatform(parseArgs(rest, ["target", "binary", "version", "out"]));
+} else if (mode === "launcher") {
+  buildLauncher(parseArgs(rest, ["version", "out"]));
+} else {
+  die(
+    `unknown mode ${mode === undefined ? "(none given)" : mode}`,
+    "run `npm-build.mjs platform --target <triple> --binary <path> [--version <v>] [--out <dir>]` or `npm-build.mjs launcher [--version <v>] [--out <dir>]`"
+  );
+}

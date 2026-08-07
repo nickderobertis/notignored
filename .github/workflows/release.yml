@@ -215,6 +215,17 @@ jobs:
     if: ${{ vars.PYPI_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:
+      # Switching PYPI_PUBLISH on is a claim that the credential exists. Say so
+      # here rather than letting the upload fail later as an opaque 403 — the
+      # live tier must require its credential, not discover it missing.
+      - name: Require the publishing credential
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          if [ -z "${PYPI_TOKEN:-}" ]; then
+            echo "::error::PYPI_PUBLISH is on but the PYPI_TOKEN secret is empty; add it (see gh-secrets.json) or unset PYPI_PUBLISH" >&2
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
@@ -343,6 +354,18 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+      # Same rule as publish-pypi: the live tier requires its credential rather
+      # than discovering it missing at the registry. Without this, an empty
+      # NODE_AUTH_TOKEN surfaces as an ENEEDAUTH inside publish-npm.sh, after
+      # some packages may already be public.
+      - name: Require the publishing credential
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "::error::NPM_PUBLISH is on but the NPM_TOKEN secret is empty; add it (see gh-secrets.json) or unset NPM_PUBLISH" >&2
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
