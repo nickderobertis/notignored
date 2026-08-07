@@ -198,6 +198,41 @@ become one: it is skipped on fork pull requests, whose read-only token cannot
 upsert a comment, and a required context that never reports would block them
 forever.
 
+## The screenshots, and the visual gate
+
+The product is a rendered report, so the README leads with one: an animated hero
+GIF and a gallery of SVGs, all **real output from the real release binary** over
+the committed fixture in `screenshots/fixture/`. `screenshots/AGENTS.md` owns the
+detail — the scenes, why the bytes are reproducible without a container, and how
+to bless a change. Three things belong here because they cross the repo:
+
+- **`--color` is what makes the gallery possible.** `render_human_colored` takes a
+  plain `bool`; the TTY / `NO_COLOR` / `TERM=dumb` decision is resolved once in
+  `Cli::color_enabled`, at the I/O boundary, and `--color always` overrides all of
+  it so a capture can force colour through a pipe. `json` and `markdown` are
+  contracts, not presentation, and `tests/e2e/color.rs` proves them byte-identical
+  whatever the flag says — that is what keeps every golden report out of the blast
+  radius of a formatting change.
+- **Screenshots are informational and stay out of `just check`.** Capturing needs
+  `freeze`, a release build, and a network fetch on a cold machine; the gate stays
+  offline and toolchain-only. `tests/screenshots_contract.rs` is the part that
+  *is* in the gate: it reads the config as text and fails the build when the
+  `freeze` pin, the capture container, `[guard].paths`, the committed baseline,
+  and the README embeds stop agreeing — none of which the capture itself would
+  catch, because a drifted pin only shows up as a red CI nobody can explain.
+- **`Visual docs` is deliberately not a required check**, for the same reason
+  `notignored.yml` is not. screencomp's `report` lane needs `contents: write` to
+  push the gh-pages gallery and `pull-requests: write` to upsert its sticky
+  comment, and a fork's pull request is granted neither — a required context that
+  can never report green would block outside contributors forever. On a branch of
+  this repository it still runs with `fail-on-drift: true` and turns the pull
+  request red, which is the review moment a formatting change deserves; read a red
+  `Visual docs` as "the output moved — `just screenshots-bless` or explain it",
+  not as advisory noise. To reverse this, register
+  `visual-docs / report (x86_64)` by re-running the create-repo skill's
+  `setup_github_governance.py` with that context (see the required-checks note
+  below) — changing the workflow file alone does nothing.
+
 ## The registry packages
 
 `pip install notignored-cli` and `npm install -g notignored-cli` ship the same
@@ -273,7 +308,8 @@ matrices and `tests/e2e/packaging.rs`. `macos-15-intel` is hosted through August
   merges. Release-triggered and scheduled jobs (`release.yml`,
   `published-smoke.yml`) are the exception and must stay unrequired: they report
   no pull-request context, so requiring one would block every PR forever — the
-  same trap `notignored.yml` is kept out of. `ci.yml`'s `changes` job is the
+  same trap `notignored.yml` and `visual-docs.yml` are kept out of (each for the
+  fork-pull-request reason recorded with it). `ci.yml`'s `changes` job is the
   third exception and stays unrequired: it exists only to answer whether the Rust
   matrices run, it fails closed to "run them", and requiring it would add a
   context that says nothing about the code. The names it gates — `gate`, `cross`,

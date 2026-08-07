@@ -30,6 +30,18 @@ path = "src/lib.rs"
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
+# ANSI styling for the human report. Tiny and dependency-free — already in the
+# tree via clap — so it adds color without growing the `cargo deny` surface. Pure
+# style definitions; the TTY / `NO_COLOR` / `--color` decision lives in the CLI
+# layer, never in the renderer.
+anstyle = "1"
+# The platform-correct sink for the colored report. `AutoStream` passes ANSI
+# straight through on a VT-capable terminal but, on a *legacy* Windows console
+# (no virtual-terminal processing), enables VT or translates the SGR codes into
+# Win32 console attribute calls (`anstyle-wincon`) — so the colors render instead
+# of printing as raw `←[31m` garbage. Already in the tree via clap (with its
+# `wincon` default feature), so it adds no new `cargo deny` surface.
+anstream = "1"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order` keeps JSON object keys in insertion order so the report's
 # field order matches the documented schema byte for byte, which is what the

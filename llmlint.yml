@@ -42,6 +42,18 @@ files:
     # manifest is judged.
     - "Cargo.lock"
     - "tests/js-toolchain/package-lock.json"
+    # Rendered screenshots and their digest baseline: `just screenshots` writes
+    # every byte of them, and each SVG carries the vendored font base64-encoded
+    # inside it. Judging them costs a megabyte of the judge's context per
+    # capture and can say nothing actionable — the first attempt at this change
+    # blew the whole batch's judge call up on exactly that. What produces them
+    # (`scripts/screenshots.sh`, `scripts/demo-gif.py`) and the fixture they run
+    # over ARE judged; only the output is exempt.
+    - "docs/screenshots/**"
+    - "shots/baseline/*.json"
+    # Vendored upstream, not ours to write or edit: the pinned JetBrains Mono
+    # binary and the OFL text that licenses it.
+    - "screenshots/fonts/**"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-5.5

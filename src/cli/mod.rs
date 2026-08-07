@@ -7,7 +7,7 @@
 //! below it.
 
 use std::collections::BTreeMap;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, ValueEnum};
@@ -21,7 +21,7 @@ mod markdown;
 mod render;
 
 pub use markdown::{render_markdown, MarkdownOptions, DEFAULT_MAX_ENTRIES, MARKER};
-pub use render::{narrate_errors, render_human, render_json};
+pub use render::{narrate_errors, render_human, render_human_colored, render_json};
 
 /// The scan completed and nothing forced a failure.
 pub const EXIT_OK: u8 = 0;
@@ -41,6 +41,42 @@ pub enum Format {
     Json,
     /// A pull-request comment body, for the GitHub Action.
     Markdown,
+}
+
+/// When to apply ANSI color to the `human` report.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum ColorChoice {
+    /// Color only when stdout is a terminal and color is not suppressed.
+    #[default]
+    Auto,
+    /// Always emit color, even through a pipe.
+    Always,
+    /// Never emit color.
+    Never,
+}
+
+impl ColorChoice {
+    /// Resolve to a concrete on/off decision.
+    ///
+    /// `Auto` colors an interactive terminal that has not asked for plain
+    /// output; `Always` overrides both signals, because an explicit flag is how
+    /// a user forces color through a pager or into a screenshot, and `Never`
+    /// overrides nothing because it already means off.
+    pub fn resolve(self, is_tty: bool, no_color: bool) -> bool {
+        match self {
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+            ColorChoice::Auto => is_tty && !no_color,
+        }
+    }
+}
+
+/// Whether the environment asks for plain output: the
+/// [`NO_COLOR`](https://no-color.org) convention (present and non-empty) or a
+/// terminal that cannot render styling (`TERM=dumb`).
+fn no_color_env() -> bool {
+    std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty())
+        || std::env::var("TERM").is_ok_and(|term| term == "dumb")
 }
 
 /// Accept an `owner/repo` slug and nothing else.
@@ -105,6 +141,13 @@ pub struct Cli {
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     pub format: Format,
+
+    /// When to colorize the `human` report: `auto` colors only an interactive
+    /// terminal with NO_COLOR unset, `always` forces it (through a pipe, a
+    /// pager, or into a screenshot), `never` disables it. The `json` and
+    /// `markdown` formats are never colorized.
+    #[arg(long, value_enum, default_value_t = ColorChoice::Auto)]
+    pub color: ColorChoice,
 
     /// Only report this tool. Repeat to allow several; omit for all of them.
     #[arg(long = "tool", value_name = "NAME", value_enum)]
@@ -281,6 +324,16 @@ impl Cli {
         }
     }
 
+    /// Whether this invocation's human report is colorized.
+    ///
+    /// The one place `--color` meets the live process: the flag is resolved
+    /// against the real stdout and environment here, so [`run`] and the process
+    /// shell that wraps stdout for Windows always agree on the same answer.
+    pub fn color_enabled(&self) -> bool {
+        self.color
+            .resolve(io::stdout().is_terminal(), no_color_env())
+    }
+
     /// Where this invocation says the scanned source lives.
     fn markdown_options(&self) -> MarkdownOptions {
         MarkdownOptions {
@@ -316,7 +369,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     // run still gets them on the terminal when stdout is redirected.
     let _ = narrate_errors(&report, err);
     let rendered = match cli.format {
-        Format::Human => render_human(&report, out, err),
+        Format::Human => render_human_colored(&report, out, err, cli.color_enabled()),
         Format::Json => render_json(&report, out),
         Format::Markdown => render_markdown(&report, &cli.markdown_options(), out),
     };
@@ -387,6 +440,52 @@ mod tests {
         assert_eq!(cli.format, Format::Human);
         assert!(cli.tools.is_empty());
         assert!(!cli.fail_if_found);
+    }
+
+    #[test]
+    fn color_defaults_to_auto_and_takes_the_three_documented_values() {
+        assert_eq!(parse(&[]).color, ColorChoice::Auto);
+        for (flag, expected) in [
+            ("auto", ColorChoice::Auto),
+            ("always", ColorChoice::Always),
+            ("never", ColorChoice::Never),
+        ] {
+            assert_eq!(parse(&["--color", flag]).color, expected);
+        }
+        let error = Cli::try_parse_from(["notignored", "--color", "sometimes"]).unwrap_err();
+        assert!(error.to_string().contains("sometimes"), "{error}");
+    }
+
+    /// `always` is how a user forces color through a pipe, a pager, or into a
+    /// screenshot, so neither a redirected stdout nor `NO_COLOR` may veto it;
+    /// `never` is unconditional the other way.
+    #[test]
+    fn an_explicit_color_choice_overrides_the_terminal_and_no_color() {
+        for is_tty in [true, false] {
+            for no_color in [true, false] {
+                assert!(ColorChoice::Always.resolve(is_tty, no_color));
+                assert!(!ColorChoice::Never.resolve(is_tty, no_color));
+            }
+        }
+    }
+
+    #[test]
+    fn auto_colors_only_an_interactive_terminal_that_did_not_ask_for_plain() {
+        assert!(ColorChoice::Auto.resolve(true, false));
+        // Piped or redirected — the case every test and every `| grep` hits.
+        assert!(!ColorChoice::Auto.resolve(false, false));
+        // A terminal, but the NO_COLOR convention wins.
+        assert!(!ColorChoice::Auto.resolve(true, true));
+        assert!(!ColorChoice::Auto.resolve(false, true));
+    }
+
+    /// stdout is not a terminal under a test runner, so `auto` — the default —
+    /// is the plain rendering every other assertion in this suite relies on.
+    #[test]
+    fn the_default_choice_is_plain_when_output_is_captured() {
+        assert!(!parse(&[]).color_enabled());
+        assert!(parse(&["--color", "always"]).color_enabled());
+        assert!(!parse(&["--color", "never"]).color_enabled());
     }
 
     #[test]

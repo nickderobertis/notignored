@@ -1,16 +1,41 @@
 # notignored
 
+![A terminal session: `notignored src/` is typed and the suppressions appear one per line — each with its file and line in cyan, the tool in magenta, the silenced rules in yellow, the scope in blue and the stated reason dimmed — then `notignored --diff --diff-base main` reports only the two the change added](docs/screenshots/demo.gif)
+
 Find every lint and type-check suppression comment in a codebase — natively, and
 fast.
 
-```console
-$ notignored src/
-src/app.py:3:12 ruff F401 (line) -- re-exported for the public API
-src/app.py:5:58 ruff E501 (line) -- long wrapped URL
-src/app.py:10:17 ruff * (line)
-src/vendored.py:1:1 ruff E501 (file) -- vendored upstream, not ours to reformat
-notignored: 4 ignores in 2 files
-```
+![The default report: seven suppressions across seven tools — ruff, mypy, eslint, typescript, rust, shellcheck and llmlint — one per line as colorized `path:line:column tool rules (scope) -- reason`, closing with a summary counting them and the files they live in](docs/screenshots/scan.svg)
+
+A reviewer cares about the suppressions a change *introduces*, not the inventory
+it inherited, so `--diff` reports only those:
+
+![The same report under --diff: only the two suppressions the change added, a ruff E501 and a biome noExplicitAny, above a summary counting two ignores in two files](docs/screenshots/diff.svg)
+
+<details>
+<summary>Narrowing to particular tools, the JSON envelope, and the pull-request comment</summary>
+
+`--tool`, repeated, reports only the checkers you name:
+
+![The same scan narrowed with --tool ruff --tool mypy --tool shellcheck: three of the seven suppressions, the other four filtered out](docs/screenshots/tool-filter.svg)
+
+`--format json` emits the full report envelope — every field of every record,
+documented [below](#output):
+
+![The JSON report envelope for one file: a version, an ignores array whose two records carry tool, scope, rules, reason, path, line, end_line, column, the raw directive text and the suppressed range, and an empty errors array](docs/screenshots/json.svg)
+
+`--format markdown` renders the body the [GitHub Action](#on-a-pull-request-the-github-action)
+posts, with each suppression linked to its line and its silenced code one click
+away:
+
+![The pull-request comment body as markdown: a heading counting two suppressions, then one bullet per suppression naming its tool and rule, its reason in italics, a permalink to the line, and a collapsed details block holding the suppressed code](docs/screenshots/pr-comment.svg)
+
+</details>
+
+> These are real captures of the CLI, rendered from its actual colorized output
+> by [`just screenshots`](screenshots/AGENTS.md) and gated by
+> [screencomp](https://github.com/nickderobertis/screencomp) — so they change
+> only when the output does.
 
 ## Why
 
@@ -92,15 +117,17 @@ the comment the action posts. That block is checked against the real binary by
 ## Usage
 
 ```
-notignored [PATHS...] [--format human|json|markdown] [--tool NAME]... [--fail-if-found]
-           [--diff [--diff-base REF]] [--github-repo OWNER/REPO] [--github-sha SHA]
-           [--max-entries N]
+notignored [PATHS...] [--format human|json|markdown] [--color auto|always|never]
+           [--tool NAME]... [--fail-if-found] [--diff [--diff-base REF]]
+           [--github-repo OWNER/REPO] [--github-sha SHA] [--max-entries N]
 ```
 
 - `PATHS` — files and/or directories. Directories are walked recursively,
   honouring `.gitignore`. Defaults to `.`.
 - `--format` — `human` (default), `json`, or `markdown` (a pull-request comment
   body; see the action below).
+- `--color` — when to colorize the `human` report. `auto` (the default) colors
+  only an interactive terminal, `always` forces it, `never` disables it.
 - `--tool` — only report this tool; repeat to allow several. Omit for all.
 - `--fail-if-found` — exit 1 when any suppression is reported.
 - `--diff` — report only the suppressions the change added (see below).
@@ -109,6 +136,15 @@ notignored [PATHS...] [--format human|json|markdown] [--tool NAME]... [--fail-if
   format builds its permalinks from.
 - `--max-entries` — how many suppressions the `markdown` format lists before it
   closes with a line counting the rest. Defaults to 20; must be at least 1.
+
+The `human` report is **colorized** — the location, the tool, the rules, the
+scope, and the reason each get their own role, and a blanket `*` is red because
+it silences every rule the tool has. Coloring follows the
+[`NO_COLOR`](https://no-color.org) convention (and `TERM=dumb`) and the
+`--color` flag: `auto` colors only an interactive terminal, `always` forces it
+(through a pager, or to capture a screenshot), `never` disables it. The `json`
+and `markdown` formats are never colorized — they are contracts, not
+presentation, and are byte for byte the same whatever `--color` says.
 
 ### Reviewing a pull request
 

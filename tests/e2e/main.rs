@@ -11,6 +11,7 @@ mod action_comment;
 mod action_scan;
 mod biome_parity;
 mod cli;
+mod color;
 mod diff;
 mod eslint_parity;
 mod examples;

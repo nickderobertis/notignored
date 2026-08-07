@@ -1,1 +1,8 @@
 * text=auto eol=lf
+
+# The vendored screenshot font and the rendered hero GIF are binary. `text=auto`
+# would detect that from their content anyway; saying so is what makes it
+# impossible for a future rule to normalize line endings inside them, which would
+# corrupt the font every capture embeds.
+*.ttf binary
+*.gif binary

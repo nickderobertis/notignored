@@ -1,0 +1,37 @@
+# screencomp configuration. See https://github.com/nickderobertis/screencomp.
+
+[capture]
+# Captures run in a Linux container, but notignored's shots are deterministic
+# SVGs (a vendored, pinned font embedded into each file), so the bytes are
+# identical on every arch and runner. One arch lane is therefore enough; its
+# committed baseline is shots/baseline/x86_64.json.
+arches = ["x86_64"]
+
+[comment]
+title = "Terminal screenshots"
+marker = "screencomp"        # [A-Za-z0-9_-]; one sticky comment per marker
+embed_limit = 10             # embed images inline when <= N shots differ (0 disables)
+
+# No [[toggle]]: every scene is a distinct part of the CLI surface (`scan`,
+# `diff`, `tool-filter`, `json`, `pr-comment` — all scripted in
+# scripts/screenshots.sh), not the same view under different settings, so the
+# gallery is flat.
+
+[guard]
+# Local pre-push guard (.githooks/pre-push): re-capture only when something that
+# can change a rendered scene changes — what a directive *is*, which ones a scan
+# finds, how either renderer prints one, the CLI surface the scenes drive, the
+# capture machinery itself, or the vendored font.
+paths = [
+  "src/model.rs",
+  "src/scan.rs",
+  "src/diff.rs",
+  "src/tools/**",
+  "src/cli/render.rs",
+  "src/cli/markdown.rs",
+  "src/cli/mod.rs",
+  "src/main.rs",
+  "scripts/screenshots.sh",
+  "screenshots/**",
+]
+gallery = "shots/review"
