@@ -107,14 +107,13 @@ test("a diff outside a repository rejects with what git said", async (t) => {
  * process to be told the same thing.
  */
 test("diffBase without diff is refused before anything is spawned", async () => {
-  await assert.rejects(
-    scan(["."], { diffBase: "main", bin: "/nonexistent/notignored" }),
-    (error) => {
-      assert.ok(error instanceof NotignoredUsageError, `${error.name} is not a usage error`);
-      assert.match(error.message, /diffBase requires diff: true/);
-      return true;
-    },
-  );
+  // No `bin`, and none of these journeys install one: whether a call describes
+  // a run is decided before the environment is consulted at all.
+  await assert.rejects(scan(["."], { diffBase: "main" }), (error) => {
+    assert.ok(error instanceof NotignoredUsageError, `${error.name} is not a usage error`);
+    assert.match(error.message, /diffBase requires diff: true/);
+    return true;
+  });
 });
 
 test("an empty diffBase is refused too", async () => {

@@ -138,11 +138,14 @@ export async function scan(
   if (typeof options !== "object" || options === null) {
     throw new NotignoredUsageError("options must be an object");
   }
+  // The arguments are checked before the environment is consulted: whether a
+  // call describes a run is a property of the call alone, and a caller with
+  // nothing installed should still be told which of the two is wrong first.
   const cwd = options.cwd === undefined ? undefined : requireText(options.cwd, "cwd");
+  const args = argumentsFor(paths, options);
   const binary = resolveBinary(
     options.bin === undefined ? undefined : requireText(options.bin, "bin"),
   );
-  const args = argumentsFor(paths, options);
 
   return await new Promise<Report>((resolve, reject) => {
     const child = spawn(binary.command, [...binary.prefix, ...args], {
