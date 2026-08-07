@@ -9,3 +9,28 @@ Releases are cut automatically from Conventional Commits by
 version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
+
+## [0.1.0](https://github.com/nickderobertis/notignored/releases/tag/v0.1.0) - 2026-08-07
+
+### Added
+
+- PR-comment GitHub Action, dogfooded on this repo
+- parse eslint, biome and typescript suppressions
+- report mypy, pyright, and ty suppressions
+- report only the suppressions a change added with --diff
+- parse ruff suppressions natively behind a fixed record contract
+
+### Changed
+
+- tighten input validation, error guidance, and pin sources
+- address the llmlint judge tier's findings
+
+### Documentation
+
+- drop comments that restate AGENTS.md and the code below them
+- say that exit 2 covers a bad argument too
+
+### Fixed
+
+- treat a closed stdout pipe as normal, not a write failure
+- declare the real MSRV and prove it in CI
