@@ -1,6 +1,7 @@
 name: Published smoke
 
-# Install what the registries are serving *right now* and run it.
+# Install what the registries and the GitHub Release are serving *right now* and
+# run it.
 #
 # `release.yml`'s verify jobs prove a version at the moment it is published, and
 # then never look again. Everything that can break afterwards — a yanked platform
@@ -13,6 +14,16 @@ name: Published smoke
 # once a week. The registry's own idea of the version (`pip show`, `npm view`) is
 # what the binary is held to, so a package whose metadata and payload disagree
 # fails here rather than confusing someone reading `--version`.
+#
+# The third install surface is the GitHub Release itself, and until v0.1.12 it was
+# the one nothing here or in `release.yml` ever exercised. `scripts/install.sh`
+# asked for the checksum as `<archive>.tar.gz.sha256` while every release has ever
+# published `<archive>.sha256`, so it 404'd and refused to install — on every
+# release it had ever cut. Nothing caught it: the local suite served a fixture
+# named after the script rather than after a release, and the dogfood workflow
+# runs `version: local`, which compiles from source and never downloads anything.
+# The `github-release` job below is that missing leg — the GitHub Action's own
+# default install path, run against the live release.
 #
 # Deliberately cheap: a checkout, the language runtime that owns the installer,
 # `pip install` / `npm install -g`, and bash. No Rust toolchain, no build, no
@@ -55,6 +66,79 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # `curl … install.sh | sh`, on each OS, as a user runs it — and as the GitHub
+  # Action's default `version: latest` runs it, since that step is literally
+  # `sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to …` with no version. This is
+  # the leg whose absence let a 404 on the checksum ship through every release.
+  #
+  # Ungated by any repository variable, unlike the two registry jobs: a GitHub
+  # Release needs no token to publish and no opt-in, so there is always one to
+  # install and a red here is always real.
+  #
+  # No Windows leg. `install.sh`'s ZIP branch needs `unzip` under a POSIX shell,
+  # which the Windows runner image does not ship; the install path the README
+  # gives Windows users is `cargo install`, which `ci.yml`'s install jobs cover on
+  # windows-latest. The `x86_64-pc-windows-msvc` asset names are held to the real
+  # release manifest by tests/install_contract.rs instead.
+  github-release:
+    name: github-release (${{ matrix.os }})
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # main's assets and main's installer: this sweep asks whether the script
+      # users curl from main can install what the Release is serving today.
+      - uses: actions/checkout@v4
+      # GitHub's own idea of which release is latest, read independently of the
+      # installer — the counterpart of `npm view` below. The installer resolves
+      # `latest` for itself, so a disagreement between the two is a real finding:
+      # it means the script installed something other than the newest release.
+      - name: Ask GitHub which release is latest
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName | tr -d '\r')"
+          if [ -z "$tag" ]; then
+            echo "::error::GitHub Release on $RUNNER_OS/$RUNNER_ARCH: no published release to install"
+            echo "ACTION: check https://github.com/$GITHUB_REPOSITORY/releases — release.yml may never have cut one" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # No `--version`: this is byte-for-byte the GitHub Action's default install
+      # step, which passes only `--to`. Resolving `latest` is part of what broke,
+      # so it is part of what runs.
+      - name: Install the latest release with scripts/install.sh
+        env:
+          # Lifts api.github.com's anonymous rate limit when install.sh resolves
+          # "latest" — a shared-IP hosted runner hits it. The script sends this to
+          # that host and to no other.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if ! sh scripts/install.sh --to "$RUNNER_TEMP/notignored-bin"; then
+            echo "::error::GitHub Release on $RUNNER_OS/$RUNNER_ARCH: scripts/install.sh failed"
+            echo "ACTION: check https://github.com/$GITHUB_REPOSITORY/releases/latest — the archive or its .sha256 sibling may be missing for this target" >&2
+            exit 1
+          fi
+          echo "$RUNNER_TEMP/notignored-bin" >> "$GITHUB_PATH"
+      # The same script, fixture tree, and golden the registry legs assert
+      # through, so all three install surfaces are held to one definition of
+      # "it works".
+      - name: Smoke-test what the Release served
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          bash scripts/smoke-published.sh \
+            --expect-version "${TAG#v}" \
+            --label "GitHub Release notignored $TAG on $RUNNER_OS/$RUNNER_ARCH"
+
   # `pip install notignored-cli`, on each OS, as a user runs it.
   pypi:
     name: pypi (${{ matrix.os }})

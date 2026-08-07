@@ -295,6 +295,22 @@ is not something a release is the place to discover; it rests on the build
 matrices and `tests/e2e/packaging.rs`. `macos-15-intel` is hosted through August
 2027 — when it retires, replace the label rather than dropping the leg.
 
+**The GitHub Release is the third install surface, and it is verified the same
+way.** `taiki-e/upload-rust-binary-action` derives *both* published names from the
+one `archive:` stem by giving it an extension — `<stem>.tar.gz` and
+`<stem>.sha256`, siblings. `scripts/install.sh` treated the checksum as a suffix
+on the archive name instead, so it 404'd its own checksum and refused to install
+on every release through v0.1.11 — the default path of `uses: …/notignored@v0`,
+dead for every consumer. Nothing saw it: `tests/e2e/installer.rs` served a fixture
+named after the script rather than after a release, and `notignored.yml` dogfoods
+with `version: local`, which compiles from source and downloads nothing. Both
+markers in `install.sh` are now rendered per target and held against a real
+release's asset listing (`tests/fixtures/release-assets/`), which no template here
+can talk into agreeing with it, and `release.yml`'s `verify-install` plus the
+sweep's `github-release` job install from the live Release. Three runners, not
+four: the ZIP branch needs `unzip` under a POSIX shell, which the Windows image
+lacks, so Windows keeps `cargo install`.
+
 **The install is the propagation probe, and the only one.** A publish is not one
 event: PyPI's JSON API answers while `pip install` still resolves through a simple
 index that converges later and per CDN edge, so a wait step polling that API said
