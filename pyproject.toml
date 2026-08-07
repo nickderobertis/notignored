@@ -1,0 +1,49 @@
+# PyPI packaging for the notignored CLI.
+#
+# maturin's `bin` bindings wrap the prebuilt Rust binary in a per-platform wheel
+# (the ruff/uv pattern), so `pip install notignored-cli` is a seconds-fast binary
+# install — the quickest trustworthy path on a CI image with no Rust toolchain,
+# or in a restricted-egress network where github.com is blocked but PyPI is
+# reachable. The distribution is `notignored-cli`; the console command it
+# installs is `notignored`, from the `[[bin]]` in Cargo.toml.
+#
+# The version is deliberately NOT set here (`dynamic = ["version"]`): maturin
+# sources it from Cargo.toml, so release-plz stays the single version driver —
+# the same rule scripts/npm-build.mjs follows for the npm packages. Wheels are
+# built and published by .github/workflows/release.yml.
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "notignored-cli"
+description = "Extract lint and type-check suppression comments from source files natively and fast — no linter subprocesses."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Nick DeRobertis" }]
+keywords = ["cli", "lint", "noqa", "suppression", "code-review"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/nickderobertis/notignored"
+Repository = "https://github.com/nickderobertis/notignored"
+
+[tool.maturin]
+# Package the compiled `notignored` binary as a wheel entry point, not a Python
+# extension module. manifest-path names the binary crate explicitly so maturin
+# never has to guess which manifest at the root it should build.
+bindings = "bin"
+manifest-path = "Cargo.toml"
+strip = true

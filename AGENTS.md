@@ -56,7 +56,7 @@ follow-ups.
   `publish = false` so versioning stays decoupled from the registry, and
   `release.yml`'s `publish-crate` job self-activates the day
   `CARGO_REGISTRY_TOKEN` is set. Until then the artifact ships via GitHub
-  Releases, `install.sh`, and `cargo install --git`.
+  Releases, `install.sh`, `cargo install --git`, and the PyPI/npm packages below.
 
 ## The ignore-record contract (fixed)
 
@@ -127,6 +127,30 @@ builds the branch's own source. It is **not a required check** and must not
 become one: it is skipped on fork pull requests, whose read-only token cannot
 upsert a comment, and a required context that never reports would block them
 forever.
+
+## The registry packages
+
+`pip install notignored-cli` and `npm install -g notignored-cli` ship the same
+prebuilt binary the Release attaches — nothing compiles at install time.
+`pyproject.toml` (maturin `bindings = "bin"`) is the whole wheel; `npm/notignored/`
+is the committed launcher and `scripts/npm-build.mjs` generates the five
+`notignored-cli-<platform>-<arch>` packages its `optionalDependencies` resolve to.
+Those platform names stay **unscoped**: a `@scope/` name needs an npm org, which a
+publish token cannot create.
+
+**Cargo.toml is the only version source.** The wheel takes it via `dynamic =
+["version"]`, the npm packages via `npm-build.mjs`, and the committed npm manifest
+carries `0.0.0-managed` so it can never become a second one — release-plz bumps
+`Cargo.toml` alone. Adding a target means the release matrices, `npm-build.mjs`,
+and the launcher's `PACKAGES` map together; `tests/packaging_contract.rs` fails
+the build when they disagree, and `tests/e2e/packaging.rs` builds and installs
+both packages from the real binary on every gate run.
+
+Publishing is token-based (`PYPI_TOKEN` / `NPM_TOKEN`), switched by the
+`PYPI_PUBLISH` / `NPM_PUBLISH` repository variables — not Trusted Publishing, so
+never add an `environment:` or OIDC claim expecting one. The *build* jobs stay
+ungated on purpose: a packaging break must redden a release even while publishing
+is off.
 
 ## Commits, releases, and merging
 

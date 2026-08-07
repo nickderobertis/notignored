@@ -17,6 +17,7 @@ mod installer;
 mod js_tools_setup;
 mod llmlint_parity;
 mod markdown;
+mod packaging;
 mod polyglot;
 mod python_tools_setup;
 mod python_types_parity;

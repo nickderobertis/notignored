@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Install the pinned ShellCheck and llmlint the e2e parity suites drive.
+# Install the pinned ShellCheck and llmlint the e2e parity suites drive, and the
+# pinned maturin the packaging journey builds the PyPI wheel with.
 #
 # The parity tests prove that what notignored reports is what each tool actually
 # suppresses, so they run the REAL tools — never a stub. Pinning makes that proof
 # reproducible: `.<tool>-version` is the single source of truth, read here and
 # asserted by the tests against each binary's own `--version`, so a stray system
-# install can never silently stand in for the pinned one.
+# install can never silently stand in for the pinned one. maturin is not a parity
+# tool — it is the wheel's build backend — but it earns the same pin for the same
+# reason: `.maturin-version` is what tests/e2e/packaging.rs builds with and what
+# release.yml hands maturin-action, so the wheel this repo proves is the wheel it
+# ships.
 #
-# Both ship a PyPI wheel for Linux, macOS, and Windows, so one installer covers
-# every platform CI runs on. Each lands in its own project-local venv
+# All three ship a PyPI wheel for Linux, macOS, and Windows, so one installer
+# covers every platform CI runs on. Each lands in its own project-local venv
 # (`.dev/<tool>`) so the path is the same on every machine, one tool's
 # dependencies can never constrain another's, and nothing leaks into the user's
 # global tools. Idempotent and quiet on success.
@@ -33,6 +38,7 @@ cd "$ROOT" || {
 TOOLS=(
   "shellcheck shellcheck-py"
   "llmlint llmlint-cli"
+  "maturin maturin"
 )
 
 # The pin as written in `.<tool>-version`, validated before it reaches uv.

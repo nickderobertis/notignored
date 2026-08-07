@@ -1,19 +1,47 @@
 name: Release
 
-# Build, archive, checksum, and attach the cross-platform binaries for a
-# published GitHub Release.
+# Build, archive, checksum, and publish everything a published GitHub Release
+# ships: the cross-platform binaries, the PyPI wheels, and the npm packages.
 #
-# The tag is what fires this: release-plz (see release-plz.yml) computes the
-# version, writes the changelog and manifests, and pushes `vX.Y.Z`. Versioning
-# and building stay separate jobs in separate workflows, joined only by the tag.
+# The Release is what fires this: release-plz (see release-plz.yml) computes the
+# version, writes the changelog and manifests, tags `vX.Y.Z`, and cuts the
+# Release. Versioning and building stay separate workflows, joined only by that
+# Release. Creating a Release by hand in the GitHub UI is the supported manual
+# fallback — it triggers this same validated path.
 #
-# release-plz authenticates with a PAT precisely so that push fires this
-# workflow — a tag pushed by the default GITHUB_TOKEN triggers nothing, and the
-# release would silently ship no binaries.
+# release-plz authenticates with a PAT precisely so that Release fires this
+# workflow — a tag or release created by the default GITHUB_TOKEN triggers
+# nothing, and the release would silently ship no artifacts.
+#
+#   * test          — the complete deterministic gate, so untested artifacts
+#                     never publish.
+#   * upload        — build each target on a native runner and attach the archive
+#                     + sha256 checksum to the Release (what scripts/install.sh
+#                     downloads).
+#   * publish-crate — idempotent crates.io publish; self-activates the day
+#                     CARGO_REGISTRY_TOKEN is set.
+#   * build-wheels  — wrap the prebuilt binary in per-platform PyPI wheels with
+#                     maturin (the ruff/uv pattern). Runs unconditionally, so a
+#                     packaging break reddens the release even while publishing
+#                     is switched off.
+#   * publish-pypi  — upload those wheels to notignored-cli with the PYPI_TOKEN
+#                     secret, gated on the PYPI_PUBLISH repo variable.
+#   * verify-pypi   — pip-install the exact version just published and run it.
+#   * build-npm     — wrap the same prebuilt binary in per-platform npm packages
+#                     (notignored-cli-<platform>-<arch>) via scripts/npm-build.mjs.
+#                     Runs unconditionally, same rationale as the wheels.
+#   * publish-npm   — publish the platform packages, then the launcher that
+#                     depends on them, with the NPM_TOKEN secret, gated on the
+#                     NPM_PUBLISH repo variable.
+#   * verify-npm    — npm-install the exact version just published and run it.
+#
+# The version is never written here: every artifact takes it from Cargo.toml
+# (maturin via `dynamic = ["version"]`, npm via scripts/npm-build.mjs), so
+# release-plz stays the single version driver.
 
 on:
-  push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -28,7 +56,9 @@ env:
 jobs:
   # crates.io publishing self-activates once the CARGO_REGISTRY_TOKEN secret
   # exists. `secrets` cannot be read in a job `if:`, so read it into an env var
-  # here and expose its presence as an output the publish job gates on.
+  # here and expose its presence as an output the publish job gates on. The PyPI
+  # and npm jobs need no such guard: they gate on repository *variables*, which
+  # `if:` can read directly.
   guard:
     runs-on: ubuntu-latest
     # Reads whether a secret is set and writes a job output — no repo access.
@@ -47,7 +77,7 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # Re-gate the release on the same checks CI enforces, so a tag can never
+  # Re-gate the release on the same checks CI enforces, so a release can never
   # publish an artifact that would not pass the gate.
   test:
     runs-on: ubuntu-latest
@@ -101,7 +131,7 @@ jobs:
           # Uploading an asset to a release that already exists triggers no
           # workflow, so the job-scoped GITHUB_TOKEN is the least privilege that
           # does the job; a PAT here would only widen it. The PAT this pipeline
-          # does need is RELEASE_PLZ_TOKEN, which creates the tag that starts
+          # does need is RELEASE_PLZ_TOKEN, which cuts the Release that starts
           # this workflow — see release-plz.yml and the note at the top.
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -131,3 +161,252 @@ jobs:
             exit 0
           fi
           cargo publish --locked
+
+  # PyPI wheels: maturin's `bin` bindings wrap the prebuilt binary in
+  # per-platform wheels (the ruff/uv pattern), so `pip install notignored-cli` is
+  # a seconds-fast binary install anywhere PyPI is reachable — the quickest path
+  # on a CI image with no Rust toolchain. maturin-action compiles inside
+  # manylinux containers on Linux for broad glibc compatibility, which is why
+  # this is a separate matrix from `upload` rather than a step inside it.
+  # `maturin-version` is the pin in .maturin-version, the same maturin
+  # tests/e2e/packaging.rs builds the wheel with; tests/packaging_contract.rs
+  # fails the build when the two drift.
+  build-wheels:
+    name: build-wheels (${{ matrix.target }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Mirrors the binary `upload` matrix: native runners per target.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist
+          manylinux: auto
+          maturin-version: v1.14.1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist
+
+  # PyPI publishing activates when the PYPI_PUBLISH repository variable is
+  # 'true'. Authentication is the PYPI_TOKEN secret (a project-scoped API token),
+  # not Trusted Publishing: this project publishes with repo secrets, so no OIDC
+  # identity is registered on PyPI and `id-token: write` would buy nothing.
+  # Keeping the wheels' build unconditioned above means a packaging break still
+  # reddens the release while publishing is off.
+  publish-pypi:
+    needs: build-wheels
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          password: ${{ secrets.PYPI_TOKEN }}
+          # Idempotent: a re-run (e.g. to finish a sibling publish) must not
+          # red-fail because these wheels are already on PyPI.
+          skip-existing: true
+
+  # Post-publish gate: prove the just-published version is pip-installable. PyPI
+  # propagation is not instant, so poll the JSON API until the version is
+  # queryable, then install the real wheel and run the real binary. A failure
+  # here means a broken release, not a blocked publish — the wheel is public
+  # either way, so this is what turns "we uploaded something" into "it works".
+  verify-pypi:
+    needs: publish-pypi
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Wait for the version to land on PyPI
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          url="https://pypi.org/pypi/notignored-cli/${ver}/json"
+          echo "Waiting for notignored-cli $ver on PyPI..."
+          for i in $(seq 1 30); do
+            if curl -fsSL -o /dev/null "$url" 2>/dev/null; then
+              echo "notignored-cli $ver is available on PyPI."
+              exit 0
+            fi
+            echo "  attempt $i: not indexed yet; sleeping 10s..."
+            sleep 10
+          done
+          echo "::error::notignored-cli $ver did not appear on PyPI within ~5 minutes"
+          exit 1
+      - name: Install from PyPI and smoke-test
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          pip install "notignored-cli==${ver}"
+          installed="$(notignored --version)"
+          echo "installed: $installed"
+          case "$installed" in
+            *"$ver"*) ;;
+            *) echo "::error::installed version mismatch: '$installed' does not contain '$ver'"; exit 1 ;;
+          esac
+          notignored --help >/dev/null
+          tmp="$(mktemp -d)"
+          printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
+          notignored "$tmp" --format json | grep -q '"E501"'
+          echo "PyPI install + smoke test passed for notignored-cli $ver"
+
+  # npm packages: scripts/npm-build.mjs wraps the prebuilt binary in a
+  # per-platform package (notignored-cli-<platform>-<arch>), the direct analogue
+  # of the maturin wheels, on the same native-runner matrix as `upload`, then
+  # `npm pack`s each to a tarball artifact. Unconditioned for the same reason the
+  # wheels are.
+  build-npm:
+    name: build-npm (${{ matrix.target }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the platform binary
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup target add "$TARGET"
+          cargo build --release --locked --target "$TARGET"
+      - name: Assemble and pack the platform npm package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          bin="target/$TARGET/release/notignored"
+          [ -f "$bin" ] || bin="${bin}.exe"
+          pkgdir="$(node scripts/npm-build.mjs platform --target "$TARGET" --binary "$bin" --out npm/dist)"
+          mkdir -p npm-artifacts
+          (cd "$pkgdir" && npm pack --pack-destination "$GITHUB_WORKSPACE/npm-artifacts")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.target }}
+          path: npm-artifacts/*.tgz
+
+  # npm publishing activates when the NPM_PUBLISH repository variable is 'true'.
+  # `registry-url` makes setup-node write an .npmrc that authenticates with
+  # NODE_AUTH_TOKEN, so `npm publish` is token-authenticated (an npm automation
+  # token with publish rights to notignored-cli and its platform packages).
+  #
+  # No `--provenance`: that needs an OIDC-backed attestation whose first
+  # successful run cannot be rehearsed anywhere but a real publish, and a
+  # provenance failure would take the publish down with it. The packages ship
+  # without it rather than risk that; adding it later is a one-flag change plus
+  # `id-token: write` on this job.
+  publish-npm:
+    needs: build-npm
+    if: ${{ vars.NPM_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: npm-artifacts
+          merge-multiple: true
+      - name: Publish the platform packages, then the launcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Platform packages first: the launcher's optionalDependencies pin their
+          # exact versions, so they must exist for a later install to resolve.
+          # Glob against an ABSOLUTE base so each argument is an absolute path —
+          # npm reads a bare `dir/file.tgz` as a `user/repo` GitHub spec and tries
+          # to git-clone it.
+          for tgz in "$GITHUB_WORKSPACE"/npm-artifacts/*.tgz; do
+            scripts/publish-npm.sh "$tgz"
+          done
+          # The launcher (notignored-cli) carries no binary, so it needs no
+          # prebuilt target — just the version-stamped manifest.
+          launcher="$(node scripts/npm-build.mjs launcher --out npm/dist)"
+          scripts/publish-npm.sh "$launcher"
+
+  # Post-publish gate: prove the just-published version is npm-installable, the
+  # same promise verify-pypi makes for the wheel. Registry propagation is not
+  # instant, so poll until the launcher resolves, then install it globally and
+  # run the real binary it pulled in through its optional dependency.
+  verify-npm:
+    needs: publish-npm
+    if: ${{ vars.NPM_PUBLISH == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Wait for the version to land on npm
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          echo "Waiting for notignored-cli@$ver on npm..."
+          for i in $(seq 1 30); do
+            if npm view "notignored-cli@${ver}" version >/dev/null 2>&1; then
+              echo "notignored-cli@$ver is available on npm."
+              exit 0
+            fi
+            echo "  attempt $i: not indexed yet; sleeping 10s..."
+            sleep 10
+          done
+          echo "::error::notignored-cli@$ver did not appear on npm within ~5 minutes"
+          exit 1
+      - name: Install from npm and smoke-test
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          npm install -g "notignored-cli@${ver}"
+          installed="$(notignored --version)"
+          echo "installed: $installed"
+          case "$installed" in
+            *"$ver"*) ;;
+            *) echo "::error::installed version mismatch: '$installed' does not contain '$ver'"; exit 1 ;;
+          esac
+          notignored --help >/dev/null
+          tmp="$(mktemp -d)"
+          printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
+          notignored "$tmp" --format json | grep -q '"E501"'
+          echo "npm install + smoke test passed for notignored-cli $ver"

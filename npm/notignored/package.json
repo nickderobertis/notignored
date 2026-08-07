@@ -1,0 +1,30 @@
+{
+  "name": "notignored-cli",
+  "version": "0.0.0-managed",
+  "description": "Extract lint and type-check suppression comments from source files natively and fast — no linter subprocesses.",
+  "keywords": ["cli", "lint", "noqa", "suppression", "code-review"],
+  "homepage": "https://github.com/nickderobertis/notignored",
+  "bugs": "https://github.com/nickderobertis/notignored/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nickderobertis/notignored.git"
+  },
+  "license": "MIT",
+  "author": "Nick DeRobertis",
+  "bin": {
+    "notignored": "bin/notignored.js"
+  },
+  "files": [
+    "bin/notignored.js"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "optionalDependencies": {
+    "notignored-cli-linux-x64": "0.0.0-managed",
+    "notignored-cli-linux-arm64": "0.0.0-managed",
+    "notignored-cli-darwin-x64": "0.0.0-managed",
+    "notignored-cli-darwin-arm64": "0.0.0-managed",
+    "notignored-cli-win32-x64": "0.0.0-managed"
+  }
+}

@@ -1,0 +1,181 @@
+#!/usr/bin/env node
+// Build the npm packages that distribute the prebuilt notignored binary — the
+// direct analogue of the maturin PyPI wheels (see pyproject.toml). The layout
+// mirrors esbuild/@biomejs and every other "carry the native binary" npm tool:
+//
+//   notignored-cli                 launcher package (npm/notignored, committed)
+//     bin/notignored.js            resolves + execs the platform binary
+//     optionalDependencies:        one per Rust target in release.yml's matrix
+//       notignored-cli-linux-x64
+//       notignored-cli-linux-arm64
+//       notignored-cli-darwin-x64
+//       notignored-cli-darwin-arm64
+//       notignored-cli-win32-x64   each carries the matching prebuilt binary
+//
+// The platform packages are UNSCOPED on purpose: a `@scope/` name needs an npm
+// organization, which a publish token cannot create.
+//
+// npm installs only the optional dependency whose `os`/`cpu` match the host, so
+// `npm install -g notignored-cli` is a seconds-fast binary install — the same
+// promise the wheels make on PyPI.
+//
+// The version is sourced from Cargo.toml (release-plz stays the single version
+// driver, exactly like the wheels' `dynamic = ["version"]`); pass --version to
+// override. Nothing here publishes — it only assembles package directories under
+// --out; release.yml packs and publishes them.
+//
+// Usage:
+//   node scripts/npm-build.mjs platform --target <triple> --binary <path> \
+//        [--version <v>] [--out <dir>]
+//   node scripts/npm-build.mjs launcher [--version <v>] [--out <dir>]
+//
+// Both modes print the created package directory on stdout.
+
+import {
+  chmodSync,
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Rust target triple -> npm platform package facts. Keys must match the release
+// matrix in .github/workflows/release.yml; the (platform, arch) pair must match
+// the PACKAGES map in npm/notignored/bin/notignored.js and the
+// optionalDependencies in npm/notignored/package.json.
+const TARGETS = {
+  "x86_64-unknown-linux-gnu": { platform: "linux", arch: "x64", exe: false },
+  "aarch64-unknown-linux-gnu": { platform: "linux", arch: "arm64", exe: false },
+  "x86_64-apple-darwin": { platform: "darwin", arch: "x64", exe: false },
+  "aarch64-apple-darwin": { platform: "darwin", arch: "arm64", exe: false },
+  "x86_64-pc-windows-msvc": { platform: "win32", arch: "x64", exe: true },
+};
+
+const REPOSITORY = "https://github.com/nickderobertis/notignored";
+
+function die(msg) {
+  process.stderr.write(`npm-build: ${msg}\n`);
+  process.exit(1);
+}
+
+// Read the crate version from the root Cargo.toml [package] section. A tiny hand
+// parser avoids a TOML dependency: take the first `version = "..."` after the
+// `[package]` header and before the next section, so a dependency's version can
+// never be mistaken for the crate's.
+function cargoVersion() {
+  const toml = readFileSync(join(REPO_ROOT, "Cargo.toml"), "utf8");
+  const pkg = toml.indexOf("[package]");
+  if (pkg === -1) die("no [package] section in Cargo.toml");
+  const rest = toml.slice(pkg);
+  const end = rest.indexOf("\n[", 1);
+  const section = end === -1 ? rest : rest.slice(0, end);
+  const m = section.match(/^\s*version\s*=\s*"([^"]+)"/m);
+  if (!m) die("could not parse version from Cargo.toml [package]");
+  return m[1];
+}
+
+function parseArgs(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (!a.startsWith("--")) die(`unexpected argument: ${a}`);
+    const key = a.slice(2);
+    const val = argv[i + 1];
+    if (val === undefined || val.startsWith("--")) die(`--${key} needs a value`);
+    out[key] = val;
+    i += 1;
+  }
+  return out;
+}
+
+function writeJson(path, obj) {
+  writeFileSync(path, `${JSON.stringify(obj, null, 2)}\n`);
+}
+
+function buildPlatform(args) {
+  const target = args.target || die("platform: --target <triple> is required");
+  const binary = args.binary || die("platform: --binary <path> is required");
+  const facts = TARGETS[target] || die(`platform: unknown target ${target}`);
+  const version = args.version || cargoVersion();
+  const outRoot = resolve(args.out || join(REPO_ROOT, "npm", "dist"));
+
+  const pkgName = `notignored-cli-${facts.platform}-${facts.arch}`;
+  const pkgDir = join(outRoot, pkgName);
+  const binDir = join(pkgDir, "bin");
+  const binName = facts.exe ? "notignored.exe" : "notignored";
+
+  // Resolve the source binary with a `.exe` fallback: a bash caller may pass the
+  // extensionless path (Git Bash's `test -x` matches notignored.exe
+  // transparently, but Node's copyFileSync needs the real name).
+  let srcBin = resolve(binary);
+  if (!existsSync(srcBin) && existsSync(`${srcBin}.exe`)) srcBin = `${srcBin}.exe`;
+  if (!existsSync(srcBin)) die(`platform: binary not found: ${binary}`);
+
+  rmSync(pkgDir, { recursive: true, force: true });
+  mkdirSync(binDir, { recursive: true });
+  copyFileSync(srcBin, join(binDir, binName));
+  if (!facts.exe) chmodSync(join(binDir, binName), 0o755);
+
+  writeJson(join(pkgDir, "package.json"), {
+    name: pkgName,
+    version,
+    description: `Prebuilt notignored binary for ${facts.platform} ${facts.arch}.`,
+    homepage: REPOSITORY,
+    license: "MIT",
+    author: "Nick DeRobertis",
+    repository: { type: "git", url: `git+${REPOSITORY}.git` },
+    // os/cpu make npm install this package only on the matching host, so the
+    // launcher's optionalDependency resolution picks exactly one.
+    os: [facts.platform],
+    cpu: [facts.arch],
+    files: [`bin/${binName}`],
+  });
+
+  writeFileSync(
+    join(pkgDir, "README.md"),
+    `# ${pkgName}\n\nPrebuilt \`notignored\` binary for ${facts.platform} ${facts.arch}.\n` +
+      "This is a platform-specific dependency of " +
+      "[`notignored-cli`](https://www.npmjs.com/package/notignored-cli); install " +
+      "that instead.\n"
+  );
+
+  process.stdout.write(`${pkgDir}\n`);
+}
+
+function buildLauncher(args) {
+  const version = args.version || cargoVersion();
+  const outRoot = resolve(args.out || join(REPO_ROOT, "npm", "dist"));
+  const src = join(REPO_ROOT, "npm", "notignored");
+  const dest = join(outRoot, "notignored-cli");
+
+  rmSync(dest, { recursive: true, force: true });
+  mkdirSync(outRoot, { recursive: true });
+  cpSync(src, dest, { recursive: true });
+
+  // Stamp the real version into the launcher's own version and every
+  // optionalDependency, so the launcher pins the exact platform packages this
+  // release publishes. The committed manifest carries a placeholder instead: a
+  // real number there would be a second version source to drift.
+  const manifestPath = join(dest, "package.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.version = version;
+  for (const dep of Object.keys(manifest.optionalDependencies || {})) {
+    manifest.optionalDependencies[dep] = version;
+  }
+  writeJson(manifestPath, manifest);
+
+  process.stdout.write(`${dest}\n`);
+}
+
+const [mode, ...rest] = process.argv.slice(2);
+const args = parseArgs(rest);
+if (mode === "platform") buildPlatform(args);
+else if (mode === "launcher") buildLauncher(args);
+else die("usage: npm-build.mjs <platform|launcher> [--target ..] [--binary ..] [--version ..] [--out ..]");
