@@ -30,12 +30,28 @@ startups. That is what makes it cheap enough to run on every pull request.
 ## Install
 
 ```console
+# From PyPI or npm — both ship the prebuilt binary, so no Rust toolchain is
+# needed and nothing is compiled at install time:
+pip install notignored-cli
+npm install -g notignored-cli
+
+# Or without installing at all:
+npx notignored-cli src/
+
 # Cross-platform, from source (Linux, macOS, Windows):
 cargo install --git https://github.com/nickderobertis/notignored --locked
 
 # Or a prebuilt binary (Linux, macOS, and Windows under a POSIX shell):
 curl -fsSL https://raw.githubusercontent.com/nickderobertis/notignored/main/scripts/install.sh | sh
 ```
+
+All four install the same `notignored` command. The `notignored-cli`
+distributions carry the release binary for your platform — a wheel per platform
+on PyPI, a package per platform on npm, picked automatically — so they are the
+fastest path on a CI image with no Rust toolchain, and the only one that works
+where github.com is blocked but the package registries are not. Prebuilt targets
+are Linux (x64, arm64), macOS (x64, arm64), and Windows (x64); anywhere else,
+`cargo install` builds from source.
 
 The installer honours `NOTIGNORED_VERSION` / `NOTIGNORED_INSTALL_DIR` (or the
 `--version` / `--to` flags), verifies the archive against the SHA-256 checksum

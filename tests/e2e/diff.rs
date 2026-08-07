@@ -258,53 +258,28 @@ fn a_file_the_change_deleted_is_skipped_rather_than_reported_as_unreadable() {
     assert!(run_json(root, &["--diff", "gone.py"], 0).is_empty());
 }
 
-/// A file the change touched under a name that is not valid UTF-8 becomes a
-/// report error, not a file that quietly vanishes from the review.
-///
-/// Git speaks paths as bytes and the report contract speaks `String`, so such a
-/// name has no faithful spelling in a report. Decoded lossily it names a file
-/// that does not exist: handed back to git as a pathspec it matches nothing, and
-/// a change carrying a fresh suppression reads as clean.
-///
-/// Linux is where such a name can exist to drive real git with: Windows
-/// filenames are UTF-16, and macOS's APFS rejects a non-UTF-8 name at `write`
-/// with `EILSEQ`, so the scenario is unrepresentable there. The decoding this
-/// guards is platform-independent and covered on every target by
-/// `src/diff.rs::a_path_that_is_not_utf8_is_set_aside_rather_than_guessed_at`.
-#[cfg(target_os = "linux")]
-#[test]
-fn a_changed_path_that_is_not_utf8_is_reported_rather_than_dropped() {
-    use std::os::unix::ffi::OsStrExt;
+/// The bytes of a file name that no `String` can hold.
+#[cfg(unix)]
+const UNDECODABLE_NAME: &[u8] = b"caf\xe9.py";
 
-    let repo = git_repo();
-    let root = repo.path();
-    write(root, "app.py", "value = 1\n");
-    commit(root, "baseline");
+/// The suppression such a file carries — reportable only if its path were
+/// somehow decodable, so seeing it would mean the error path was skipped.
+#[cfg(unix)]
+const UNDECODABLE_CONTENT: &str = "import os  # noqa: F401  # its name is not UTF-8\n";
 
-    let undecodable = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9.py"));
-    fs::write(
-        &undecodable,
-        "import os  # noqa: F401  # its name is not UTF-8\n",
-    )
-    .expect("write a file whose name is not UTF-8");
-    write(root, "app.py", "value = 1\nurl = URL  # noqa: E501\n");
-    // `git diff` only knows about tracked files, and this one is brand new.
-    git(root, &["add", "-A"]);
-
-    let output = notignored(root)
-        .args(["--diff", "--format", "json"])
-        .output()
-        .expect("run notignored");
+/// Assert a run reported the undecodable path as an error rather than dropping
+/// it, and still reported `also_reported` — the rest of the same change.
+#[cfg(unix)]
+fn assert_undecodable_path_reported(output: &std::process::Output, also_reported: &[&str]) {
     assert_eq!(
         output.status.code(),
         Some(2),
         "a file that could not be scanned is not a clean run: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     // The rest of the change is still reported: one unnameable file does not
     // take the review down with it.
-    assert_eq!(reported(&output.stdout), vec!["app.py:2 E501"]);
+    assert_eq!(reported(&output.stdout), also_reported);
     let report = parse_report(&output.stdout);
     let errors = report["errors"].as_array().expect("an errors array");
     assert_eq!(errors.len(), 1, "{report:#}");
@@ -319,6 +294,153 @@ fn a_changed_path_that_is_not_utf8_is_reported_rather_than_dropped() {
     // And a person watching the terminal is told, not just the JSON consumer.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("caf\u{fffd}.py"), "{stderr}");
+}
+
+/// Run the binary's JSON diff in `root`.
+#[cfg(unix)]
+fn diff_json(root: &std::path::Path) -> std::process::Output {
+    notignored(root)
+        .args(["--diff", "--format", "json"])
+        .output()
+        .expect("run notignored")
+}
+
+/// A file the change touched under a name that is not valid UTF-8 becomes a
+/// report error, not a file that quietly vanishes from the review.
+///
+/// Git speaks paths as bytes and the report contract speaks `String`, so such a
+/// name has no faithful spelling in a report. Decoded lossily it names a file
+/// that does not exist: handed back to git as a pathspec it matches nothing, and
+/// a change carrying a fresh suppression reads as clean.
+///
+/// Whether such a file can exist at all is a property of the **filesystem**, not
+/// of the operating system: Linux passes the name through as bytes, while APFS
+/// and HFS+ reject it at `write` with `EILSEQ`, so one `#[cfg(unix)]` build
+/// cannot assume it. This journey therefore asks the filesystem rather than the
+/// target. Where the name is permitted it drives the whole thing for real
+/// against a committed baseline; where it is not, it proves the refusal is about
+/// *these bytes* — the same content under a decodable name in the same directory
+/// writes fine — and that the review survives it.
+///
+/// The behaviour itself is not left to one platform. The decoding is covered on
+/// every target by
+/// `src/diff.rs::a_path_that_is_not_utf8_is_set_aside_rather_than_guessed_at`,
+/// and the whole journey — real git, real binary, same report error — is proven
+/// wherever a file cannot carry the name by
+/// [`an_undecodable_path_staged_in_the_index_is_reported_rather_than_dropped`],
+/// which reaches it through the index instead of the work tree.
+#[cfg(unix)]
+#[test]
+fn a_changed_path_that_is_not_utf8_is_reported_rather_than_dropped() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "value = 1\n");
+    commit(root, "baseline");
+
+    let undecodable = root.join(std::ffi::OsStr::from_bytes(UNDECODABLE_NAME));
+    match fs::write(&undecodable, UNDECODABLE_CONTENT) {
+        Ok(()) => {
+            write(root, "app.py", "value = 1\nurl = URL  # noqa: E501\n");
+            // `git diff` only knows about tracked files, and this one is new.
+            git(root, &["add", "-A"]);
+            assert_undecodable_path_reported(&diff_json(root), &["app.py:2 E501"]);
+        }
+        Err(refused) => {
+            // The *name* was refused, not the write: identical bytes under a
+            // decodable name in the same directory land without complaint, so
+            // this is the filesystem's rule about file names rather than a
+            // permission, space, or path-length problem.
+            fs::write(root.join("cafe.py"), UNDECODABLE_CONTENT)
+                .unwrap_or_else(|error| panic!("this directory is not writable at all: {error}"));
+            assert!(
+                !undecodable.exists(),
+                "the filesystem refused the name with {refused}, yet something is there"
+            );
+
+            // Recovery: the refusal leaves an ordinary repository behind, so the
+            // review still completes and still reports every suppression that is
+            // reachable on this platform.
+            write(root, "app.py", "value = 1\nurl = URL  # noqa: E501\n");
+            git(root, &["add", "-A"]);
+            let output = diff_json(root);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "a name this filesystem cannot hold is not an error to report: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                reported(&output.stdout),
+                vec!["app.py:2 E501", "cafe.py:1 F401"]
+            );
+            assert!(
+                parse_report(&output.stdout)["errors"]
+                    .as_array()
+                    .expect("an errors array")
+                    .is_empty(),
+                "nothing failed to scan: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+    }
+}
+
+/// The same contract, reached through the index instead of the work tree.
+///
+/// A path git reports is bytes whether or not the local filesystem could ever
+/// hold it — which is exactly the state a macOS clone of a repository containing
+/// such a path ends up in: the index entry is there, the checkout of that one
+/// file failed, and a review that silently dropped it would call the change
+/// clean. Staging the entry with git's own plumbing reproduces that without
+/// asking the filesystem for anything, so this journey proves the behaviour on
+/// every Unix — including the ones where
+/// [`a_changed_path_that_is_not_utf8_is_reported_rather_than_dropped`] cannot
+/// build its fixture. With no commit yet, `--diff` compares the index against
+/// the empty tree, so both staged paths are the change.
+#[cfg(unix)]
+#[test]
+fn an_undecodable_path_staged_in_the_index_is_reported_rather_than_dropped() {
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::ffi::OsStringExt;
+
+    use crate::support::git_os;
+
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "url = URL  # noqa: E501\n");
+
+    // The blob is hashed from a decodable name that is then removed, so only the
+    // index entry below carries the undecodable one.
+    write(root, "staged-blob.py", UNDECODABLE_CONTENT);
+    let blob = git_stdout(root, &["hash-object", "-w", "staged-blob.py"])
+        .trim()
+        .to_string();
+    fs::remove_file(root.join("staged-blob.py")).expect("remove the hashed source");
+
+    let mut cacheinfo = format!("100644,{blob},").into_bytes();
+    cacheinfo.extend_from_slice(UNDECODABLE_NAME);
+    let cacheinfo = OsString::from_vec(cacheinfo);
+    git_os(
+        root,
+        &[
+            OsStr::new("update-index"),
+            OsStr::new("--add"),
+            OsStr::new("--cacheinfo"),
+            &cacheinfo,
+        ],
+    );
+    git(root, &["add", "app.py"]);
+    // Read the index back: git holds those bytes verbatim, so the journey really
+    // is driving the state it claims to.
+    let staged = git_stdout(root, &["ls-files", "-z"]);
+    assert!(
+        staged.contains(&String::from_utf8_lossy(UNDECODABLE_NAME).into_owned()),
+        "the undecodable path is not staged: {staged:?}"
+    );
+
+    assert_undecodable_path_reported(&diff_json(root), &["app.py:1 E501"]);
 }
 
 /// The files a change did not touch are never even read — that is what keeps a
