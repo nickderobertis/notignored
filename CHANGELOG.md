@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/nickderobertis/notignored/compare/v0.1.1...v0.1.2) - 2026-08-07
+
+### Added
+
+- ship notignored-cli on PyPI and npm ([#9](https://github.com/nickderobertis/notignored/pull/9))
+
 ## [0.1.1](https://github.com/nickderobertis/notignored/compare/v0.1.0...v0.1.1) - 2026-08-07
 
 ### Fixed
