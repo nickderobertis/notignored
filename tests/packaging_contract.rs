@@ -21,7 +21,13 @@
 //!     secrets, with the build jobs deliberately left ungated so a packaging
 //!     break reddens a release even while publishing is off.
 //!
-//! `release.yml` is read through the same strict YAML reader `action.yml` is
+//! A fourth fact spans two files: the **post-publish verification** — the
+//! release's `verify-*` jobs and the weekly `published-smoke.yml` sweep — runs on
+//! every OS and asserts through the one `scripts/smoke-published.sh` that
+//! [`tests/e2e/smoke.rs`](e2e/smoke.rs) drives against the build under test, so a
+//! workflow's idea of "it works" cannot drift from the parser that ships.
+//!
+//! Both workflows are read through the same strict YAML reader `action.yml` is
 //! ([`workflow_yaml`]), so a malformed workflow is a failing test rather than a
 //! failing release.
 
@@ -30,7 +36,7 @@ mod workflow_yaml;
 
 use std::collections::BTreeSet;
 
-use workflow_yaml::{parse, read, run_steps, Node};
+use workflow_yaml::{parse, read, repo_root, run_steps, Node};
 
 /// The Rust targets every release matrix builds, paired with the npm platform
 /// package each one produces.
@@ -42,12 +48,68 @@ const TARGETS: [(&str, &str); 5] = [
     ("x86_64-pc-windows-msvc", "notignored-cli-win32-x64"),
 ];
 
+const RELEASE: &str = ".github/workflows/release.yml";
+const SMOKE: &str = ".github/workflows/published-smoke.yml";
+
+/// The one script that decides whether an installed `notignored` is the build
+/// that shipped. Both workflows call it; `tests/e2e/smoke.rs` runs the same file
+/// over the build under test.
+const SMOKE_SCRIPT: &str = "scripts/smoke-published.sh";
+
+/// The runner labels every post-publish verification uses.
+///
+/// One leg per OS, because `pip install` and `npm install -g` each resolve a
+/// *different* artifact per platform and only a runner of that platform can
+/// prove the right one was picked. The two released targets with no leg —
+/// `aarch64-unknown-linux-gnu` and `x86_64-apple-darwin` — are covered by the
+/// build matrices and by `tests/e2e/packaging.rs` on whichever host runs it.
+const VERIFY_RUNNERS: [&str; 3] = ["ubuntu-latest", "macos-latest", "windows-latest"];
+
+/// Every job that installs a published package and smoke-tests it, as
+/// `(workflow, job)`.
+const VERIFICATIONS: [(&str, &str); 4] = [
+    (RELEASE, "verify-pypi"),
+    (RELEASE, "verify-npm"),
+    (SMOKE, "pypi"),
+    (SMOKE, "npm"),
+];
+
+fn workflow(relative: &str) -> Node {
+    parse(&read(relative))
+}
+
 fn release_workflow() -> Node {
-    parse(&read(".github/workflows/release.yml"))
+    workflow(RELEASE)
 }
 
 fn jobs() -> Node {
     release_workflow().get("jobs").clone()
+}
+
+/// Every `run:` script in a job, as the reader flattened it.
+fn scripts(job: &Node) -> Vec<String> {
+    job.find("steps")
+        .map(|steps| {
+            run_steps(steps.list())
+                .iter()
+                .map(|step| step.get("run").scalar().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every action a job `uses:`.
+fn actions_used(job: &Node) -> Vec<String> {
+    job.find("steps")
+        .map(|steps| {
+            steps
+                .list()
+                .iter()
+                .filter_map(|step| step.find("uses"))
+                .map(|uses| uses.scalar().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn job(name: &str) -> Node {
@@ -264,6 +326,184 @@ fn the_release_wheel_uses_the_pinned_maturin() {
     );
 }
 
+/// Every published package is installed and run on every OS a user installs it
+/// on, by the one script this repo also runs against its own build.
+///
+/// A single-runner verification proves the *upload* worked, not the install: the
+/// wheel `pip` resolves and the platform package `npm` resolves are chosen per
+/// platform, so an install that is broken only on Windows looks green from
+/// Linux. And what each leg asserts has to be the shared
+/// [`SMOKE_SCRIPT`] — an inlined `grep -q '"E501"'` would keep passing after the
+/// record around it changed shape, which is exactly the drift
+/// `tests/e2e/smoke.rs` exists to catch on the pull request that caused it.
+#[test]
+fn every_published_package_is_smoke_tested_on_every_supported_os() {
+    assert!(
+        repo_root().join(SMOKE_SCRIPT).is_file(),
+        "{SMOKE_SCRIPT} is gone, and every verification below calls it"
+    );
+    for (file, name) in VERIFICATIONS {
+        let job = workflow(file).get("jobs").get(name).clone();
+        let runners: Vec<&str> = job
+            .get("strategy")
+            .get("matrix")
+            .get("os")
+            .list()
+            .iter()
+            .map(Node::scalar)
+            .collect();
+        assert_eq!(
+            runners, VERIFY_RUNNERS,
+            "`{name}` in {file} no longer verifies the published package on every OS"
+        );
+        assert_eq!(
+            job.get("runs-on").scalar(),
+            "${{ matrix.os }}",
+            "`{name}` in {file} declares a matrix it does not run on"
+        );
+        assert_eq!(
+            job.get("strategy").get("fail-fast").scalar(),
+            "false",
+            "`{name}` in {file} stops at the first red platform, hiding the others"
+        );
+        // Windows defaults to pwsh, where none of these scripts are valid.
+        assert_eq!(
+            job.get("defaults").get("run").get("shell").scalar(),
+            "bash",
+            "`{name}` in {file} does not pin bash, so its Windows leg runs pwsh"
+        );
+        assert!(
+            actions_used(&job)
+                .iter()
+                .any(|uses| uses.starts_with("actions/checkout@")),
+            "`{name}` in {file} never checks out the smoke assets it asserts against"
+        );
+        let calls_smoke = scripts(&job).iter().any(|script| {
+            script.contains(&format!("bash {SMOKE_SCRIPT}")) && script.contains("--expect-version")
+        });
+        assert!(
+            calls_smoke,
+            "`{name}` in {file} does not run `bash {SMOKE_SCRIPT} --expect-version …`; \
+             an assertion written inline there cannot be held to the shipped parser"
+        );
+    }
+}
+
+/// The release verification installs the exact version the Release published.
+///
+/// `latest` would pass against the *previous* release for as long as the new one
+/// takes to become the default — which is the window this job exists to cover.
+#[test]
+fn the_release_verification_installs_the_version_it_asserts() {
+    for (name, specifier) in [
+        ("verify-pypi", "pip install \"notignored-cli==${ver}\""),
+        ("verify-npm", "npm install -g \"notignored-cli@${ver}\""),
+    ] {
+        let job = job(name);
+        let installs = scripts(&job)
+            .iter()
+            .any(|script| script.contains(specifier) && script.contains("${GITHUB_REF_NAME#v}"));
+        assert!(
+            installs,
+            "`{name}` no longer installs the released version with `{specifier}`"
+        );
+    }
+}
+
+/// The scheduled sweep runs on a schedule and by hand, and on nothing else.
+///
+/// Its whole purpose is to look at the registries when no one is releasing, so a
+/// trigger tied to this repository's activity would defeat it. It also means the
+/// sweep can never be a required check — branch protection lists contexts a
+/// *pull request* reports, and this reports on none. That is recorded in
+/// AGENTS.md rather than worked around.
+#[test]
+fn the_scheduled_smoke_runs_weekly_and_by_hand_and_never_on_a_pull_request() {
+    let on = workflow(SMOKE).get("on").clone();
+    assert_eq!(
+        on.keys(),
+        vec!["schedule", "workflow_dispatch"],
+        "the published smoke's triggers changed; a pull-request trigger would make it \
+         look requirable, and losing the schedule would make it a manual step nobody runs"
+    );
+    let crons: Vec<&str> = on
+        .get("schedule")
+        .list()
+        .iter()
+        .map(|entry| entry.get("cron").scalar())
+        .collect();
+    assert_eq!(
+        crons.len(),
+        1,
+        "the published smoke declares {} schedules; one weekly sweep is the budget",
+        crons.len()
+    );
+    // Day-of-week field pinned: `* * *` would be a daily run of six runners.
+    let day_of_week = crons[0]
+        .split_whitespace()
+        .nth(4)
+        .expect("a cron with five fields");
+    assert_ne!(
+        day_of_week, "*",
+        "the published smoke's cron `{}` runs every day; it is a weekly sweep",
+        crons[0]
+    );
+}
+
+/// The sweep installs from the registries and builds nothing.
+///
+/// A weekly job that compiled the crate would cost more than the release it is
+/// watching, and would prove the source tree rather than the artifact the
+/// registry served — the one thing only this workflow can see. Holding the
+/// action list to exactly the three installers is what keeps a cache, a
+/// toolchain, or a `cargo build` from being added without saying so.
+#[test]
+fn the_scheduled_smoke_installs_from_the_registries_and_nothing_else() {
+    let jobs = workflow(SMOKE).get("jobs").clone();
+    let allowed = [
+        "actions/checkout@",
+        "actions/setup-python@",
+        "actions/setup-node@",
+    ];
+    for name in jobs.keys() {
+        let job = jobs.get(name);
+        for uses in actions_used(job) {
+            assert!(
+                allowed.iter().any(|prefix| uses.starts_with(prefix)),
+                "`{name}` in {SMOKE} uses `{uses}`; the sweep installs from the registries \
+                 only — no toolchain, no cache, no build"
+            );
+        }
+        for script in scripts(job) {
+            for heavyweight in ["cargo ", "rustup ", "just ", "maturin "] {
+                assert!(
+                    !script.contains(heavyweight),
+                    "`{name}` in {SMOKE} runs `{heavyweight}`; the sweep must stay a \
+                     registry install and a smoke test"
+                );
+            }
+        }
+    }
+}
+
+/// The sweep is switched by the same variables that decide whether this project
+/// publishes at all.
+///
+/// A repo with `PYPI_PUBLISH` off has nothing on PyPI to smoke, and a weekly red
+/// run for an absent package is how a scheduled check gets switched off — taking
+/// the real coverage with it.
+#[test]
+fn the_scheduled_smoke_is_gated_on_the_same_publish_variables() {
+    let jobs = workflow(SMOKE).get("jobs").clone();
+    for (name, variable) in [("pypi", "PYPI_PUBLISH"), ("npm", "NPM_PUBLISH")] {
+        assert_eq!(
+            jobs.get(name).get("if").scalar(),
+            format!("${{{{ vars.{variable} == 'true' }}}}"),
+            "`{name}` in {SMOKE} is no longer gated on the {variable} repository variable"
+        );
+    }
+}
+
 /// No untrusted event payload is spliced into a release script.
 ///
 /// The same rule `tests/action_contract.rs` enforces for the composite action:
@@ -272,7 +512,13 @@ fn the_release_wheel_uses_the_pinned_maturin() {
 /// generated by the runner and are safe; anything else goes through `env:`.
 #[test]
 fn no_run_script_interpolates_an_untrusted_value() {
-    let jobs = jobs();
+    for file in [RELEASE, SMOKE] {
+        no_run_script_interpolates_an_untrusted_value_in(file);
+    }
+}
+
+fn no_run_script_interpolates_an_untrusted_value_in(file: &str) {
+    let jobs = workflow(file).get("jobs").clone();
     for name in jobs.keys() {
         let job = jobs.get(name);
         let Some(steps) = job.find("steps") else {
@@ -466,16 +712,25 @@ fn the_readmes_name_the_platforms_the_release_builds() {
 /// registry. This ties the grant to the evidence — a job that checks out gets
 /// repository access, and a job that does not gets none — so adding a job cannot
 /// silently widen the token.
+///
+/// The scheduled sweep answers to the same rule: it runs unattended on `main`,
+/// which is the worst place for a token that can write.
 #[test]
 fn only_the_jobs_that_read_the_repository_may() {
-    let workflow = release_workflow();
+    for file in [RELEASE, SMOKE] {
+        only_the_jobs_that_read_the_repository_may_in(file);
+    }
+}
+
+fn only_the_jobs_that_read_the_repository_may_in(file: &str) {
+    let workflow = workflow(file);
     assert_eq!(
         workflow.get("permissions").scalar(),
         "{}",
-        "the workflow grants a permission to every job by default"
+        "{file} grants a permission to every job by default"
     );
 
-    let jobs = jobs();
+    let jobs = workflow.get("jobs").clone();
     for name in jobs.keys() {
         let job = jobs.get(name);
         let checks_out = job.find("steps").is_some_and(|steps| {

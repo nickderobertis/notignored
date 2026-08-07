@@ -26,14 +26,19 @@ name: Release
 #                     is switched off.
 #   * publish-pypi  — upload those wheels to notignored-cli with the PYPI_TOKEN
 #                     secret, gated on the PYPI_PUBLISH repo variable.
-#   * verify-pypi   — pip-install the exact version just published and run it.
+#   * verify-pypi   — on Linux, macOS, and Windows, pip-install the exact version
+#                     just published and run scripts/smoke-published.sh over it.
 #   * build-npm     — wrap the same prebuilt binary in per-platform npm packages
 #                     (notignored-cli-<platform>-<arch>) via scripts/npm-build.mjs.
 #                     Runs unconditionally, same rationale as the wheels.
 #   * publish-npm   — publish the platform packages, then the launcher that
 #                     depends on them, with the NPM_TOKEN secret, gated on the
 #                     NPM_PUBLISH repo variable.
-#   * verify-npm    — npm-install the exact version just published and run it.
+#   * verify-npm    — the same, on the same matrix, for `npm install -g`.
+#
+# Both verify jobs run the version at publish time only. `published-smoke.yml`
+# runs the identical script against whatever the registries serve as `latest`, on
+# a weekly schedule, so rot between releases surfaces without one.
 #
 # The version is never written here: every artifact takes it from Cargo.toml
 # (maturin via `dynamic = ["version"]`, npm via scripts/npm-build.mjs), so
@@ -280,16 +285,39 @@ jobs:
           # red-fail because these wheels are already on PyPI.
           skip-existing: true
 
-  # Post-publish gate: prove the just-published version is pip-installable. PyPI
-  # propagation is not instant, so poll the JSON API until the version is
-  # queryable, then install the real wheel and run the real binary. A failure
+  # Post-publish gate: prove the just-published version is pip-installable on
+  # every OS a user installs it on. PyPI propagation is not instant, so poll the
+  # JSON API until the version is queryable, then install the real wheel and hand
+  # the binary it put on PATH to scripts/smoke-published.sh — the same script,
+  # fixture tree, and golden report tests/e2e/smoke.rs runs against the build
+  # under test, so what a release asserts cannot drift from what ships. A failure
   # here means a broken release, not a blocked publish — the wheel is public
   # either way, so this is what turns "we uploaded something" into "it works".
+  #
+  # Three OS labels, not five targets: `pip install` resolves a *different wheel*
+  # per platform, and only a runner of that platform can prove the right one was
+  # picked. `aarch64-unknown-linux-gnu` and `x86_64-apple-darwin` have no leg
+  # here — the first because setup-python's arm64 Linux support is not something
+  # a release is the place to discover, the second because the hosted macOS
+  # image is arm64. Both are still built by the matrices above and installed for
+  # real by tests/e2e/packaging.rs on whichever host runs it.
   verify-pypi:
+    name: verify-pypi (${{ matrix.os }})
     needs: publish-pypi
     if: ${{ vars.PYPI_PUBLISH == 'true' }}
-    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
+      # The smoke assets, at the tag that was published.
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -320,21 +348,16 @@ jobs:
           done
           echo "::error::notignored-cli $ver did not appear on PyPI within ~5 minutes"
           exit 1
-      - name: Install from PyPI and smoke-test
+      - name: Install the published wheel
         run: |
           ver="${GITHUB_REF_NAME#v}"
           pip install "notignored-cli==${ver}"
-          installed="$(notignored --version)"
-          echo "installed: $installed"
-          case "$installed" in
-            *"$ver"*) ;;
-            *) echo "::error::installed version mismatch: '$installed' does not contain '$ver'"; exit 1 ;;
-          esac
-          notignored --help >/dev/null
-          tmp="$(mktemp -d)"
-          printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
-          notignored "$tmp" --format json | grep -q '"E501"'
-          echo "PyPI install + smoke test passed for notignored-cli $ver"
+      - name: Smoke-test what PyPI served
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          bash scripts/smoke-published.sh \
+            --expect-version "$ver" \
+            --label "PyPI notignored-cli $ver on $RUNNER_OS/$RUNNER_ARCH"
 
   # npm packages: scripts/npm-build.mjs wraps the prebuilt binary in a
   # per-platform package (notignored-cli-<platform>-<arch>), the direct analogue
@@ -452,15 +475,30 @@ jobs:
           launcher="$(node scripts/npm-build.mjs launcher --out npm/dist)"
           bash scripts/publish-npm.sh "$launcher"
 
-  # Post-publish gate: prove the just-published version is npm-installable, the
-  # same promise verify-pypi makes for the wheel. Registry propagation is not
-  # instant, so poll until the launcher resolves, then install it globally and
-  # run the real binary it pulled in through its optional dependency.
+  # Post-publish gate: prove the just-published version is npm-installable on
+  # every OS a user installs it on, the same promise verify-pypi makes for the
+  # wheel and on the same matrix, for the same reasons. Registry propagation is
+  # not instant, so poll until the launcher resolves, then install it globally
+  # and smoke-test the real binary its optional dependency pulled in — which is
+  # the resolution this job exists to prove, since npm picks a different platform
+  # package on each runner.
   verify-npm:
+    name: verify-npm (${{ matrix.os }})
     needs: publish-npm
     if: ${{ vars.NPM_PUBLISH == 'true' }}
-    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
+      # The smoke assets, at the tag that was published.
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -490,18 +528,13 @@ jobs:
           done
           echo "::error::notignored-cli@$ver did not appear on npm within ~5 minutes"
           exit 1
-      - name: Install from npm and smoke-test
+      - name: Install the published package
         run: |
           ver="${GITHUB_REF_NAME#v}"
           npm install -g "notignored-cli@${ver}"
-          installed="$(notignored --version)"
-          echo "installed: $installed"
-          case "$installed" in
-            *"$ver"*) ;;
-            *) echo "::error::installed version mismatch: '$installed' does not contain '$ver'"; exit 1 ;;
-          esac
-          notignored --help >/dev/null
-          tmp="$(mktemp -d)"
-          printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
-          notignored "$tmp" --format json | grep -q '"E501"'
-          echo "npm install + smoke test passed for notignored-cli $ver"
+      - name: Smoke-test what npm served
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          bash scripts/smoke-published.sh \
+            --expect-version "$ver" \
+            --label "npm notignored-cli $ver on $RUNNER_OS/$RUNNER_ARCH"
