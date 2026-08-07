@@ -13,8 +13,8 @@ from __future__ import annotations
 # the traceback is the only place the reader is looking.
 INSTALL_HINT = (
     "install it with `pip install notignored-sdk` (which depends on the "
-    "notignored-cli binary wheel) or `npm install -g notignored-cli`, or pass "
-    "`binary=` / set NOTIGNORED_BIN to point at one you already have"
+    "notignored-cli binary wheel) or `npm install -g notignored-cli`, or set "
+    "NOTIGNORED_BIN to point at one you already have"
 )
 
 
