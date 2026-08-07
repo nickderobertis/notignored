@@ -264,16 +264,14 @@ fn a_file_the_change_deleted_is_skipped_rather_than_reported_as_unreadable() {
 /// Git speaks paths as bytes and the report contract speaks `String`, so such a
 /// name has no faithful spelling in a report. Decoded lossily it names a file
 /// that does not exist: handed back to git as a pathspec it matches nothing, and
-/// a change carrying a fresh suppression reads as clean. Only Unix can hold such
-/// a name — Windows filenames are UTF-16 — so this drives real git there.
+/// a change carrying a fresh suppression reads as clean.
 ///
-/// Not every Unix, though: APFS and HFS+ validate that a filename is UTF-8 and
-/// reject one that is not with `EILSEQ`, so macOS cannot store the input this
-/// journey is about — `fs::write` fails with "Illegal byte sequence" before git
-/// is ever asked. The claim is proven on Linux, where the name is bytes like
-/// git's own. This exclusion is what the platform cannot express, not a slow or
-/// awkward test opted out of; nothing here is `#[ignore]`d.
-#[cfg(all(unix, not(target_os = "macos")))]
+/// Linux is where such a name can exist to drive real git with: Windows
+/// filenames are UTF-16, and macOS's APFS rejects a non-UTF-8 name at `write`
+/// with `EILSEQ`, so the scenario is unrepresentable there. The decoding this
+/// guards is platform-independent and covered on every target by
+/// `src/diff.rs::a_path_that_is_not_utf8_is_set_aside_rather_than_guessed_at`.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_changed_path_that_is_not_utf8_is_reported_rather_than_dropped() {
     use std::os::unix::ffi::OsStrExt;

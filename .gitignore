@@ -4,3 +4,5 @@
 # the create-repo skill): the one-time llmlint structural tier.
 llmlint.buildout.yml
 REPO_PLAN.md
+# Local sync bookkeeping for gh-secrets (per-machine; the manifest itself is tracked)
+.gh-secrets-state.json
