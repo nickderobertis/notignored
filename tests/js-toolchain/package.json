@@ -2,10 +2,11 @@
   "name": "notignored-js-toolchain",
   "version": "0.0.0",
   "private": true,
-  "description": "The pinned eslint/biome/tsc the e2e parity suite drives. Not a dependency of the crate; never published.",
+  "description": "The pinned eslint/biome/tsc the e2e parity suite drives, plus the Node type definitions the TypeScript SDK compiles against. Not a dependency of the crate; never published.",
   "license": "MIT",
   "dependencies": {
     "@biomejs/biome": "2.5.7",
+    "@types/node": "24.13.3",
     "eslint": "10.8.0",
     "typescript": "7.0.2"
   }

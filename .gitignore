@@ -20,6 +20,9 @@ __pycache__/
 /npm/dist
 /python/dist
 /dist
+# The TypeScript SDK's compiled output, re-created by that project's `build`
+# target. What publishes is the version-stamped copy under /npm/dist.
+/npm/notignored-sdk/dist
 # Coverage instrumentation writes these wherever an instrumented binary happens
 # to run, which for the e2e journeys is a fixture directory. They are raw counter
 # dumps, never sources.

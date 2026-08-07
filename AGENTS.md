@@ -64,10 +64,10 @@ follow-ups.
 ## The project graph
 
 Three projects, one graph: `notignored` (the crate, rooted at the repo root),
-`notignored-sdk-python` (shipped — see "The registry packages"),
-`notignored-sdk-npm` (still a wired-but-empty scaffold whose placeholder suite
-proves the graph and CI). Each SDK carries its own nested `AGENTS.md` and a
-`.github/CODEOWNERS` line routing its reviews.
+`notignored-sdk-python` and `notignored-sdk-npm` — each shipped, and each with
+its own nested `AGENTS.md` and a `.github/CODEOWNERS` line routing its reviews.
+They publish `notignored-sdk` to PyPI and to npm respectively; see "The registry
+packages".
 
 Nx **runs** targets; it never decides what one does. A target names its project's
 own language-native tool (`_crate-*` recipes for cargo, ruff/mypy for the Python
@@ -88,7 +88,7 @@ crate's root *is* the repo root, so a `{workspaceRoot}/**/*` input would make it
 affected by every SDK-only change; `nx.json` therefore keeps `default` for it and
 names shared pins per project (`pythonToolchain`, `jsToolchain`). The one
 deliberate cross-project input is `crateSource` — `src/`, `Cargo.toml`,
-`Cargo.lock` — which the Python SDK's `test` target names because its suite
+`Cargo.lock` — which **both** SDKs' `test` targets name, because each suite
 compiles and drives that binary, and a cached green from before a contract moved
 would prove nothing. It names the crate's *sources* rather than depending on the
 crate *project*, which would drag in the whole repo root.
@@ -127,6 +127,12 @@ consumed by downstream tooling. Do not change field names, the `scope` variants,
 or the envelope shape unilaterally: bump `REPORT_VERSION` and update
 `tests/golden/` in the same change. `tests/schema.rs` locks the serialized shape.
 New fields must be optional, round-trip, and be omitted when empty.
+
+A **third** place moves with them: `npm/notignored-sdk/src/contract.ts` refuses
+a field it does not know, at every object in the envelope, rather than drop one
+whose presence changes what a record means. That is the SDK's decision and its
+`AGENTS.md` records the trade — but it means a field added here and not there
+makes the TypeScript SDK reject this build's reports.
 
 The 1-based coordinates stay plain `u32` with public fields rather than newtypes:
 the record is what every parser dispatch builds against, and the extractor's
@@ -200,21 +206,27 @@ is the committed launcher and `scripts/npm-build.mjs` generates the five
 Those platform names stay **unscoped**: a `@scope/` name needs an npm org, which a
 publish token cannot create.
 
-`pip install notignored-sdk` is the fourth package and the only one that is not
-the binary: `python/notignored-sdk/` is a pure-Python client that *drives* it, so
-it depends on `notignored-cli==<the same version>` and one `py3-none-any` wheel
-serves every platform. Its own gate is the proof — `tests/test_packaging.py`
-runs `scripts/python-sdk-build.mjs` and `uv build` on every gate run and reads the
-version and the pin back out of the wheel's metadata, so the release job only has
-to run the same two commands. Keep the SDK's public surface, its strict parsing,
-and its two forms as its nested `AGENTS.md` describes them.
+The two SDKs are the fourth and fifth packages, and the only ones that are not
+the binary. `pip install notignored-sdk` is a pure-Python client that *drives*
+it, so it depends on `notignored-cli==<the same version>` and one `py3-none-any`
+wheel serves every platform; its gate is the proof — `tests/test_packaging.py`
+runs `scripts/python-sdk-build.mjs` and `uv build` on every gate run and reads
+the version and the pin back out of the wheel's metadata, so the release job only
+has to run the same two commands. `npm install notignored-sdk` compiles to
+JavaScript and *resolves* whichever `notignored` its consumer installed, so
+`notignored-cli` is deliberately not a dependency of it; it rides the
+`NPM_PUBLISH` / `NPM_TOKEN` gating through `release.yml`'s `build-sdk-npm` job
+and the existing `publish-npm` / `verify-npm` pair. Keep each SDK's public
+surface, its strict parsing, and its forms as its nested `AGENTS.md` describes
+them.
 
 **Cargo.toml is the only version source.** The wheel takes it via `dynamic =
-["version"]`, the npm packages via `npm-build.mjs`, the SDK via
-`python-sdk-build.mjs`; the committed npm manifest carries `0.0.0-managed` and the
-committed SDK manifest `0.0.0.dev0` with an *unpinned* `notignored-cli`, so
-neither can become a second one — release-plz bumps `Cargo.toml` alone. Adding a
-target means the release matrices, `npm-build.mjs`,
+["version"]`, the npm packages via `npm-build.mjs`, the Python SDK via
+`python-sdk-build.mjs`, the TypeScript SDK via
+`npm/notignored-sdk/scripts/pack.mjs`; the committed npm manifests carry
+`0.0.0-managed` and the committed Python SDK manifest `0.0.0.dev0` with an
+*unpinned* `notignored-cli`, so none can become a second one — release-plz bumps
+`Cargo.toml` alone. Adding a target means the release matrices, `npm-build.mjs`,
 and the launcher's `PACKAGES` map together; `tests/packaging_contract.rs` fails
 the build when they disagree, and `tests/e2e/packaging.rs` builds and installs
 both packages from the real binary on every gate run. A test never spells a

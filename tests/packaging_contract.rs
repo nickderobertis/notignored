@@ -195,6 +195,7 @@ fn nothing_publishes_without_the_gate() {
         "upload",
         "build-wheels",
         "build-npm",
+        "build-sdk-npm",
         "build-python-sdk",
         "publish-crate",
     ] {
@@ -211,6 +212,7 @@ fn nothing_publishes_without_the_gate() {
         ("publish-pypi", "build-wheels"),
         ("verify-pypi", "publish-pypi"),
         ("publish-npm", "build-npm"),
+        ("publish-npm", "build-sdk-npm"),
         ("verify-npm", "publish-npm"),
         ("publish-python-sdk", "build-python-sdk"),
         ("publish-python-sdk", "publish-pypi"),
@@ -246,7 +248,12 @@ fn publishing_is_gated_on_a_repository_variable_but_building_is_not() {
             "`{name}` is no longer gated on the {variable} repository variable"
         );
     }
-    for name in ["build-wheels", "build-npm", "build-python-sdk"] {
+    for name in [
+        "build-wheels",
+        "build-npm",
+        "build-sdk-npm",
+        "build-python-sdk",
+    ] {
         assert!(
             jobs.get(name).find("if").is_none(),
             "`{name}` became conditional; a packaging break would then stay \
@@ -708,6 +715,39 @@ fn the_committed_launcher_manifest_holds_a_placeholder_version() {
         cargo_version(),
         placeholder,
         "Cargo.toml would have to hold the placeholder for this test to prove nothing"
+    );
+}
+
+/// The TypeScript SDK publishes what it compiles, at Cargo.toml's version.
+///
+/// Its committed manifest is the third one that must never carry a real number
+/// — `npm/notignored-sdk/scripts/pack.mjs` stamps it, the same way
+/// `scripts/npm-build.mjs` stamps the launcher's — and `files`/`exports` are
+/// what decide whether the tarball a consumer installs contains the entry point
+/// its manifest points at. That install is driven for real by the SDK project's
+/// own suite; this is the wiring around it.
+#[test]
+fn the_committed_sdk_manifest_publishes_dist_at_a_placeholder_version() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(&read("npm/notignored-sdk/package.json"))
+            .expect("the SDK package.json is valid JSON");
+    assert_eq!(manifest["name"], "notignored-sdk");
+    assert_eq!(
+        manifest["version"], "0.0.0-managed",
+        "the committed SDK manifest holds a real version; Cargo.toml is the only source"
+    );
+    assert_eq!(
+        manifest["files"],
+        serde_json::json!(["dist", "README.md"]),
+        "the SDK tarball must carry its compiled output and nothing else"
+    );
+    assert_eq!(
+        manifest["exports"]["."]["import"], "./dist/index.js",
+        "the SDK's entry point must resolve inside what `files` ships"
+    );
+    assert!(
+        manifest["private"].is_null(),
+        "a private manifest cannot be published"
     );
 }
 

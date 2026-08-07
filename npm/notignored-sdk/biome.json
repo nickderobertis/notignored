@@ -1,11 +1,12 @@
 {
   "files": {
-    "includes": ["src/**", "test/**"]
+    "includes": ["src/**", "test/**", "scripts/**", "!dist"]
   },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
-    "indentWidth": 2
+    "indentWidth": 2,
+    "lineWidth": 96
   },
   "linter": {
     "enabled": true,

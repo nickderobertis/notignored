@@ -151,7 +151,10 @@ fn the_crates_check_aggregates_its_docs_tier() {
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
     let cases: [(&str, &[&str]); 5] = [
-        ("src/lib.rs", &["notignored", "notignored-sdk-python"]),
+        (
+            "src/lib.rs",
+            &["notignored", "notignored-sdk-npm", "notignored-sdk-python"],
+        ),
         ("npm/notignored/package.json", &["notignored"]),
         (
             "python/notignored-sdk/README.md",
