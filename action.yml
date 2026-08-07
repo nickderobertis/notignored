@@ -106,11 +106,17 @@ runs:
 
         report="$RUNNER_TEMP/notignored-report.json"
         body="$RUNNER_TEMP/notignored-comment.md"
+        # `paths` is optional — empty means "the whole repository" — so this array
+        # is usually empty, and under `set -u` bash before 4.4 reads a bare
+        # `"${scan_paths[@]}"` as an unbound variable and aborts. macOS runners
+        # still ship bash 3.2 as /bin/bash, so the `${a[@]+"${a[@]}"}` guard is
+        # what keeps the default configuration working there.
         read -r -a scan_paths <<< "$SCAN_PATHS"
-        "$NOTIGNORED" --diff --diff-base "$base" --format json "${scan_paths[@]}" > "$report"
+        "$NOTIGNORED" --diff --diff-base "$base" --format json \
+          "${scan_paths[@]+"${scan_paths[@]}"}" > "$report"
         "$NOTIGNORED" --diff --diff-base "$base" --format markdown \
           --github-repo "$GITHUB_REPOSITORY" --github-sha "$sha" \
-          "${scan_paths[@]}" > "$body"
+          "${scan_paths[@]+"${scan_paths[@]}"}" > "$body"
 
         count="$(jq '.ignores | length' "$report")"
         {

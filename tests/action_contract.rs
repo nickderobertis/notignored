@@ -136,6 +136,67 @@ fn no_untrusted_event_value_is_interpolated_into_a_script() {
     }
 }
 
+/// Every array a script expands is expanded unset-safe.
+///
+/// The action's steps run under `set -u`, and bash before 4.4 — which is what
+/// macOS runners still ship as `/bin/bash` — treats `"${a[@]}"` on an empty array
+/// as an unbound variable and aborts the step. Every optional input arrives as an
+/// array that is empty by default, so the bug fires on the *default*
+/// configuration and only on one runner OS: exactly the shape that reaches users
+/// before it reaches a Linux gate. `${a[@]+"${a[@]}"}` is the portable form, and
+/// this is what keeps a future script from reintroducing the bare one.
+#[test]
+fn no_run_script_expands_an_array_that_may_be_empty() {
+    for file in ["action.yml", ".github/workflows/notignored.yml"] {
+        let parsed = parse(&read(file));
+        let steps: Vec<Node> = match file {
+            "action.yml" => parsed.get("runs").get("steps").list().to_vec(),
+            _ => parsed
+                .get("jobs")
+                .get("suppressions")
+                .get("steps")
+                .list()
+                .to_vec(),
+        };
+        for step in run_steps(&steps) {
+            let script = step.get("run").scalar();
+            let unguarded = unguarded_array_expansions(script);
+            assert!(
+                unguarded.is_empty(),
+                "{file} expands {unguarded:?} as a bare `${{name[@]}}`; write \
+                 `${{name[@]+\"${{name[@]}}\"}}` so an empty array does not abort \
+                 the step under bash 3.2"
+            );
+        }
+    }
+}
+
+/// The names of every `${name[@]}` in `script` that is not wrapped in the
+/// unset-safe `${name[@]+…}` guard.
+///
+/// Checked per occurrence rather than per name: one guarded expansion elsewhere
+/// in the script says nothing about this one, and the two calls in `action.yml`
+/// are exactly the case where a fix could land on only one of them.
+fn unguarded_array_expansions(script: &str) -> Vec<String> {
+    script
+        .match_indices("[@]}")
+        .filter_map(|(at, _)| {
+            let head = &script[..at];
+            let open = head.rfind("${")?;
+            let name = &head[open + 2..];
+            // Only a plain identifier is an array expansion; anything else is
+            // some other use of `[@]`.
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return None;
+            }
+            // The guard opens immediately before this expansion, separated at
+            // most by the quote that protects the expanded words.
+            let guard = format!("${{{name}[@]+");
+            (!head[..open].trim_end_matches('"').ends_with(&guard)).then(|| name.to_string())
+        })
+        .collect()
+}
+
 /// The action finds its own comment by the marker the renderer writes; drift
 /// between the two turns every run into a fresh comment.
 #[test]
