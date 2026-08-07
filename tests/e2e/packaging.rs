@@ -89,6 +89,21 @@ fn run(what: &str, command: &mut Command) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// How `program` is spelled on this platform's PATH.
+///
+/// npm ships as a *batch file* on Windows (`npm.cmd`), and Windows only appends
+/// `.exe` when it resolves a bare program name — so `Command::new("npm")` never
+/// spawns there, however npm was installed. Naming the `.cmd` is what a shell
+/// does for the user, and Rust escapes a batch file's arguments for `cmd.exe`
+/// when the program is spelled that way. `node`, `uv`, and maturin are real
+/// executables and need no such spelling.
+fn program_name(program: &str) -> &str {
+    match program {
+        "npm" if cfg!(windows) => "npm.cmd",
+        other => other,
+    }
+}
+
 /// The `node` / `npm` / `uv` the journeys drive.
 ///
 /// All three are `just bootstrap` prerequisites (`scripts/setup-js.sh` needs
@@ -96,12 +111,13 @@ fn run(what: &str, command: &mut Command) -> String {
 /// problem with a fix, not a reason to skip: a packaging journey that silently
 /// stopped running would report an unproven install path as proven.
 fn required(program: &str) -> Command {
-    let found = Command::new(program).arg("--version").output().is_ok();
+    let name = program_name(program);
+    let found = Command::new(name).arg("--version").output().is_ok();
     assert!(
         found,
-        "{program} not found on PATH\nACTION: run `just bootstrap`"
+        "{name} not found on PATH\nACTION: run `just bootstrap`"
     );
-    Command::new(program)
+    Command::new(name)
 }
 
 /// A file with one suppression in it, for smoke-testing an installed binary.
@@ -213,18 +229,34 @@ fn npm_install(prefix: &Path, tarballs: &[&Path], extra: &[&str]) -> std::proces
 
 /// The `notignored` command an `npm install --global --prefix` produced.
 ///
-/// npm writes a launcher shim beside the prefix: a symlink under `bin/` on Unix,
-/// a `.cmd` batch file at the prefix root on Windows. Rust cannot execute a batch
-/// file directly, so the Windows spelling goes through `cmd /C` — which is what
-/// the shell does for the user too.
+/// npm links the launcher into the prefix itself: a symlink under `bin/` on
+/// Unix, a `.cmd` batch file at the prefix root on Windows. Running that link —
+/// rather than the shim's `.js` through node — is what makes this the journey a
+/// user takes. A missing link reports what npm *did* write, so a future layout
+/// change reads as a layout change rather than a spawn error.
 fn installed_npm_command(prefix: &Path) -> Command {
-    if cfg!(windows) {
-        let mut command = Command::new("cmd");
-        command.arg("/C").arg(prefix.join("notignored.cmd"));
-        command
+    let path = if cfg!(windows) {
+        prefix.join("notignored.cmd")
     } else {
-        Command::new(prefix.join("bin").join("notignored"))
-    }
+        prefix.join("bin").join("notignored")
+    };
+    assert!(
+        path.exists(),
+        "npm linked no command at {}; the prefix holds {:?}",
+        path.display(),
+        entries(prefix)
+    );
+    Command::new(path)
+}
+
+/// Every path under `dir`, one level deep — a diagnostic, not a fixture.
+fn entries(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect()
 }
 
 /// The whole npm install path: build both packages from the compiled binary,
