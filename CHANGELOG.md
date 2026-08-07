@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.7](https://github.com/nickderobertis/notignored/compare/v0.1.6...v0.1.7) - 2026-08-07
+
+### Added
+
+- *(markdown)* cap the comment's entries and show what each one suppresses ([#26](https://github.com/nickderobertis/notignored/pull/26))
+
 ## [0.1.6](https://github.com/nickderobertis/notignored/compare/v0.1.5...v0.1.6) - 2026-08-07
 
 ### Added
