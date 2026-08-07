@@ -8,7 +8,7 @@
 use std::fs;
 
 use crate::support::{
-    commit, git, git_os, git_repo, git_stdout, notignored, parse_report, repo_root, write,
+    commit, git, git_repo, git_stdout, notignored, parse_report, repo_root, write,
 };
 
 /// Every suppression a JSON run reported, as `path:line rules`.
@@ -398,6 +398,8 @@ fn a_changed_path_that_is_not_utf8_is_reported_rather_than_dropped() {
 fn an_undecodable_path_staged_in_the_index_is_reported_rather_than_dropped() {
     use std::ffi::{OsStr, OsString};
     use std::os::unix::ffi::OsStringExt;
+
+    use crate::support::git_os;
 
     let repo = git_repo();
     let root = repo.path();

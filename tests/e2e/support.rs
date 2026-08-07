@@ -754,6 +754,10 @@ pub fn git(dir: &Path, args: &[&str]) {
 /// A path *is* bytes, and the journeys that prove what `--diff` does with a path
 /// this repo's report contract cannot spell have to hand git those bytes. `&str`
 /// cannot carry them, so those calls come through here instead of [`git`].
+///
+/// Unix only, like its one caller: a Windows filename is UTF-16 and has no
+/// undecodable spelling to hand git in the first place.
+#[cfg(unix)]
 pub fn git_os(dir: &Path, args: &[&std::ffi::OsStr]) {
     let output = git_command(dir)
         .args(args)

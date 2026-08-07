@@ -371,34 +371,106 @@ fn the_npm_launcher_explains_a_missing_platform_package() {
     );
 }
 
-/// The whole PyPI install path: build the wheel with the pinned maturin from this
-/// repo's `pyproject.toml`, install it into a scratch venv, and run the console
-/// command it put on that venv's PATH.
+/// The target directory the wheel build gets to itself.
 ///
-/// The wheel is built from whatever the suite already compiled rather than
-/// `--release`: what is under test is the packaging — the `bin` bindings, the
-/// dynamic version, the console command's name — not the optimizer.
+/// **Not** the suite's own. `maturin build` runs cargo, and `[tool.maturin]`
+/// sets `strip = true`, so a build in the default directory *replaces*
+/// `target/debug/notignored` with a stripped one — mid-run, while nextest is
+/// still starting tests that resolve exactly that path. Every sibling journey
+/// then either fails to spawn it (the file is briefly gone) or silently runs a
+/// different binary than the one the suite compiled. Under `target/` so it is
+/// already ignored and stays warm between runs.
+fn wheel_target_dir() -> PathBuf {
+    repo_root().join("target").join("packaging-e2e")
+}
+
+/// The binary the wheel build compiles, inside its own target directory.
+fn wheel_built_binary() -> PathBuf {
+    let name = if cfg!(windows) {
+        "notignored.exe"
+    } else {
+        "notignored"
+    };
+    wheel_target_dir().join("debug").join(name)
+}
+
+/// Build the wheel from this repo's `pyproject.toml` with the pinned maturin,
+/// into `dist`, and return the wheel it wrote.
+///
+/// Debug rather than `--release`: what is under test is the packaging — the
+/// `bin` bindings, the dynamic version, the console command's name — not the
+/// optimizer.
+fn build_wheel(dist: &Path) -> PathBuf {
+    run(
+        "maturin build",
+        Command::new(tool_binary("maturin"))
+            .current_dir(repo_root())
+            .env("CARGO_TARGET_DIR", wheel_target_dir())
+            .arg("build")
+            .arg("--locked")
+            .arg("--out")
+            .arg(dist),
+    );
+    std::fs::read_dir(dist)
+        .expect("read the wheel output directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "whl"))
+        .expect("maturin built a wheel")
+}
+
+/// What a file is, for deciding whether something replaced it.
+fn fingerprint(path: &Path) -> (u64, std::time::SystemTime) {
+    let meta =
+        std::fs::metadata(path).unwrap_or_else(|error| panic!("stat {}: {error}", path.display()));
+    (meta.len(), meta.modified().expect("a modification time"))
+}
+
+/// The whole PyPI install path: build the wheel from this repo's
+/// `pyproject.toml`, install it into a scratch venv, and run the console command
+/// it put on that venv's PATH — and prove the build did not disturb the binary
+/// the rest of this suite is running.
+///
+/// That last part is a regression, not a nicety. To stage the binary into the
+/// wheel, maturin **renames it out** of `<target>/debug/` and puts it back when
+/// it is done. Pointed at the suite's own target directory, that takes
+/// `target/debug/notignored` away mid-run: sibling journeys resolve exactly that
+/// path as they start, so the ones that start inside the window die with
+/// `NotFoundError { path: ".../target/debug/notignored" }` — from tests that
+/// have nothing to do with packaging. It surfaced as a macOS-only failure in the
+/// ShellCheck parity journeys and reproduces on Linux about two runs in three.
+///
+/// Both halves are asserted because either alone could pass for the wrong
+/// reason: the build landing in its own directory is what fails everywhere if
+/// [`wheel_target_dir`] is ever dropped, and the suite's own binary being
+/// untouched is what catches the theft actually happening. They live inside this
+/// journey rather than in a test of their own because two maturin builds sharing
+/// one target directory race on that same rename — the isolation has to be one
+/// build, not one per assertion.
 #[test]
 fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
     let scratch = tempfile::tempdir().expect("a scratch directory");
     let dist = scratch.path().join("dist");
 
-    run(
-        "maturin build",
-        Command::new(tool_binary("maturin"))
-            .current_dir(repo_root())
-            .arg("build")
-            .arg("--locked")
-            .arg("--out")
-            .arg(&dist),
+    let shared = assert_cmd::cargo::cargo_bin("notignored");
+    let before = fingerprint(&shared);
+
+    let wheel = build_wheel(&dist);
+
+    assert!(
+        wheel_built_binary().exists(),
+        "the wheel build did not compile into {}; it used the suite's own target \
+         directory instead",
+        wheel_built_binary().display()
+    );
+    assert_eq!(
+        fingerprint(&shared),
+        before,
+        "the wheel build disturbed {}, which every other journey in this suite \
+         spawns while it runs",
+        shared.display()
     );
 
-    let wheel = std::fs::read_dir(&dist)
-        .expect("read the wheel output directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| path.extension().is_some_and(|ext| ext == "whl"))
-        .expect("maturin built a wheel");
     let name = wheel
         .file_name()
         .expect("the wheel has a name")
