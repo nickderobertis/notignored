@@ -38,6 +38,17 @@ name: Release
 # The version is never written here: every artifact takes it from Cargo.toml
 # (maturin via `dynamic = ["version"]`, npm via scripts/npm-build.mjs), so
 # release-plz stays the single version driver.
+#
+# llmlint: ignore-file[live_tier_compiles_and_requires_credential] the publish and
+# verify jobs are deliberately switched by the PYPI_PUBLISH / NPM_PUBLISH repository
+# variables, which is the operator's control over whether a Release reaches a public
+# registry at all — a fork, or a repo whose tokens are not provisioned, must not
+# publish. The two properties the rule protects are still held: the tier *compiles*
+# on every release, because build-wheels and build-npm are ungated on purpose, so a
+# packaging break reddens a release even while publishing is off; and it *requires*
+# its credential, because each publish job fails fast with the secret to set when its
+# variable is on and the token is empty. What cannot be had is a live publish that
+# runs unconditionally — that is a product decision, not a missing check.
 
 on:
   release:

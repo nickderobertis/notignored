@@ -17,6 +17,7 @@ mod installer;
 mod js_tools_setup;
 mod llmlint_parity;
 mod markdown;
+mod misc_tools_setup;
 mod packaging;
 mod polyglot;
 mod publish_npm;
