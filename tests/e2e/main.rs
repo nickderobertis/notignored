@@ -20,6 +20,7 @@ mod llmlint_parity;
 mod markdown;
 mod misc_tools_setup;
 mod nx_workspace;
+mod nx_wrapper;
 mod packaging;
 mod polyglot;
 mod publish_npm;

@@ -7,6 +7,14 @@
 # what keeps one recipe from failing with `nx: command not found` while another
 # quietly repaired it.
 #
+# Quiet on success, specific on failure. Every gate recipe runs through here, so
+# this wrapper's output *is* `just check`'s output, and a green run owes a line
+# rather than Nx's whole task log. The log is preserved rather than discarded:
+# `scripts/preserved-log.sh` puts it at a path both messages name, which a reader
+# can `tail -f` while the run is still going and still read after it exits.
+# `NOTIGNORED_NX_SHOW_OUTPUT=1` streams instead, for the callers that read Nx's
+# stdout (`nx show projects --json`).
+#
 # Nx orchestrates targets; it is never a runtime dependency of the scripts it
 # runs. Each target shells out to the project's own language-native tool.
 set -euo pipefail
@@ -17,6 +25,8 @@ cd "$ROOT" || {
   echo "ACTION: run this from a checkout whose directories are readable" >&2
   exit 1
 }
+# shellcheck source=scripts/preserved-log.sh
+. "$ROOT/scripts/preserved-log.sh"
 
 # The daemon is a long-lived background process per workspace root that buys
 # about a tenth of a second here; it is not worth a resident process the gate
@@ -32,9 +42,8 @@ if [ ! -e node_modules/.bin/nx ] && [ ! -e node_modules/.bin/nx.cmd ]; then
     echo "ACTION: install Node.js 20+ (https://nodejs.org/) and re-run 'just bootstrap'" >&2
     exit 1
   fi
-  # Installer chatter is not this command's output: `nx show projects` and
-  # friends are read for their stdout, so anything that is not Nx's answer goes
-  # to stderr.
+  # Installer chatter is not this command's output: in show-output mode stdout is
+  # read for Nx's answer, so anything that is not that answer goes to stderr.
   if ! npm ci --silent --no-audit --no-fund >&2; then
     echo "nx: 'npm ci' failed in $ROOT" >&2
     echo "ACTION: check network access to the npm registry, then re-run 'just bootstrap'" >&2
@@ -44,7 +53,26 @@ fi
 
 # The npm-written shim rather than a path inside the package: Nx has moved its
 # bin entry between releases, and the shim is the one name that cannot.
-if [ -e node_modules/.bin/nx ]; then
-  exec node_modules/.bin/nx "$@"
+NX_BIN="node_modules/.bin/nx"
+[ -e "$NX_BIN" ] || NX_BIN="node_modules/.bin/nx.cmd"
+
+# Streaming mode: hand Nx's own streams straight through, untouched. The callers
+# that ask for this parse stdout, so nothing may be added to it — not even a
+# summary line.
+if [ "${NOTIGNORED_NX_SHOW_OUTPUT:-}" = "1" ]; then
+  exec "$NX_BIN" "$@"
 fi
-exec node_modules/.bin/nx.cmd "$@"
+
+preserved_log_open "$ROOT" nx || exit 1
+log=$PRESERVED_LOG
+
+# Redacted on the way in rather than afterwards: a log rewritten a moment later
+# still had the credential on disk in between, and `pipefail` is what carries
+# Nx's exit status out of the pipeline.
+if "$NX_BIN" "$@" 2>&1 | redact_secrets >"$log"; then
+  echo "nx: requested targets succeeded (full output: $log)"
+  exit 0
+fi
+cat "$log" >&2
+echo "nx: targets failed; fix the reported findings above and rerun the same 'just' recipe (full output: $log)" >&2
+exit 1
