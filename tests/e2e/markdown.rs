@@ -130,6 +130,48 @@ fn a_collapsed_snippet_accompanies_every_entry() {
     }
 }
 
+/// The snippet is there so a reviewer reads the code a directive silences.
+///
+/// A directive that has its line to itself silences the line **below** it, and
+/// this is the journey where that has to be true: the dogfood comment on this
+/// repo's own PR #26 quoted the directive back instead, which tells a reviewer
+/// nothing they could judge. Scoped to llmlint, whose `ignore` is the form that
+/// was wrong; the fixture is a Rust file, because the directive is hosted in
+/// whatever comment syntax it lands in.
+#[test]
+fn a_directive_alone_on_its_line_shows_the_code_below_it_not_itself() {
+    let output = notignored(&repo_root())
+        .args(["--tool", "llmlint"])
+        .arg("tests/fixtures/markdown/coordinates.rs")
+        .args(["--format", "markdown"])
+        .args(["--github-repo", REPO, "--github-sha", SHA])
+        .output()
+        .expect("run notignored");
+    assert!(
+        output.status.success(),
+        "exit: {:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = String::from_utf8(output.stdout).expect("a UTF-8 comment body");
+
+    assert!(body.contains("### notignored: 1 suppression\n"), "{body}");
+    let snippet = body
+        .split_once("```rust\n")
+        .and_then(|(_, rest)| rest.split_once("\n  ```"))
+        .map(|(snippet, _)| snippet)
+        .unwrap_or_else(|| panic!("no fenced snippet in the comment body:\n{body}"));
+    assert_eq!(
+        snippet, "  2 | #[derive(Debug, Clone, PartialEq, Eq)]",
+        "the snippet does not show the line the directive silences:\n{body}"
+    );
+    // The keyword is never written out here; see `src/tools/llmlint.rs`.
+    assert!(
+        !snippet.contains(notignored::tools::llmlint::KEYWORD),
+        "the snippet quoted the directive back at the reviewer:\n{body}"
+    );
+}
+
 #[test]
 fn every_entry_links_to_its_line_in_the_named_commit() {
     let body = body_for(5);

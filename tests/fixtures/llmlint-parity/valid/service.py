@@ -10,3 +10,8 @@ print("connected")
 def fetch(url):
     sys.stderr.write(url)  # llmlint: ignore[no_todo_comments] the marker below is data, not a TODO
     return "# TODO: not a comment"
+
+
+def trace(url):
+    # llmlint: ignore[no_debug_prints] the trace below is this helper's whole job
+    print(url)
