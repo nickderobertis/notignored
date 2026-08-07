@@ -60,13 +60,14 @@ $ notignored examples/
 examples/api_client.py:3:20 mypy import-untyped (line) -- the vendored SDK ships no type stubs
 examples/api_client.py:4:28 ruff F401 (line) -- re-exported so callers can configure retries
 examples/deploy.sh:8:1 shellcheck SC2086 (next-line) -- the flags file is ours, and has to split into separate arguments
+examples/deploy.sh:13:3 llmlint tool_output_is_signal (file) -- example input the README quickstart scans, not a script this project runs
 examples/retry.rs:6:1 rust dead_code (next-line) -- the scheduler starts calling this once backoff lands
 examples/widget.ts:6:3 eslint no-console (next-line) -- the mount path is traced in production
 examples/widget.ts:9:3 typescript * (next-line) -- the vendored analytics global is declared without its options bag
-notignored: 6 ignores in 4 files
+notignored: 7 ignores in 4 files
 ```
 
-Six suppressions, six tools, one pass over four files — no linter was run. Each
+Seven suppressions, seven tools, one pass over four files — no linter was run. Each
 line is `path:line:column tool rules (scope) -- reason`; `--format json` gives
 the same records as the envelope [below](#output), and `--format markdown` gives
 the comment the action posts. That block is checked against the real binary by
