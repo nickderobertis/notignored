@@ -4,6 +4,9 @@
 # re-creates node_modules from the committed lockfile whenever it is missing.
 /node_modules
 /.nx
+# Preserved command output (scripts/preserved-log.sh). Owner-only, truncated per
+# run, and never a source: it is the evidence a captured run leaves behind.
+/.logs
 # Each project's own provisioned environment; every one is re-created from a
 # committed lockfile by its `bootstrap` target.
 .venv/

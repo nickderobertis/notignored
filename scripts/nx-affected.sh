@@ -71,7 +71,8 @@ case "${1:-}" in
     printf 'true\n'
     exit 0
   fi
-  if ! projects="$(bash scripts/nx.sh show projects --affected --base="$base" --head=HEAD --json)"; then
+  # Read for Nx's answer, so the wrapper must not fold it into a summary line.
+  if ! projects="$(NOTIGNORED_NX_SHOW_OUTPUT=1 bash scripts/nx.sh show projects --affected --base="$base" --head=HEAD --json)"; then
     echo "nx-affected: Nx could not list the affected projects — treating '$project' as affected" >&2
     printf 'true\n'
     exit 0
