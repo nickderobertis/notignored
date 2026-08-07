@@ -98,19 +98,35 @@ test("the options type is not exported", () => {
 });
 
 /**
- * Which binary runs is decided by the environment, never by a call site. A
- * `bin` option would be a second mechanism to document, to validate, and to
- * keep in step — and it is not in the approved signature.
+ * The approved signature, spelled out — not merely the set of names in it.
+ *
+ * A type can drift wider without any name changing. `readonly string[]` accepts
+ * everything `string[]` does and more, and `tools?: Tool[] | undefined` accepts
+ * an explicit `undefined` the contract never promised; both would pass a check
+ * that only counted fields. Widening a published surface is as much a change to
+ * it as narrowing one, so this asserts the text a consumer's editor shows.
+ *
+ * Which binary runs is not among these options and must not become one: a `bin`
+ * argument would be a second mechanism to document, to validate, and to keep in
+ * step with `NOTIGNORED_BIN`.
  */
-test("scan takes only paths and the four approved options", () => {
+test("scan declares exactly the approved signature", () => {
   const text = declarations();
 
   const signature = text.match(/^export declare function scan\((.*)\): Promise<Report>;$/m);
   assert.ok(signature, "the entry point still declares scan");
-  assert.equal(signature[1], "paths?: readonly string[], options?: ScanOptions");
+  assert.equal(signature[1], "paths?: string[], options?: ScanOptions");
 
   const options = text.match(/^interface ScanOptions \{([\s\S]*?)^\}/m);
   assert.ok(options, "the options type is still declared");
-  const fields = [...options[1].matchAll(/^\s{4}(\w+)\?:/gm)].map((match) => match[1]);
-  assert.deepEqual(fields.sort(), ["cwd", "diff", "diffBase", "tools"]);
+  const fields = [...options[1].matchAll(/^ {4}(\w+)(\??): (.+);$/gm)].map((match) => [
+    `${match[1]}${match[2]}`,
+    match[3],
+  ]);
+  assert.deepEqual(fields.sort(), [
+    ["cwd?", "string"],
+    ["diff?", "boolean"],
+    ["diffBase?", "string"],
+    ["tools?", "Tool[]"],
+  ]);
 });

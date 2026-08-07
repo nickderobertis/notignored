@@ -45,22 +45,28 @@ export {
  * Deliberately **not exported**: the public surface is `scan`, the record
  * types, and the error classes. Which binary runs is not among these options
  * either — that is `NOTIGNORED_BIN`'s job (see `src/binary.ts`).
+ *
+ * The types here are the contract's own, spelled exactly: `Tool[]`, not
+ * `readonly Tool[] | undefined`. A `readonly` parameter accepts strictly more
+ * than the signature promises, and widening a published surface is as much a
+ * change to it as narrowing one. `test/surface.test.mjs` holds the emitted
+ * declaration to the literal text.
  */
 interface ScanOptions {
   /**
    * Report only the suppressions this change added, the way `--diff` does:
    * git names the changed files, and only directives on added lines survive.
    */
-  diff?: boolean | undefined;
+  diff?: boolean;
   /**
    * The git revision or range `diff` is taken from. Requires `diff`, exactly as
    * the CLI's `--diff-base` requires `--diff`.
    */
-  diffBase?: string | undefined;
+  diffBase?: string;
   /** Report only these tools' directives; omit for all of them. */
-  tools?: readonly Tool[] | undefined;
+  tools?: Tool[];
   /** Where to run. Report paths are relative to it. Defaults to this process's. */
-  cwd?: string | undefined;
+  cwd?: string;
 }
 
 /** Reject anything that is not a usable, non-empty string. */
@@ -78,7 +84,7 @@ function requireText(value: unknown, what: string): string {
  * separator one that begins with a dash would be read as a flag — turning
  * `scan(["--fail-if-found"])` into a different command than the one asked for.
  */
-function argumentsFor(paths: readonly string[], options: ScanOptions): string[] {
+function argumentsFor(paths: string[], options: ScanOptions): string[] {
   const args = ["--format", "json"];
 
   if (options.tools !== undefined) {
@@ -131,10 +137,7 @@ function argumentsFor(paths: readonly string[], options: ScanOptions): string[] 
  * @throws {NotignoredExitError} when it exited non-zero, for any reason.
  * @throws {NotignoredContractError} when a clean run's output is not a report.
  */
-export async function scan(
-  paths: readonly string[] = [],
-  options: ScanOptions = {},
-): Promise<Report> {
+export async function scan(paths: string[] = [], options: ScanOptions = {}): Promise<Report> {
   if (!Array.isArray(paths)) {
     throw new NotignoredUsageError("paths must be an array of strings");
   }
