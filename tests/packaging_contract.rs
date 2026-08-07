@@ -1,4 +1,4 @@
-//! Structural gate for the release pipeline and the two registry packages.
+//! Structural gate for the release pipeline and the registry packages.
 //!
 //! `pip install notignored-cli` and `npm install -g notignored-cli` ship the same
 //! prebuilt binary the GitHub Release attaches, and every part of that is only
@@ -12,9 +12,9 @@
 //! others rather than against a literal:
 //!
 //!   * the **version** comes from `Cargo.toml` alone — the wheel takes it via
-//!     `dynamic = ["version"]`, the npm packages via `scripts/npm-build.mjs`, and
-//!     the committed npm manifest carries a placeholder so it cannot become a
-//!     second source;
+//!     `dynamic = ["version"]`, the npm packages via `scripts/npm-build.mjs`, the
+//!     Python SDK via `scripts/python-sdk-build.mjs`, and both committed
+//!     manifests carry placeholders so neither can become a second source;
 //!   * the **five targets** are the same in the binary, wheel, and npm matrices,
 //!     in the platform-package names, and in the launcher's resolution map;
 //!   * the **publish gating** is the two repository variables and the two repo
@@ -191,19 +191,30 @@ fn the_release_pipeline_runs_on_a_published_release() {
 #[test]
 fn nothing_publishes_without_the_gate() {
     let jobs = jobs();
-    for name in ["upload", "build-wheels", "build-npm", "publish-crate"] {
+    for name in [
+        "upload",
+        "build-wheels",
+        "build-npm",
+        "build-python-sdk",
+        "publish-crate",
+    ] {
         assert!(
             needs(jobs.get(name)).contains("test"),
             "`{name}` no longer waits for the `test` gate"
         );
     }
     // The publish and verify jobs inherit the gate transitively, through the
-    // build job whose artifacts they consume.
+    // build job whose artifacts they consume. The SDK additionally waits on the
+    // CLI's own publish: its dependency is an exact `notignored-cli==<version>`,
+    // so that version has to be on PyPI before the SDK is installable at all.
     for (name, upstream) in [
         ("publish-pypi", "build-wheels"),
         ("verify-pypi", "publish-pypi"),
         ("publish-npm", "build-npm"),
         ("verify-npm", "publish-npm"),
+        ("publish-python-sdk", "build-python-sdk"),
+        ("publish-python-sdk", "publish-pypi"),
+        ("verify-python-sdk", "publish-python-sdk"),
     ] {
         assert!(
             needs(jobs.get(name)).contains(upstream),
@@ -224,6 +235,8 @@ fn publishing_is_gated_on_a_repository_variable_but_building_is_not() {
     for (name, variable) in [
         ("publish-pypi", "PYPI_PUBLISH"),
         ("verify-pypi", "PYPI_PUBLISH"),
+        ("publish-python-sdk", "PYPI_PUBLISH"),
+        ("verify-python-sdk", "PYPI_PUBLISH"),
         ("publish-npm", "NPM_PUBLISH"),
         ("verify-npm", "NPM_PUBLISH"),
     ] {
@@ -233,7 +246,7 @@ fn publishing_is_gated_on_a_repository_variable_but_building_is_not() {
             "`{name}` is no longer gated on the {variable} repository variable"
         );
     }
-    for name in ["build-wheels", "build-npm"] {
+    for name in ["build-wheels", "build-npm", "build-python-sdk"] {
         assert!(
             jobs.get(name).find("if").is_none(),
             "`{name}` became conditional; a packaging break would then stay \
@@ -577,6 +590,86 @@ fn the_wheel_takes_its_name_from_pyproject_and_its_version_from_cargo() {
         pyproject.contains("bindings = \"bin\""),
         "pyproject.toml no longer packages the binary with maturin's bin bindings"
     );
+}
+
+/// The Python SDK is a fourth registry package, and it has no version either.
+///
+/// `notignored-sdk` is pure Python, so nothing about it is per-platform — what it
+/// *is* is a client pinned to one CLI. Both numbers that says are placeholders
+/// here, stamped from `Cargo.toml` by `scripts/python-sdk-build.mjs`;
+/// `python/notignored-sdk/tests/test_packaging.py` builds that wheel on every
+/// gate run and reads the version and the pin back out of its metadata, so this
+/// only has to hold the placeholders still.
+#[test]
+fn the_python_sdk_carries_placeholders_rather_than_a_second_version_source() {
+    let pyproject = read("python/notignored-sdk/pyproject.toml");
+    assert!(
+        pyproject.contains("name = \"notignored-sdk\""),
+        "the SDK distribution is no longer notignored-sdk"
+    );
+    let placeholder = "0.0.0.dev0";
+    assert!(
+        pyproject.contains(&format!("version = \"{placeholder}\"")),
+        "python/notignored-sdk/pyproject.toml declares a real version; Cargo.toml is \
+         the only version source and the packer stamps this one"
+    );
+    assert!(
+        pyproject.contains("dependencies = [\"notignored-cli\"]"),
+        "the SDK's committed notignored-cli dependency is no longer the unpinned \
+         placeholder scripts/python-sdk-build.mjs tightens to an exact version"
+    );
+    assert_ne!(
+        cargo_version(),
+        placeholder,
+        "Cargo.toml would have to hold the placeholder for this test to prove nothing"
+    );
+
+    // The packer is the only thing that turns those two into a release, so a
+    // release that stopped calling it would publish a `.dev0` package.
+    let build = job("build-python-sdk");
+    let runs_packer = scripts(&build).iter().any(|script| {
+        script.contains("node scripts/python-sdk-build.mjs") && script.contains("uv build")
+    });
+    assert!(
+        runs_packer,
+        "`build-python-sdk` no longer stamps the version in with \
+         scripts/python-sdk-build.mjs before building the distributions"
+    );
+    assert!(
+        repo_root().join("scripts/python-sdk-build.mjs").is_file(),
+        "scripts/python-sdk-build.mjs is gone, and the release job calls it"
+    );
+}
+
+/// The SDK release verification installs the exact version it asserts, and
+/// proves the CLI came with it.
+///
+/// `pip install notignored-sdk` is only a promise until something resolves it: an
+/// SDK whose `notignored-cli` pin does not exist installs cleanly and then cannot
+/// scan anything. Checking both distributions' versions in the same interpreter
+/// is what turns "we uploaded something" into "the pair works".
+#[test]
+fn the_sdk_verification_proves_both_halves_of_the_pin() {
+    let job = job("verify-python-sdk");
+    let scripts = scripts(&job);
+    assert!(
+        scripts.iter().any(
+            |script| script.contains("pip install \"notignored-sdk==${ver}\"")
+                && script.contains("${GITHUB_REF_NAME#v}")
+        ),
+        "`verify-python-sdk` no longer installs the released version"
+    );
+    for evidence in [
+        "version(\"notignored-sdk\") == expected",
+        "version(\"notignored-cli\") == expected",
+        "from notignored_sdk import",
+    ] {
+        assert!(
+            scripts.iter().any(|script| script.contains(evidence)),
+            "`verify-python-sdk` no longer checks `{evidence}`; without it the job \
+             proves the upload happened and nothing about what it published"
+        );
+    }
 }
 
 /// The launcher installs the `notignored` command and carries nothing else.

@@ -138,10 +138,20 @@ fn the_crates_check_aggregates_its_docs_tier() {
 /// What CI skips a matrix on. Each deliverable's tree must map to its own
 /// project and nothing else, or an SDK-only pull request skips the Rust matrices
 /// while having changed the Rust artifact.
+///
+/// The crate's *sources* are the one exception, in the direction the layering
+/// allows: the Python SDK's suite compiles and drives that binary, so it names
+/// `crateSource` among its `test` inputs and a change there selects both. That is
+/// the point — a report shape that moved in `src/` has to re-run the suite that
+/// asserts on it rather than replay a cached green from before the move. It is
+/// scoped to `src/` and the manifests deliberately, because the crate's project
+/// root *is* the repository root: depending on the project would make every file
+/// outside the SDK trees affect it. And it changes nothing about
+/// `just affected-crate`, which asks only whether `notignored` is in the set.
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
     let cases: [(&str, &[&str]); 5] = [
-        ("src/lib.rs", &["notignored"]),
+        ("src/lib.rs", &["notignored", "notignored-sdk-python"]),
         ("npm/notignored/package.json", &["notignored"]),
         (
             "python/notignored-sdk/README.md",

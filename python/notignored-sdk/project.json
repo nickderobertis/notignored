@@ -30,13 +30,19 @@
       "options": { "cwd": "python/notignored-sdk" },
       "inputs": ["default", "pythonToolchain"]
     },
+    "typecheck": {
+      "command": "bash ../../scripts/dev-tool.sh mypy src",
+      "options": { "cwd": "python/notignored-sdk" },
+      "inputs": ["default", "pythonToolchain"]
+    },
     "test": {
       "command": "uv run --quiet pytest --quiet",
-      "options": { "cwd": "python/notignored-sdk" }
+      "options": { "cwd": "python/notignored-sdk" },
+      "inputs": ["default", "pythonToolchain", "crateSource"]
     },
     "check": {
       "executor": "nx:noop",
-      "dependsOn": ["format-check", "lint", "test"]
+      "dependsOn": ["format-check", "lint", "typecheck", "test"]
     }
   }
 }
