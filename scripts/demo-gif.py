@@ -245,6 +245,12 @@ def main() -> int:
     for typed, output in commands:
         if not output:
             print(f"demo-gif: `{typed}` produced no output", file=sys.stderr)
+            print(
+                "ACTION: run it by hand from screenshots/fixture/ and see what it prints;"
+                " an empty report usually means the fixture lost the directives the"
+                " session was written around.",
+                file=sys.stderr,
+            )
             return 1
 
     cols = max(

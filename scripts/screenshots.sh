@@ -127,7 +127,12 @@ render_scene() {
   scene_src="$4"
   scene_require_ansi="$5"
   if [ ! -s "$scene_src" ]; then
-    echo "screenshots: scene '$scene_name' produced no output — cannot render." >&2
+    {
+      echo "screenshots: scene '$scene_name' produced no output — cannot render."
+      echo "ACTION: run that scene's command by hand from screenshots/fixture/ and"
+      echo "        see what it prints; an empty report usually means the fixture"
+      echo "        lost the directives the scene was written around."
+    } >&2
     exit 1
   fi
   if [ "$scene_require_ansi" = 1 ] && ! grep -q "$(printf '\033')" "$scene_src"; then
