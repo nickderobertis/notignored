@@ -93,7 +93,14 @@ _PRESERVED_LOG_SECRET_NAME='(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?K
 # hiding, longest value first so a token containing a shorter token's value is
 # replaced before the shorter one can split it.
 _preserved_log_secret_names() {
-  local name value
+  local name value restore_nocasematch=0
+  # Matched case-insensitively through `nocasematch` rather than by upshifting
+  # the name with `${name^^}`: that is bash 4, macOS ships bash 3.2, and there it
+  # fails at *expansion* time — every candidate is skipped, so nothing is
+  # redacted and the failure is silent. `tests/shell_contract.rs` keeps the whole
+  # construct out of this tree.
+  shopt -q nocasematch || restore_nocasematch=1
+  shopt -s nocasematch
   while IFS= read -r name; do
     value=${!name-}
     # Shorter values collide with ordinary words and would corrupt the very
@@ -103,9 +110,10 @@ _preserved_log_secret_names() {
     case $value in
     *[$'\n\r']*) continue ;;
     esac
-    [[ ${name^^} =~ $_PRESERVED_LOG_SECRET_NAME ]] || continue
+    [[ $name =~ $_PRESERVED_LOG_SECRET_NAME ]] || continue
     printf '%s\t%s\n' "${#value}" "$name"
   done < <(compgen -e) | sort -k1,1nr -k2,2
+  [ "$restore_nocasematch" -eq 0 ] || shopt -u nocasematch
 }
 
 # Filter stdin to stdout, replacing every credential value in the environment
