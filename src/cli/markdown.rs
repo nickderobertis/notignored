@@ -11,7 +11,7 @@
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::model::{IgnoreDirective, Report};
+use crate::model::{IgnoreDirective, Report, Scope};
 use crate::source::Language;
 
 /// The hidden marker every rendered body starts with.
@@ -20,27 +20,47 @@ use crate::source::Language;
 /// the two is gated by `tests/action_contract.rs`.
 pub const MARKER: &str = "<!-- notignored-report -->";
 
-/// Below this many findings, every entry carries a source snippet.
+/// Entries a body lists before it stops and counts the rest.
 ///
-/// A short list is worth reading inline; a long one would bury the pull request
-/// under context nobody scrolls through, so past this count the permalinks carry
-/// the reader instead.
-const SNIPPET_LIMIT: usize = 4;
+/// A pull request that adds a hundred suppressions must not become a comment a
+/// hundred entries long — the reviewer scrolls past the diff to reach it. The
+/// closing line still names the total, so nothing is hidden, only unlisted.
+pub const DEFAULT_MAX_ENTRIES: u32 = 20;
 
-/// Lines of context shown on each side of a directive.
-const CONTEXT_LINES: u32 = 2;
-
-/// What the permalinks in a rendered body point at.
+/// Lines of suppressed source a snippet shows.
 ///
-/// Both parts are needed to build one; with either missing the location renders
-/// as plain `path:line` text, so a run without them still produces a usable body.
-// llmlint: ignore[invalid_states_unrepresentable] both fields are validated where they enter the process — clap's `github_repo` and `github_sha` value parsers reject anything but an owner/repo slug and a hex commit id, at the trust boundary the invariants call for — and this struct mirrors `Cli`'s public fields one for one, so a newtype here would move the crate's public surface without adding a check that is not already made.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Not configurable: the snippet is a glance at what a directive silences, and a
+/// block long enough to need its own scrollbar has stopped being one — a reader
+/// who wants the rest follows the permalink.
+const SNIPPET_LINES: u32 = 10;
+
+/// What the permalinks in a rendered body point at, and how much of the report
+/// it lists.
+///
+/// Both permalink parts are needed to build one; with either missing the
+/// location renders as plain `path:line` text, so a run without them still
+/// produces a usable body.
+// llmlint: ignore[invalid_states_unrepresentable] every field is validated where it enters the process — clap's `github_repo` and `github_sha` value parsers reject anything but an owner/repo slug and a hex commit id, and `--max-entries` is a ranged parser that rejects zero, at the trust boundary the invariants call for — and this struct mirrors `Cli`'s public fields one for one, so a newtype here would move the crate's public surface without adding a check that is not already made.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkdownOptions {
     /// `owner/repo` the permalinks address.
     pub repo: Option<String>,
     /// Commit the permalinks pin the source to.
     pub sha: Option<String>,
+    /// Most entries the body lists before summarizing the remainder.
+    pub max_entries: u32,
+}
+
+/// The defaults a `--format markdown` run gets when it is told nothing: no
+/// permalinks, and the standard cap.
+impl Default for MarkdownOptions {
+    fn default() -> Self {
+        MarkdownOptions {
+            repo: None,
+            sha: None,
+            max_entries: DEFAULT_MAX_ENTRIES,
+        }
+    }
 }
 
 impl MarkdownOptions {
@@ -102,19 +122,26 @@ fn body(report: &Report, options: &MarkdownOptions, source: &dyn SnippetSource) 
                 "suppressions"
             }
         ));
-        for directive in &report.ignores {
+        let listed = usize::try_from(options.max_entries).unwrap_or(usize::MAX);
+        for directive in report.ignores.iter().take(listed) {
             body.push_str(&entry(directive, options));
-            if count < SNIPPET_LIMIT {
-                if let Some(snippet) = snippet(directive, source) {
-                    body.push('\n');
-                    body.push_str(&snippet);
-                    body.push('\n');
-                }
+            if let Some(snippet) = snippet(directive, source) {
+                body.push('\n');
+                body.push_str(&snippet);
+                body.push('\n');
             }
+        }
+        let omitted = count.saturating_sub(listed);
+        if omitted > 0 {
+            separate(&mut body);
+            body.push_str(&format!(
+                "_… and {omitted} more not shown ({count} total)._\n"
+            ));
         }
     }
     if !report.errors.is_empty() {
-        body.push_str("\n#### Could not be scanned\n\n");
+        separate(&mut body);
+        body.push_str("#### Could not be scanned\n\n");
         for error in &report.errors {
             body.push_str(&format!(
                 "- `{}` — {}\n",
@@ -124,6 +151,17 @@ fn body(report: &Report, options: &MarkdownOptions, source: &dyn SnippetSource) 
         }
     }
     body
+}
+
+/// End `body` with exactly one blank line, so what follows starts its own block.
+///
+/// An entry that carried a snippet already left one behind and an entry that
+/// could not read its file did not; without this the two spellings differ by a
+/// stray newline that every golden body would have to encode.
+fn separate(body: &mut String) {
+    if !body.ends_with("\n\n") {
+        body.push('\n');
+    }
 }
 
 /// One directive as a list item: what is silenced, why, and where.
@@ -150,25 +188,59 @@ fn entry(directive: &IgnoreDirective, options: &MarkdownOptions) -> String {
     format!("- **{} {rules}** — {reason} — {location}\n", directive.tool)
 }
 
-/// The directive's line with [`CONTEXT_LINES`] on each side, as an indented
-/// fenced block under its list item.
+/// The 1-based source range a directive silences, clamped to a file of `count`
+/// lines.
 ///
-/// `None` when the file cannot be read, or when it is too short to hold the line
-/// the record names — a report rendered somewhere other than where it was
-/// produced must not invent context.
+/// `None` when the file cannot hold it — a report rendered somewhere other than
+/// where it was produced names lines a file may since have lost, and the snippet
+/// must show real source or none.
+///
+/// A `file`-scope directive silences everything, so its range is the file; the
+/// record's own `suppressed` says so too, but only the scope says it is the
+/// *whole* file rather than a run that happens to reach the end.
+fn suppressed_range(directive: &IgnoreDirective, count: u32) -> Option<(u32, u32)> {
+    if count == 0 {
+        return None;
+    }
+    if directive.scope == Scope::File {
+        return Some((1, count));
+    }
+    let first = directive.suppressed.start_line;
+    if first == 0 || first > count {
+        return None;
+    }
+    // An unterminated block runs to end-of-file, which is what `None` records.
+    let last = directive
+        .suppressed
+        .end_line
+        .unwrap_or(count)
+        .clamp(first, count);
+    Some((first, last))
+}
+
+/// The code the directive silences, as a collapsed `<details>` block under its
+/// list item.
+///
+/// Collapsed by default because the point of the comment is that a reviewer can
+/// read it without reading the diff: the context is one click away for every
+/// entry rather than inline for a lucky few.
+///
+/// `None` when the file cannot be read or does not hold the range the record
+/// names — the entry then renders without its snippet rather than failing.
 fn snippet(directive: &IgnoreDirective, source: &dyn SnippetSource) -> Option<String> {
     let lines = source.lines(&directive.path)?;
     let count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
-    if directive.line == 0 || directive.line > count {
-        return None;
-    }
-    let first = directive.line.saturating_sub(CONTEXT_LINES).max(1);
-    let last = directive.line.saturating_add(CONTEXT_LINES).min(count);
+    let (first, last) = suppressed_range(directive, count)?;
+    let shown = last.min(first.saturating_add(SNIPPET_LINES - 1));
 
-    let window = &lines[(first as usize - 1)..last as usize];
+    let window = &lines[(first as usize - 1)..shown as usize];
     let fence = fence_for(window);
-    let width = last.to_string().len();
-    let mut block = format!("  {fence}{}\n", language_tag(&directive.path));
+    let width = shown.to_string().len();
+    let mut block = String::from("  <details>\n  <summary>suppressed code</summary>\n\n");
+    if let Some(note) = note(directive, last - first + 1) {
+        block.push_str(&format!("  {note}\n\n"));
+    }
+    block.push_str(&format!("  {fence}{}\n", language_tag(&directive.path)));
     for (offset, text) in window.iter().enumerate() {
         let number = first + u32::try_from(offset).unwrap_or_default();
         // An empty source line renders as a bare gutter: a trailing space here
@@ -179,8 +251,25 @@ fn snippet(directive: &IgnoreDirective, source: &dyn SnippetSource) -> Option<St
             false => block.push_str(&format!("  {number:>width$} | {}\n", text.trim_end())),
         }
     }
-    block.push_str(&format!("  {fence}\n"));
+    block.push_str(&format!("  {fence}\n\n  </details>\n"));
     Some(block)
+}
+
+/// What the snippet is not showing, when that changes how it should be read: a
+/// range longer than [`SNIPPET_LINES`], or a directive that covers the whole
+/// file rather than the lines on screen.
+fn note(directive: &IgnoreDirective, span: u32) -> Option<String> {
+    let truncated = span > SNIPPET_LINES;
+    match (directive.scope == Scope::File, truncated) {
+        (true, true) => Some(format!(
+            "_the whole file is suppressed; showing its first {SNIPPET_LINES} of {span} lines._"
+        )),
+        (true, false) => Some("_the whole file is suppressed._".to_string()),
+        (false, true) => Some(format!(
+            "_showing the first {SNIPPET_LINES} of {span} suppressed lines._"
+        )),
+        (false, false) => None,
+    }
 }
 
 /// A fence long enough to hold `window` — source that itself contains a run of
@@ -247,7 +336,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::model::{ReportError, Scope, Suppressed, Tool};
+    use crate::model::{ReportError, Suppressed, Tool};
 
     /// Source held in memory, so a body can be rendered without touching disk.
     #[derive(Default)]
@@ -285,10 +374,24 @@ mod tests {
         }
     }
 
+    /// A directive whose `suppressed` range is `start..=end`, for the span rules
+    /// — the record, not the directive's own line, is what a snippet shows.
+    fn spanning(scope: Scope, start: u32, end: Option<u32>) -> IgnoreDirective {
+        IgnoreDirective {
+            scope,
+            suppressed: Suppressed {
+                start_line: start,
+                end_line: end,
+            },
+            ..directive(start, Some("why"))
+        }
+    }
+
     fn options() -> MarkdownOptions {
         MarkdownOptions {
             repo: Some("acme/widgets".into()),
             sha: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            ..MarkdownOptions::default()
         }
     }
 
@@ -363,7 +466,7 @@ mod tests {
         // Half the pair is not enough to build a link that resolves.
         let half = MarkdownOptions {
             repo: Some("acme/widgets".into()),
-            sha: None,
+            ..MarkdownOptions::default()
         };
         assert!(render(&report, &half).contains("— `src/app.py:12`\n"));
     }
@@ -394,27 +497,11 @@ mod tests {
         );
     }
 
-    /// The rule the count decides: a short list is worth reading inline.
+    /// Every entry that is listed carries its snippet, collapsed, and the whole
+    /// block is spelled out here because its exact shape is what makes GitHub
+    /// render markdown inside the `<details>` rather than as literal text.
     #[test]
-    fn entries_carry_a_snippet_only_below_the_limit() {
-        let source =
-            Stub::default().with("src/app.py", "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
-        for count in 1..=5 {
-            let mut report = Report::new();
-            for _ in 0..count {
-                report.ignores.push(directive(4, Some("why")));
-            }
-            let rendered = body(&report, &options(), &source);
-            assert_eq!(
-                rendered.contains("```python"),
-                count < SNIPPET_LIMIT,
-                "count {count} rendered:\n{rendered}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_snippet_shows_two_lines_on_each_side_with_their_numbers() {
+    fn every_listed_entry_carries_a_collapsed_snippet_of_what_it_suppresses() {
         let source =
             Stub::default().with("src/app.py", "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
         let mut report = Report::new();
@@ -422,35 +509,179 @@ mod tests {
         let rendered = body(&report, &options(), &source);
         assert!(
             rendered.ends_with(concat!(
+                "  <details>\n",
+                "  <summary>suppressed code</summary>\n",
+                "\n",
                 "  ```python\n",
-                "  2 | two\n",
-                "  3 | three\n",
                 "  4 | four\n",
-                "  5 | five\n",
-                "  6 | six\n",
                 "  ```\n",
+                "\n",
+                "  </details>\n",
                 "\n",
             )),
             "{rendered}"
         );
     }
 
+    /// The cap, at the two counts that decide it.
     #[test]
-    fn a_snippet_at_the_edges_of_a_file_is_clamped_to_it() {
-        let source = Stub::default().with("src/app.py", "one\ntwo\nthree\n");
+    fn the_body_lists_at_most_max_entries_and_counts_the_rest() {
+        for (count, listed, overflow) in [
+            (20, 20, None),
+            (21, 20, Some("_… and 1 more not shown (21 total)._\n")),
+            (25, 20, Some("_… and 5 more not shown (25 total)._\n")),
+        ] {
+            let mut report = Report::new();
+            for line in 1..=count {
+                report.ignores.push(directive(line, Some("why")));
+            }
+            let rendered = body(&report, &options(), &Stub::default());
+            assert_eq!(
+                rendered.matches("- **ruff E501**").count(),
+                listed,
+                "{count} findings listed the wrong number of entries:\n{rendered}"
+            );
+            assert!(
+                rendered.contains(&format!("### notignored: {count} suppressions\n")),
+                "the heading must still name the total:\n{rendered}"
+            );
+            match overflow {
+                Some(line) => assert!(rendered.ends_with(line), "{rendered}"),
+                None => assert!(!rendered.contains("not shown"), "{rendered}"),
+            }
+        }
+    }
+
+    /// The cap is the caller's to set, and a body under it is unchanged by it.
+    #[test]
+    fn max_entries_is_configurable() {
         let mut report = Report::new();
-        report.ignores.push(directive(1, Some("top")));
-        let rendered = body(&report, &options(), &source);
+        for line in 1..=3 {
+            report.ignores.push(directive(line, Some("why")));
+        }
+        let capped = MarkdownOptions {
+            max_entries: 2,
+            ..options()
+        };
+        let rendered = body(&report, &capped, &Stub::default());
+        assert_eq!(rendered.matches("- **ruff E501**").count(), 2, "{rendered}");
         assert!(
-            rendered.contains("  1 | one\n  2 | two\n  3 | three\n"),
+            rendered.ends_with("_… and 1 more not shown (3 total)._\n"),
             "{rendered}"
         );
 
+        let roomy = MarkdownOptions {
+            max_entries: 50,
+            ..options()
+        };
+        let rendered = body(&report, &roomy, &Stub::default());
+        assert_eq!(rendered.matches("- **ruff E501**").count(), 3, "{rendered}");
+        assert!(!rendered.contains("not shown"), "{rendered}");
+    }
+
+    /// What a snippet shows is the record's `suppressed` span, which is what
+    /// each scope means: the directive's own line, the line below it, or the
+    /// whole delimited region.
+    #[test]
+    fn each_scope_shows_the_span_it_suppresses() {
+        let source =
+            Stub::default().with("src/app.py", "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+        for (directive, expected) in [
+            (spanning(Scope::Line, 4, Some(4)), "  4 | four\n"),
+            (spanning(Scope::NextLine, 5, Some(5)), "  5 | five\n"),
+            (
+                spanning(Scope::Block, 3, Some(5)),
+                "  3 | three\n  4 | four\n  5 | five\n",
+            ),
+            // An unterminated block runs to end-of-file.
+            (
+                spanning(Scope::Block, 5, None),
+                "  5 | five\n  6 | six\n  7 | seven\n",
+            ),
+        ] {
+            let scope = directive.scope;
+            let mut report = Report::new();
+            report.ignores.push(directive);
+            let rendered = body(&report, &options(), &source);
+            assert!(
+                rendered.contains(&format!("  ```python\n{expected}  ```\n")),
+                "{scope} rendered:\n{rendered}"
+            );
+            assert!(!rendered.contains("whole file"), "{scope}: {rendered}");
+        }
+    }
+
+    /// `file` scope silences code the record's span does not single out, so the
+    /// snippet shows the top of the file and says what it is standing in for.
+    #[test]
+    fn a_file_scope_directive_shows_the_top_of_the_file_and_says_so() {
+        let short = Stub::default().with("src/app.py", "one\ntwo\nthree\n");
         let mut report = Report::new();
-        report.ignores.push(directive(3, Some("bottom")));
+        report.ignores.push(spanning(Scope::File, 1, None));
+        let rendered = body(&report, &options(), &short);
+        assert!(
+            rendered.contains("  _the whole file is suppressed._\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("  ```python\n  1 | one\n  2 | two\n  3 | three\n  ```\n"),
+            "{rendered}"
+        );
+
+        // A directive can sit anywhere in the file and still cover all of it.
+        let long: String = (1..=14).map(|n| format!("line {n}\n")).collect();
+        let mut report = Report::new();
+        report.ignores.push(spanning(Scope::File, 6, None));
+        let rendered = body(
+            &report,
+            &options(),
+            &Stub::default().with("src/app.py", &long),
+        );
+        assert!(
+            rendered
+                .contains("  _the whole file is suppressed; showing its first 10 of 14 lines._\n"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("   1 | line 1\n"), "{rendered}");
+        assert!(rendered.contains("  10 | line 10\n"), "{rendered}");
+        assert!(!rendered.contains("line 11"), "{rendered}");
+    }
+
+    /// A span longer than the snippet allows is cut, never re-centred: the first
+    /// lines of what is silenced are the ones a reviewer needs.
+    #[test]
+    fn a_span_longer_than_ten_lines_is_truncated_with_a_note() {
+        let text: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+        let source = Stub::default().with("src/app.py", &text);
+        let mut report = Report::new();
+        report.ignores.push(spanning(Scope::Block, 5, Some(28)));
         let rendered = body(&report, &options(), &source);
         assert!(
-            rendered.contains("  1 | one\n  2 | two\n  3 | three\n"),
+            rendered.contains("  _showing the first 10 of 24 suppressed lines._\n"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("   5 | line 5\n"), "{rendered}");
+        assert!(rendered.contains("  14 | line 14\n"), "{rendered}");
+        assert!(!rendered.contains("line 15"), "{rendered}");
+
+        // Exactly ten is not truncated, so the note is about a real omission.
+        let mut report = Report::new();
+        report.ignores.push(spanning(Scope::Block, 5, Some(14)));
+        let rendered = body(&report, &options(), &source);
+        assert!(!rendered.contains("showing the first"), "{rendered}");
+        assert!(rendered.contains("  14 | line 14\n"), "{rendered}");
+    }
+
+    /// A span the file cannot hold is clamped to it rather than dropped: the
+    /// lines that do exist are real source.
+    #[test]
+    fn a_span_running_past_the_end_of_the_file_stops_at_it() {
+        let source = Stub::default().with("src/app.py", "one\ntwo\nthree\n");
+        let mut report = Report::new();
+        report.ignores.push(spanning(Scope::Block, 2, Some(9)));
+        let rendered = body(&report, &options(), &source);
+        assert!(
+            rendered.contains("  ```python\n  2 | two\n  3 | three\n  ```\n"),
             "{rendered}"
         );
     }
@@ -461,7 +692,7 @@ mod tests {
     fn no_rendered_line_ends_in_whitespace() {
         let source = Stub::default().with("src/app.py", "one\n\nthree   \n\nfive\n");
         let mut report = Report::new();
-        report.ignores.push(directive(3, Some("why")));
+        report.ignores.push(spanning(Scope::Block, 2, Some(3)));
         let rendered = body(&report, &options(), &source);
         for line in rendered.lines() {
             assert_eq!(line, line.trim_end(), "trailing space in {line:?}");
@@ -474,7 +705,7 @@ mod tests {
         let text: String = (1..=12).map(|n| format!("line {n}\n")).collect();
         let source = Stub::default().with("src/app.py", &text);
         let mut report = Report::new();
-        report.ignores.push(directive(10, Some("why")));
+        report.ignores.push(spanning(Scope::Block, 8, Some(12)));
         let rendered = body(&report, &options(), &source);
         assert!(rendered.contains("   8 | line 8\n"), "{rendered}");
         assert!(rendered.contains("  12 | line 12\n"), "{rendered}");
@@ -487,10 +718,13 @@ mod tests {
             "a\nDOC = \"\"\"```\nx = 1  # noqa\n```\"\"\"\nb\n",
         );
         let mut report = Report::new();
-        report.ignores.push(directive(3, Some("why")));
+        report.ignores.push(spanning(Scope::Block, 2, Some(4)));
         let rendered = body(&report, &options(), &source);
         assert!(rendered.contains("  ````python\n"), "{rendered}");
-        assert!(rendered.trim_end().ends_with("  ````"), "{rendered}");
+        assert!(
+            rendered.contains("  ````\n\n  </details>\n"),
+            "the closing fence must be as long as the opening one:\n{rendered}"
+        );
     }
 
     #[test]
@@ -498,18 +732,24 @@ mod tests {
         let mut report = Report::new();
         report.ignores.push(directive(12, Some("why")));
         let rendered = body(&report, &options(), &Stub::default());
-        assert!(!rendered.contains("```"), "{rendered}");
+        assert!(!rendered.contains("<details>"), "{rendered}");
         assert!(rendered.contains("- **ruff E501**"), "{rendered}");
     }
 
     /// A record naming a line the file does not have would otherwise index past
-    /// the end of the source.
+    /// the end of the source. An empty file has nothing to show either, whatever
+    /// the scope claims to cover.
     #[test]
-    fn a_line_beyond_the_end_of_the_file_renders_without_a_snippet() {
+    fn a_span_beyond_the_end_of_the_file_renders_without_a_snippet() {
         let source = Stub::default().with("src/app.py", "one\ntwo\n");
         let mut report = Report::new();
         report.ignores.push(directive(9, Some("why")));
-        assert!(!body(&report, &options(), &source).contains("```"));
+        assert!(!body(&report, &options(), &source).contains("<details>"));
+
+        let empty = Stub::default().with("src/app.py", "");
+        let mut report = Report::new();
+        report.ignores.push(spanning(Scope::File, 1, None));
+        assert!(!body(&report, &options(), &empty).contains("<details>"));
     }
 
     #[test]

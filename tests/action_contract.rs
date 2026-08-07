@@ -25,7 +25,13 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
     let inputs = action.get("inputs");
     assert_eq!(
         inputs.keys(),
-        vec!["diff-base", "github-token", "paths", "version"],
+        vec![
+            "diff-base",
+            "github-token",
+            "max-entries",
+            "paths",
+            "version"
+        ],
         "the action's inputs changed"
     );
     assert_eq!(
@@ -33,6 +39,13 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
         "${{ github.token }}"
     );
     assert_eq!(inputs.get("version").get("default").scalar(), "latest");
+    // The renderer's own default, so the action and the binary cannot disagree
+    // about how long a comment gets before it stops listing.
+    assert_eq!(
+        inputs.get("max-entries").get("default").scalar(),
+        notignored::cli::DEFAULT_MAX_ENTRIES.to_string(),
+        "the action's max-entries default drifted from the renderer's"
+    );
     // Both optional: an empty base means "the pull request's base branch" and
     // empty paths mean "the whole repository".
     for input in ["diff-base", "paths"] {
