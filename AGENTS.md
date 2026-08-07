@@ -174,8 +174,10 @@ parser adds an `opens_directive` recognizer to it.
 
 `action.yml` (composite, repo root) + `scripts/action/comment.sh` are the
 product's review surface. Keep the judgment in Rust: `--format markdown` renders
-the whole comment body, golden-tested at the counts the rules turn on
-(`tests/golden/markdown/`), so the composite's shell only moves bytes. Its two
+the whole comment body, golden-tested over the fixture counts
+(`tests/golden/markdown/`), so the composite's shell only moves bytes. The
+`--max-entries` cap needs more findings than those fixtures hold, so it is proven
+either side of its boundary in the renderer's own unit tests instead. Its two
 scripts are proven by *lifting them out of `action.yml`* and running them
 (`tests/e2e/action_scan.rs`, `tests/e2e/action_comment.rs`); a copy in a test
 would keep passing after the action stopped doing what it says. Nothing is

@@ -94,6 +94,7 @@ the comment the action posts. That block is checked against the real binary by
 ```
 notignored [PATHS...] [--format human|json|markdown] [--tool NAME]... [--fail-if-found]
            [--diff [--diff-base REF]] [--github-repo OWNER/REPO] [--github-sha SHA]
+           [--max-entries N]
 ```
 
 - `PATHS` — files and/or directories. Directories are walked recursively,
@@ -106,6 +107,8 @@ notignored [PATHS...] [--format human|json|markdown] [--tool NAME]... [--fail-if
 - `--diff-base` — the git revision or range `--diff` compares against.
 - `--github-repo` / `--github-sha` — the `owner/repo` and commit the `markdown`
   format builds its permalinks from.
+- `--max-entries` — how many suppressions the `markdown` format lists before it
+  closes with a line counting the rest. Defaults to 20; must be at least 1.
 
 ### Reviewing a pull request
 
@@ -173,6 +176,7 @@ jobs:
 | `github-token` | `${{ github.token }}` | Token used to upsert the comment. Needs `pull-requests: write`. |
 | `diff-base` | the pull request's base branch | Any git revision or range, as `--diff-base` takes. |
 | `paths` | the whole repository | Whitespace-separated files and directories to scan. |
+| `max-entries` | `20` | How many suppressions the comment lists before it closes with a line counting the rest. At least 1; anything else fails the run. |
 | `version` | `latest` | A release tag such as `v0.1.0`, or `local` to build the action's own source with `cargo`. |
 
 It exposes `count` (how many suppressions the change added) and `report-path`
@@ -199,8 +203,17 @@ $ notignored --diff --diff-base main --format markdown \
 ```
 
 Both permalink flags are optional; without them each location renders as plain
-`path:line` text. When a body names fewer than four suppressions, each one also
-carries the source line with two lines of context on either side.
+`path:line` text.
+
+The body lists at most `max-entries` suppressions — 20 by default — and when a
+change adds more it closes with one line naming how many it left out and the
+total, so the count is never hidden. Every listed entry carries a collapsed
+`<details>` block holding the code that suppression silences: its `line`,
+`next-line`, or `block` span, or the top of the file for a whole-file directive,
+line-numbered and capped at ten lines with a note when there is more. Collapsed
+by default, so a long list stays one screen and any single entry is one click
+from its context. A file that has since become unreadable renders its entry
+without a snippet rather than failing — the block only ever shows real source.
 
 ### Exit codes
 

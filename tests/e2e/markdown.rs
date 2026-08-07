@@ -1,9 +1,13 @@
 //! The pull-request comment body, rendered by the real binary.
 //!
 //! This is what the GitHub Action posts, so it is proven the same way the JSON
-//! report is: real files in, a checked-in golden out. The counts below are the
-//! ones the rendering rules turn on — 0 is the all-clear body, 1 and 3 carry
-//! source snippets, 4 and 5 are past the limit and carry only permalinks.
+//! report is: real files in, a checked-in golden out. 0 is the all-clear body
+//! and every other count carries one entry per suppression, each with the
+//! collapsed snippet of the code it silences.
+//!
+//! The entry cap is not reachable from these fixtures — twenty findings would be
+//! twenty files — so it is proven in `src/cli/markdown.rs`'s unit tests, at the
+//! counts either side of the boundary.
 //!
 //! Re-bless with `just bless` after reviewing the diff.
 
@@ -104,15 +108,25 @@ fn every_body_opens_with_the_marker_the_action_upserts_by() {
     }
 }
 
+/// Every listed entry carries its own collapsed snippet — the rule that
+/// replaced the old below-four-findings-only one — and the fixtures are all
+/// readable, so none of them takes the degrade path.
 #[test]
-fn a_snippet_accompanies_every_entry_below_the_limit_and_none_above_it() {
-    for (count, snippets) in [(0, 0), (1, 1), (3, 3), (4, 0), (5, 0)] {
+fn a_collapsed_snippet_accompanies_every_entry() {
+    for count in [0, 1, 3, 4, 5] {
         let body = body_for(count);
-        assert_eq!(
-            body.matches("\n  ```").count(),
-            snippets * 2,
-            "the body for {count} findings carries the wrong number of snippets:\n{body}"
-        );
+        for (tag, expected) in [
+            ("  <details>\n", count),
+            ("  <summary>suppressed code</summary>\n", count),
+            ("  </details>\n", count),
+            ("\n  ```", count * 2),
+        ] {
+            assert_eq!(
+                body.matches(tag).count(),
+                expected,
+                "the body for {count} findings carries the wrong number of {tag:?}:\n{body}"
+            );
+        }
     }
 }
 
@@ -128,6 +142,52 @@ fn every_entry_links_to_its_line_in_the_named_commit() {
     ] {
         let permalink = format!("https://github.com/{REPO}/blob/{SHA}/{path}#L{line}");
         assert!(body.contains(&permalink), "{permalink} is missing:\n{body}");
+    }
+}
+
+/// The cap the action passes through, driven end to end: five findings under a
+/// cap of two list two entries and close with a line naming the rest.
+#[test]
+fn max_entries_bounds_the_listed_entries_and_names_what_it_left_out() {
+    let mut command = notignored(&repo_root());
+    for tool in TOOLS {
+        command.args(["--tool", tool]);
+    }
+    let output = command
+        .args(FIXTURES.iter().map(|(path, _)| *path))
+        .args(["--format", "markdown", "--max-entries", "2"])
+        .output()
+        .expect("run notignored");
+    assert!(output.status.success(), "exit: {:?}", output.status);
+    let body = String::from_utf8(output.stdout).expect("a UTF-8 comment body");
+
+    assert!(body.contains("### notignored: 5 suppressions\n"), "{body}");
+    assert_eq!(body.matches("\n- **").count(), 2, "{body}");
+    assert!(
+        body.ends_with("_… and 3 more not shown (5 total)._\n"),
+        "{body}"
+    );
+}
+
+/// A cap that would render a different body than the caller asked for stops the
+/// run: the action passes a workflow input straight into this flag.
+#[test]
+fn a_max_entries_that_is_not_a_positive_number_is_rejected() {
+    for bad in ["0", "twenty", "1.5"] {
+        let output = notignored(&repo_root())
+            .args(["tests/fixtures/markdown/single.py", "--format", "markdown"])
+            .args(["--max-entries", bad])
+            .output()
+            .expect("run notignored");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "--max-entries {bad} was accepted"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "stdout should stay clean on error"
+        );
     }
 }
 

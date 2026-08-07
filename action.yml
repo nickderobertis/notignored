@@ -23,6 +23,13 @@ inputs:
       repository.
     required: false
     default: ""
+  max-entries:
+    description: >-
+      Most suppressions the comment lists before it closes with a line counting
+      the rest. A whole number of at least 1; anything else fails the run rather
+      than falling back to the default.
+    required: false
+    default: "20"
   version:
     description: >-
       notignored release to install (a tag such as `v0.1.0`, or `latest`), or
@@ -78,6 +85,7 @@ runs:
         NOTIGNORED: ${{ steps.install.outputs.bin }}
         DIFF_BASE: ${{ inputs.diff-base }}
         SCAN_PATHS: ${{ inputs.paths }}
+        MAX_ENTRIES: ${{ inputs.max-entries }}
       run: |
         set -euo pipefail
         base="$DIFF_BASE"
@@ -114,8 +122,12 @@ runs:
         # its quoted elements otherwise, which every bash reads the same way.
         "$NOTIGNORED" --diff --diff-base "$base" --format json \
           ${scan_paths[@]+"${scan_paths[@]}"} > "$report"
+        # An out-of-range or non-numeric max-entries is rejected by the binary's
+        # own parser (exit 2), which fails the step rather than silently
+        # rendering a body under a different rule than the caller asked for.
         "$NOTIGNORED" --diff --diff-base "$base" --format markdown \
           --github-repo "$GITHUB_REPOSITORY" --github-sha "$sha" \
+          --max-entries "$MAX_ENTRIES" \
           ${scan_paths[@]+"${scan_paths[@]}"} > "$body"
 
         count="$(jq '.ignores | length' "$report")"

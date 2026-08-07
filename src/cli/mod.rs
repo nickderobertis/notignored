@@ -20,7 +20,7 @@ use crate::source::{display_path, Language};
 mod markdown;
 mod render;
 
-pub use markdown::{render_markdown, MarkdownOptions, MARKER};
+pub use markdown::{render_markdown, MarkdownOptions, DEFAULT_MAX_ENTRIES, MARKER};
 pub use render::{narrate_errors, render_human, render_json};
 
 /// The scan completed and nothing forced a failure.
@@ -88,7 +88,8 @@ fn github_sha(value: &str) -> Result<String, String> {
                   With --diff, only the suppressions the change added are reported, which is the \
                   review case: `notignored --diff --diff-base main`.\n\n\
                   --format markdown renders that report as a pull-request comment body; pass \
-                  --github-repo and --github-sha to link each suppression to its source.\n\n\
+                  --github-repo and --github-sha to link each suppression to its source, and \
+                  --max-entries to change how many it lists.\n\n\
                   Exit codes:\n  \
                   0  the scan completed\n  \
                   1  --fail-if-found was given and at least one suppression was reported\n  \
@@ -121,6 +122,16 @@ pub struct Cli {
     /// The commit the `markdown` format pins its permalinks to.
     #[arg(long = "github-sha", value_name = "SHA", value_parser = github_sha)]
     pub github_sha: Option<String>,
+
+    /// Most suppressions the `markdown` format lists before it closes with a
+    /// line counting the rest. Must be at least 1.
+    #[arg(
+        long = "max-entries",
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(1..),
+        default_value_t = DEFAULT_MAX_ENTRIES,
+    )]
+    pub max_entries: u32,
 
     // llmlint: ignore-block[invalid_states_unrepresentable] the pair is a field-per-flag mirror of the command line, and clap rejects a base without --diff at the boundary (`requires = "diff"`, exit 2, covered by an e2e); folding them into an enum would move flag parsing into a custom value parser, which is exactly what this layer keeps out.
     /// Report only the suppressions this change added: those on lines the diff
@@ -275,6 +286,7 @@ impl Cli {
         MarkdownOptions {
             repo: self.github_repo.clone(),
             sha: self.github_sha.clone(),
+            max_entries: self.max_entries,
         }
     }
 }
@@ -412,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn the_markdown_permalink_flags_are_parsed_into_render_options() {
+    fn the_markdown_flags_are_parsed_into_render_options() {
         let cli = parse(&[
             "--format",
             "markdown",
@@ -420,6 +432,8 @@ mod tests {
             "acme/widgets",
             "--github-sha",
             "0123456789abcdef0123456789abcdef01234567",
+            "--max-entries",
+            "5",
         ]);
         assert_eq!(cli.format, Format::Markdown);
         assert_eq!(
@@ -427,10 +441,26 @@ mod tests {
             MarkdownOptions {
                 repo: Some("acme/widgets".into()),
                 sha: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                max_entries: 5,
             }
         );
-        // Omitted, they simply render locations as plain text.
+        // Omitted, the permalink flags simply render locations as plain text and
+        // the cap falls back to the documented default.
         assert_eq!(parse(&[]).markdown_options(), MarkdownOptions::default());
+        assert_eq!(parse(&[]).max_entries, DEFAULT_MAX_ENTRIES);
+    }
+
+    /// The cap is a number the action passes through from a workflow input, so a
+    /// value that would render a different body than the caller asked for has to
+    /// stop the run rather than fall back.
+    #[test]
+    fn a_max_entries_that_is_not_a_positive_number_is_rejected() {
+        for bad in ["0", "-1", "twenty", "", "4.5"] {
+            let error = Cli::try_parse_from(["notignored", "--max-entries", bad])
+                .expect_err("{bad} was accepted");
+            assert_eq!(error.exit_code(), i32::from(EXIT_ERROR), "{bad}: {error}");
+        }
+        assert_eq!(parse(&["--max-entries", "1"]).max_entries, 1);
     }
 
     #[test]

@@ -112,6 +112,7 @@ fn scan(repo: &Path, env: &[(&str, &str)]) -> Run {
         .env("GITHUB_OUTPUT", &outputs)
         .env("DIFF_BASE", "")
         .env("SCAN_PATHS", "")
+        .env("MAX_ENTRIES", "20")
         .env("GITHUB_SHA", "0000000000000000000000000000000000000000")
         .env_remove("GITHUB_BASE_REF")
         .env_remove("GITHUB_EVENT_PATH");
