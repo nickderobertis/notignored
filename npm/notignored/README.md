@@ -23,4 +23,7 @@ Prebuilt binaries exist for Linux (x64, arm64), macOS (x64, arm64), and Windows
 (x64). On any other platform, install with `cargo install --git
 https://github.com/nickderobertis/notignored --locked`.
 
+<!-- llmlint: ignore[no_redundant_instruction_pointers] this README is rendered on
+npmjs.com, where the repository is not otherwise in front of the reader — the pointer is
+the only path from the installed package back to its documentation. -->
 Full documentation: <https://github.com/nickderobertis/notignored>

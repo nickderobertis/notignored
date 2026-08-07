@@ -67,6 +67,18 @@ function die(msg, action) {
   process.exit(1);
 }
 
+// Run a filesystem step, turning anything it throws into the script's own
+// diagnostic. Node's raw `ENOENT: no such file or directory, open '...'` names
+// the syscall and not the fix, and this runs inside a release job where the log
+// is the only diagnosis anyone gets.
+function attempt(what, action, step) {
+  try {
+    return step();
+  } catch (error) {
+    die(`${what}: ${error.message}`, action);
+  }
+}
+
 // The version both registries index this release under. npm rejects anything
 // that is not semver, and a version with a stray specifier would publish under a
 // name no consumer could ask for — so it is validated here rather than at the
@@ -80,7 +92,11 @@ const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 // `[package]` header and before the next section, so a dependency's version can
 // never be mistaken for the crate's.
 function cargoVersion() {
-  const toml = readFileSync(join(REPO_ROOT, "Cargo.toml"), "utf8");
+  const toml = attempt(
+    "cannot read Cargo.toml",
+    "run this from a checkout of the repository, where Cargo.toml is readable",
+    () => readFileSync(join(REPO_ROOT, "Cargo.toml"), "utf8")
+  );
   const pkg = toml.indexOf("[package]");
   if (pkg === -1) {
     die("no [package] section in Cargo.toml", "run this from the repository root");
@@ -133,7 +149,9 @@ function parseArgs(argv, allowed) {
 }
 
 function writeJson(path, obj) {
-  writeFileSync(path, `${JSON.stringify(obj, null, 2)}\n`);
+  attempt(`cannot write ${path}`, "check that its directory is writable", () =>
+    writeFileSync(path, `${JSON.stringify(obj, null, 2)}\n`)
+  );
 }
 
 function buildPlatform(args) {
@@ -163,10 +181,16 @@ function buildPlatform(args) {
     );
   }
 
-  rmSync(pkgDir, { recursive: true, force: true });
-  mkdirSync(binDir, { recursive: true });
-  copyFileSync(srcBin, join(binDir, binName));
-  if (!facts.exe) chmodSync(join(binDir, binName), 0o755);
+  attempt(
+    `cannot assemble ${pkgName} under ${outRoot}`,
+    "check that --out names a writable directory with room for the binary",
+    () => {
+      rmSync(pkgDir, { recursive: true, force: true });
+      mkdirSync(binDir, { recursive: true });
+      copyFileSync(srcBin, join(binDir, binName));
+      if (!facts.exe) chmodSync(join(binDir, binName), 0o755);
+    }
+  );
 
   writeJson(join(pkgDir, "package.json"), {
     name: pkgName,
@@ -183,12 +207,14 @@ function buildPlatform(args) {
     files: [`bin/${binName}`],
   });
 
-  writeFileSync(
-    join(pkgDir, "README.md"),
+  attempt(`cannot write the ${pkgName} README`, "check that --out is writable", () =>
+    writeFileSync(
+      join(pkgDir, "README.md"),
     `# ${pkgName}\n\nPrebuilt \`notignored\` binary for ${facts.platform} ${facts.arch}.\n` +
       "This is a platform-specific dependency of " +
-      "[`notignored-cli`](https://www.npmjs.com/package/notignored-cli); install " +
-      "that instead.\n"
+        "[`notignored-cli`](https://www.npmjs.com/package/notignored-cli); install " +
+        "that instead.\n"
+    )
   );
 
   process.stdout.write(`${pkgDir}\n`);
@@ -200,16 +226,26 @@ function buildLauncher(args) {
   const src = join(REPO_ROOT, "npm", "notignored");
   const dest = join(outRoot, "notignored-cli");
 
-  rmSync(dest, { recursive: true, force: true });
-  mkdirSync(outRoot, { recursive: true });
-  cpSync(src, dest, { recursive: true });
+  attempt(
+    `cannot copy the committed launcher from ${src}`,
+    "restore npm/notignored from git, and check that --out is writable",
+    () => {
+      rmSync(dest, { recursive: true, force: true });
+      mkdirSync(outRoot, { recursive: true });
+      cpSync(src, dest, { recursive: true });
+    }
+  );
 
   // Stamp the real version into the launcher's own version and every
   // optionalDependency, so the launcher pins the exact platform packages this
   // release publishes. The committed manifest carries a placeholder instead: a
   // real number there would be a second version source to drift.
   const manifestPath = join(dest, "package.json");
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const manifest = attempt(
+    "the committed launcher manifest is missing or is not JSON",
+    "restore npm/notignored/package.json from git",
+    () => JSON.parse(readFileSync(manifestPath, "utf8"))
+  );
   manifest.version = version;
   for (const dep of Object.keys(manifest.optionalDependencies || {})) {
     manifest.optionalDependencies[dep] = version;

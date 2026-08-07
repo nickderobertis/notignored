@@ -183,6 +183,9 @@ jobs:
       - name: Publish (skip a version already live)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # `cargo publish` verifies the packaged crate by building it, which is
+          # one more compile the gate never sees the output of.
+          RUSTFLAGS: "-D warnings"
         run: |
           ver="$(cargo metadata --no-deps --format-version 1 \
                  | sed -n 's/.*"name":"notignored","version":"\([^"]*\)".*/\1/p')"
