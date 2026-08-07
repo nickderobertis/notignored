@@ -6,11 +6,19 @@
  * camelCase mirror would be a second spelling of a published contract, and the
  * first field added upstream would land in only one of them.
  *
- * Validation is strict on purpose. `notignored` promises these records, so an
- * envelope that does not hold the shape is a broken promise somewhere upstream
- * — a resolved binary that is not `notignored`, or one newer than this SDK —
- * and a silently-skipped directive is the one outcome a suppression reporter
- * must never produce.
+ * Validation is strict in both directions: a missing or mistyped field is
+ * refused, and so is a field this version does not define. `notignored`
+ * promises these records, so an envelope that does not hold the shape is a
+ * broken promise somewhere upstream — a resolved binary that is not
+ * `notignored`, or one newer than this SDK — and a silently-skipped directive
+ * is the one outcome a suppression reporter must never produce.
+ *
+ * The cost of rejecting unknown fields is deliberate and worth writing down:
+ * the crate may add an *optional* field within version 1, and until it is added
+ * to the field lists below this reader will refuse that build's reports. That
+ * is the trade the strictness buys — the alternative is dropping a field whose
+ * presence changes what a record means — so adding a field to
+ * `src/model.rs::IgnoreDirective` means adding it here in the same change.
  */
 
 import { NotignoredContractError } from "./errors.js";
@@ -129,6 +137,29 @@ function record(value: unknown, at: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/**
+ * Reject an object carrying a field this version of the contract does not
+ * define.
+ *
+ * The other half of strict: a reader that checked only the fields it knew
+ * would accept a record whose *meaning* had changed — a `superseded_by`, a
+ * `severity` — and hand the caller a report that quietly says less than the
+ * one it was given. Refusing is the same decision the version check makes, one
+ * level down, and it is why a field added to the crate's record has to be
+ * added here in the same change.
+ */
+function only(node: Record<string, unknown>, at: string, known: readonly string[]): void {
+  for (const field of Object.keys(node)) {
+    if (!known.includes(field)) {
+      throw new NotignoredContractError(
+        `notignored returned a report this SDK cannot read: ${at} carries an unknown field ` +
+          `${JSON.stringify(field)} (version ${REPORT_VERSION} defines ${known.join(", ")}); ` +
+          "upgrade notignored-sdk",
+      );
+    }
+  }
+}
+
 function text(source: Record<string, unknown>, key: string, at: string): string {
   const value = source[key];
   if (typeof value !== "string") reject(`${at}.${key}`, "a string", value);
@@ -168,6 +199,7 @@ function list(source: Record<string, unknown>, key: string, at: string): unknown
 
 function suppressed(value: unknown, at: string): Suppressed {
   const node = record(value, at);
+  only(node, at, ["start_line", "end_line"]);
   return {
     start_line: coordinate(node, "start_line", at),
     end_line: optionalCoordinate(node, "end_line", at),
@@ -176,6 +208,18 @@ function suppressed(value: unknown, at: string): Suppressed {
 
 function directive(value: unknown, at: string): IgnoreDirective {
   const node = record(value, at);
+  only(node, at, [
+    "tool",
+    "scope",
+    "rules",
+    "reason",
+    "path",
+    "line",
+    "end_line",
+    "column",
+    "raw",
+    "suppressed",
+  ]);
   const tool = node.tool;
   if (!isTool(tool)) reject(`${at}.tool`, `one of ${toolNames()}`, tool);
   const scope = node.scope;
@@ -201,6 +245,7 @@ function directive(value: unknown, at: string): IgnoreDirective {
 
 function reportError(value: unknown, at: string): ReportError {
   const node = record(value, at);
+  only(node, at, ["path", "message"]);
   return { path: text(node, "path", at), message: text(node, "message", at) };
 }
 
@@ -225,11 +270,15 @@ export function parseReport(stdout: string): Report {
   if (typeof version !== "number" || !Number.isInteger(version) || version < 0) {
     reject("the report.version", "a non-negative integer", version);
   }
+  // The version is read before the envelope's own fields, so a build that
+  // *said* it was newer gets the message that names the upgrade rather than a
+  // complaint about whichever field it added.
   if (version > REPORT_VERSION) {
     throw new NotignoredContractError(
       `report version ${version} is newer than this SDK understands (${REPORT_VERSION}); upgrade notignored-sdk`,
     );
   }
+  only(node, "the report", ["version", "ignores", "errors"]);
   return {
     version,
     ignores: list(node, "ignores", "the report").map((entry, index) =>

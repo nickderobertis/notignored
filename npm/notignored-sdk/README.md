@@ -51,7 +51,8 @@ if (added.ignores.some((directive) => directive.reason === null)) {
 | `options.diffBase` | The git revision or range to compare against (`--diff-base`). Requires `diff: true`. |
 | `options.tools` | Report only these tools (`--tool`): `eslint`, `biome`, `ruff`, `typescript`, `mypy`, `pyright`, `ty`, `rust`, `shellcheck`, `llmlint`. |
 | `options.cwd` | Where to run. Report paths are relative to it. |
-| `options.bin` | The binary to run, overriding every other source. |
+
+Those four are the whole options bag; there is no fifth.
 
 It resolves to a `Report` — the same versioned JSON contract `notignored
 --format json` prints, field for field:
@@ -64,15 +65,20 @@ interface Report {
 }
 ```
 
-A file the binary could not read is a `ReportError` in `report.errors`, not an
-exception: the rest of the scan is still what a reviewer needs.
+Only a run that completed resolves. `notignored` exits non-zero when it could
+not read a file — even though it still prints the envelope, with that file in
+`errors` — so `scan` rejects with `NotignoredExitError` rather than hand back a
+report of a scan that skipped part of the tree. Read `exitCode` and `stderr` to
+decide what to do about it.
 
 ### Finding the binary
 
-In order: `options.bin`, the `NOTIGNORED_BIN` environment variable, the
-`notignored-cli` package installed beside this one, then `PATH`. With none of
-them, `scan` rejects with `NotignoredBinaryNotFoundError` and the ways to
-install one.
+In order: the `NOTIGNORED_BIN` environment variable, the `notignored-cli`
+package installed beside this one, then `PATH`. With none of them, `scan`
+rejects with `NotignoredBinaryNotFoundError` and the ways to install one.
+
+There is no call-site option for this on purpose — one mechanism, settable by a
+CI step or a test harness without touching any call site.
 
 ### Errors
 
@@ -83,8 +89,8 @@ Every rejection is a `NotignoredError`:
 | `NotignoredUsageError` | The call does not describe a run (`diffBase` without `diff`, an unknown tool). Nothing was spawned. |
 | `NotignoredBinaryNotFoundError` | No `notignored` could be resolved. |
 | `NotignoredSpawnError` | One was resolved and could not be started; `cause` is the operating system's error. |
-| `NotignoredExitError` | It ran and failed; `exitCode`, `signal`, and `stderr` say why. |
-| `NotignoredContractError` | What it returned is not a report this SDK can read — including an envelope from a newer build. |
+| `NotignoredExitError` | It exited non-zero, for any reason; `exitCode`, `signal`, and verbatim `stderr` say which. |
+| `NotignoredContractError` | A clean run's output is not a report this SDK can read — a missing field, an unknown one, or an envelope from a newer build. |
 
 ## Working on it
 

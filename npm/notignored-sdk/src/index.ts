@@ -39,8 +39,14 @@ export {
   NotignoredUsageError,
 } from "./errors.js";
 
-/** How one {@link scan} runs. */
-export interface ScanOptions {
+/**
+ * How one {@link scan} runs.
+ *
+ * Deliberately **not exported**: the public surface is `scan`, the record
+ * types, and the error classes. Which binary runs is not among these options
+ * either — that is `NOTIGNORED_BIN`'s job (see `src/binary.ts`).
+ */
+interface ScanOptions {
   /**
    * Report only the suppressions this change added, the way `--diff` does:
    * git names the changed files, and only directives on added lines survive.
@@ -55,11 +61,6 @@ export interface ScanOptions {
   tools?: readonly Tool[] | undefined;
   /** Where to run. Report paths are relative to it. Defaults to this process's. */
   cwd?: string | undefined;
-  /**
-   * The binary to run, overriding every other source. Otherwise `NOTIGNORED_BIN`,
-   * then the `notignored-cli` npm launcher, then `PATH`.
-   */
-  bin?: string | undefined;
 }
 
 /** Reject anything that is not a usable, non-empty string. */
@@ -116,17 +117,19 @@ function argumentsFor(paths: readonly string[], options: ScanOptions): string[] 
  *   recursively, honouring `.gitignore`. Defaults to the working directory.
  * @param options See {@link ScanOptions}.
  *
- * A report the binary produced always resolves, even when the binary exited
- * non-zero because it could not read one of the files: that file is in
- * `report.errors`, which is where the contract puts it, and losing the rest of
- * the scan to it would hide the suppressions that *were* found. A run that
- * produced no report at all rejects with {@link NotignoredExitError}.
+ * Only a run the binary completed resolves. A non-zero exit — a path that does
+ * not exist, a diff that could not be taken, a file it could not read — rejects
+ * with {@link NotignoredExitError}, whose `exitCode`, `signal`, and verbatim
+ * `stderr` are the whole of what went wrong. The binary still prints the
+ * envelope in some of those cases, but a report whose scan did not complete is
+ * not a scan result: handing it back as one would let a caller conclude a tree
+ * is clean from a run that never read half of it.
  *
  * @throws {NotignoredUsageError} when the arguments do not describe a run.
  * @throws {NotignoredBinaryNotFoundError} when no binary could be resolved.
  * @throws {NotignoredSpawnError} when the resolved binary could not be started.
- * @throws {NotignoredExitError} when it failed without producing a report.
- * @throws {NotignoredContractError} when what it produced is not one.
+ * @throws {NotignoredExitError} when it exited non-zero, for any reason.
+ * @throws {NotignoredContractError} when a clean run's output is not a report.
  */
 export async function scan(
   paths: readonly string[] = [],
@@ -143,9 +146,7 @@ export async function scan(
   // nothing installed should still be told which of the two is wrong first.
   const cwd = options.cwd === undefined ? undefined : requireText(options.cwd, "cwd");
   const args = argumentsFor(paths, options);
-  const binary = resolveBinary(
-    options.bin === undefined ? undefined : requireText(options.bin, "bin"),
-  );
+  const binary = resolveBinary();
 
   return await new Promise<Report>((resolve, reject) => {
     const child = spawn(binary.command, [...binary.prefix, ...args], {
@@ -171,27 +172,23 @@ export async function scan(
       // A spawn failure emits both `error` and `close`; the first one settled
       // the promise and this is the tail of it.
       if (failed) return;
-      if (code === 0) {
-        try {
-          resolve(parseReport(stdout));
-        } catch (error) {
-          reject(error as Error);
-        }
-        return;
-      }
-      // A non-zero exit that still printed the envelope is the documented
-      // "some file could not be read" case, and the report carries the reason.
-      // Anything else — a bad path, a diff that could not be taken — printed
-      // its explanation on stderr instead, so that is what the caller gets.
-      try {
-        resolve(parseReport(stdout));
-      } catch {
+      // Any non-zero exit, whatever it printed. The binary reports an
+      // unreadable file both ways — an `errors` entry on stdout *and* exit 2 —
+      // and taking only the stdout half would turn "this scan did not complete"
+      // into a report a caller reads as complete.
+      if (code !== 0) {
         reject(
           new NotignoredExitError(
             `notignored exited ${signal === null ? code : signal}: ${stderr.trim()}`,
             { exitCode: code, signal, stderr },
           ),
         );
+        return;
+      }
+      try {
+        resolve(parseReport(stdout));
+      } catch (error) {
+        reject(error as Error);
       }
     });
   });

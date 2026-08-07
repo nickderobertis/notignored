@@ -5,6 +5,9 @@
  * and only that one should be reported. Proving it needs real history — a
  * base commit, a change on top — because the semantics are git's (three-dot,
  * added lines only), not something the SDK could stand in for.
+ *
+ * The binary is named through `NOTIGNORED_BIN`, the only explicit selection the
+ * public surface has; `node --test` gives each file its own process.
  */
 
 import assert from "node:assert/strict";
@@ -13,7 +16,7 @@ import { test } from "node:test";
 import { NotignoredUsageError, scan } from "../dist/index.js";
 import { binary, commit, file, git, gitRepo, scratch } from "./support.mjs";
 
-const BIN = binary();
+process.env.NOTIGNORED_BIN = binary();
 
 const BASE = "import os  # noqa: F401  # already reviewed\n";
 const ADDED = "import sys  # noqa: F811  # newly added\n";
@@ -24,7 +27,7 @@ test("a diff scan reports only what the working tree added", async (t) => {
   commit(dir, "base");
   file(dir, "app.py", BASE + ADDED);
 
-  const report = await scan(["."], { cwd: dir, bin: BIN, diff: true });
+  const report = await scan(["."], { cwd: dir, diff: true });
 
   assert.deepEqual(
     report.ignores.map((directive) => [directive.line, directive.rules]),
@@ -38,7 +41,7 @@ test("a diff scan of an unchanged tree is empty", async (t) => {
   file(dir, "app.py", BASE);
   commit(dir, "base");
 
-  const report = await scan(["."], { cwd: dir, bin: BIN, diff: true });
+  const report = await scan(["."], { cwd: dir, diff: true });
 
   assert.deepEqual(report.ignores, []);
   assert.deepEqual(report.errors, []);
@@ -61,12 +64,7 @@ test("diffBase compares against the branch point, not the base branch's later co
   commit(dir, "unrelated work on main");
   git(dir, "switch", "--quiet", "feature");
 
-  const report = await scan(["."], {
-    cwd: dir,
-    bin: BIN,
-    diff: true,
-    diffBase: "main",
-  });
+  const report = await scan(["."], { cwd: dir, diff: true, diffBase: "main" });
 
   assert.deepEqual(
     report.ignores.map((directive) => [directive.path, directive.rules]),
@@ -82,7 +80,7 @@ test("paths narrow a diff scan the same way they narrow a tree scan", async (t) 
   file(dir, "app.py", BASE + ADDED);
   file(dir, "other.py", BASE + ADDED);
 
-  const report = await scan(["other.py"], { cwd: dir, bin: BIN, diff: true });
+  const report = await scan(["other.py"], { cwd: dir, diff: true });
 
   assert.deepEqual(
     report.ignores.map((directive) => directive.path),
@@ -94,7 +92,7 @@ test("a diff outside a repository rejects with what git said", async (t) => {
   const dir = scratch(t, "diff-none");
   file(dir, "app.py", BASE);
 
-  await assert.rejects(scan(["."], { cwd: dir, bin: BIN, diff: true }), (error) => {
+  await assert.rejects(scan(["."], { cwd: dir, diff: true }), (error) => {
     assert.equal(error.exitCode, 2);
     assert.match(error.stderr, /cannot diff/);
     return true;
@@ -107,8 +105,6 @@ test("a diff outside a repository rejects with what git said", async (t) => {
  * process to be told the same thing.
  */
 test("diffBase without diff is refused before anything is spawned", async () => {
-  // No `bin`, and none of these journeys install one: whether a call describes
-  // a run is decided before the environment is consulted at all.
   await assert.rejects(scan(["."], { diffBase: "main" }), (error) => {
     assert.ok(error instanceof NotignoredUsageError, `${error.name} is not a usage error`);
     assert.match(error.message, /diffBase requires diff: true/);
@@ -117,8 +113,5 @@ test("diffBase without diff is refused before anything is spawned", async () => 
 });
 
 test("an empty diffBase is refused too", async () => {
-  await assert.rejects(
-    scan(["."], { diff: true, diffBase: "", bin: BIN }),
-    NotignoredUsageError,
-  );
+  await assert.rejects(scan(["."], { diff: true, diffBase: "" }), NotignoredUsageError);
 });

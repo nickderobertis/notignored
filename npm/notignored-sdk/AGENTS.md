@@ -3,16 +3,32 @@
 Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
 
 - **The public surface is `scan` plus the contract types and the error classes,
-  and nothing else.** `src/binary.ts` and `src/contract.ts` are internals that
-  `src/index.ts` does not re-export; keep it that way. Adding a verb means
+  and nothing else** — `test/surface.test.mjs` reads the emitted `.d.ts` and
+  fails on any addition. `src/binary.ts` and `src/contract.ts` are internals
+  `src/index.ts` does not re-export, and `ScanOptions` is a parameter type, not
+  a product: exporting it would publish a name whose next added option is a
+  breaking change to something nobody meant to promise. Adding a verb means
   adding the CLI flag it mirrors, not a convenience the CLI cannot express.
+- **`scan` takes no binary argument.** `NOTIGNORED_BIN` is the whole of explicit
+  selection, then the `notignored-cli` launcher, then `PATH`. One mechanism,
+  settable by a CI step or a harness without touching a call site.
+- **Only a completed run resolves.** Any non-zero exit is a
+  `NotignoredExitError` carrying `exitCode`, `signal`, and verbatim `stderr` —
+  including the unreadable-file case, where the binary prints the envelope *and*
+  exits 2. Resolving that stdout would let a caller read "this tree is clean"
+  off a scan that never opened one of its files.
 - **The record types are the JSON's names** — `start_line`, not `startLine`. A
   camelCase mirror would be a second spelling of a published contract, and the
   first field added upstream would land in only one of them.
-- **Validation at the boundary is strict and never lossy.** An unknown tool or
-  scope, a missing field, or an envelope from a newer build is a
+- **Validation at the boundary is strict in both directions.** An unknown tool
+  or scope, a missing field, an envelope from a newer build — and a field this
+  version does not define, at any of the four objects (`Report`,
+  `IgnoreDirective`, `Suppressed`, `ReportError`) — is a
   `NotignoredContractError`. A suppression reporter that silently skipped a
   record it did not recognise would report an unjustified suppression as absent.
+  The price is real and deliberate: **adding a field to the crate's record means
+  adding it to the field lists in `src/contract.ts` in the same change**, or
+  this reader refuses the new build's reports even within version 1.
 - **Do not confuse this with `npm/notignored/`.** That is the CLI launcher whose
   `PACKAGES` map `tests/packaging_contract.rs` locks against the release
   matrices. This publishes `notignored-sdk`, from `scripts/pack.mjs`.

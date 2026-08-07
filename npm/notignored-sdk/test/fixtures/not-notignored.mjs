@@ -13,12 +13,19 @@
 //
 //   text         write something that is not JSON, exit 0
 //   not-object   write a JSON array, exit 0
-//   bad-tool     write a report naming a tool the contract does not have
-//   bad-scope    write a report naming a scope the contract does not have
-//   bad-version  write an envelope whose version is not a number
-//   missing      write a report whose directive has lost a field
-//   future       write an envelope from a version this SDK cannot read
-//   angry        write nothing on stdout, a reason on stderr, exit 3
+//   bad-tool     a tool the contract does not have
+//   bad-scope    a scope the contract does not have
+//   bad-version  an envelope whose version is not a number
+//   future       an envelope from a version this SDK cannot read
+//   angry        nothing on stdout, a reason on stderr, exit 3
+//
+// One pair per object boundary — a field the contract does not define, and a
+// field it requires:
+//
+//   extra-report      missing-errors
+//   extra-directive   missing-column
+//   extra-suppressed  missing-start-line
+//   extra-error       missing-message
 
 const REPORT = {
   version: 1,
@@ -39,37 +46,82 @@ const REPORT = {
   errors: [],
 };
 
-function directive(changes) {
-  const report = structuredClone(REPORT);
-  Object.assign(report.ignores[0], changes);
-  return report;
-}
+/** The envelope with the error entry the real binary emits for a bad file. */
+const WITH_ERROR = {
+  version: 1,
+  ignores: [],
+  errors: [{ path: "locked.py", message: "Permission denied (os error 13)" }],
+};
 
-function without(field) {
-  const report = structuredClone(REPORT);
-  delete report.ignores[0][field];
-  return report;
+/** A copy of `base` that `edit` has changed, ready to print. */
+function altered(base, edit) {
+  const copy = structuredClone(base);
+  edit(copy);
+  return copy;
 }
 
 const MODES = {
-  "not-object": () => process.stdout.write("[]"),
-  "bad-tool": () => process.stdout.write(JSON.stringify(directive({ tool: "flake8" }))),
-  "bad-scope": () => process.stdout.write(JSON.stringify(directive({ scope: "paragraph" }))),
-  "bad-version": () => process.stdout.write(JSON.stringify({ ...REPORT, version: "1" })),
-  missing: () => process.stdout.write(JSON.stringify(without("column"))),
-  future: () => process.stdout.write(JSON.stringify({ ...REPORT, version: 2 })),
-  text: () => process.stdout.write("notignored 9.9.9\n"),
-  angry: () => {
-    process.stderr.write("notignored: something went wrong\n");
-    process.exit(3);
-  },
+  "not-object": () => [],
+  "bad-tool": () =>
+    altered(REPORT, (report) => {
+      report.ignores[0].tool = "flake8";
+    }),
+  "bad-scope": () =>
+    altered(REPORT, (report) => {
+      report.ignores[0].scope = "paragraph";
+    }),
+  "bad-version": () => ({ ...REPORT, version: "1" }),
+  future: () => ({ ...REPORT, version: 2 }),
+
+  "extra-report": () =>
+    altered(REPORT, (report) => {
+      report.superseded_by = "nothing";
+    }),
+  "extra-directive": () =>
+    altered(REPORT, (report) => {
+      report.ignores[0].severity = "high";
+    }),
+  "extra-suppressed": () =>
+    altered(REPORT, (report) => {
+      report.ignores[0].suppressed.end_column = 40;
+    }),
+  "extra-error": () =>
+    altered(WITH_ERROR, (report) => {
+      report.errors[0].kind = "io";
+    }),
+
+  "missing-errors": () =>
+    altered(REPORT, (report) => {
+      delete report.errors;
+    }),
+  "missing-column": () =>
+    altered(REPORT, (report) => {
+      delete report.ignores[0].column;
+    }),
+  "missing-start-line": () =>
+    altered(REPORT, (report) => {
+      delete report.ignores[0].suppressed.start_line;
+    }),
+  "missing-message": () =>
+    altered(WITH_ERROR, (report) => {
+      delete report.errors[0].message;
+    }),
 };
 
 const mode = Object.keys(MODES).find((name) => process.argv[1].endsWith(`-${name}`));
+
+if (process.argv[1].endsWith("-angry")) {
+  process.stderr.write("notignored: something went wrong\n");
+  process.exit(3);
+}
+if (process.argv[1].endsWith("-text")) {
+  process.stdout.write("notignored 9.9.9\n");
+  process.exit(0);
+}
 if (mode === undefined) {
   process.stderr.write(
-    `not-notignored: ${process.argv[1]} names no mode (one of ${Object.keys(MODES).join(", ")})\n`,
+    `not-notignored: ${process.argv[1]} names no mode (one of ${Object.keys(MODES).join(", ")}, text, angry)\n`,
   );
   process.exit(64);
 }
-MODES[mode]();
+process.stdout.write(JSON.stringify(MODES[mode]()));

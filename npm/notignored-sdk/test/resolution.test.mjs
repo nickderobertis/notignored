@@ -3,8 +3,8 @@
  *
  * Binary resolution is the SDK's other trust boundary: everything downstream
  * assumes the command it spawned is `notignored`. These journeys drive each
- * source for real — an override, `PATH`, nothing at all — and each refusal
- * through a program that genuinely is not `notignored`.
+ * source for real — the `NOTIGNORED_BIN` override, `PATH`, nothing at all — and
+ * each refusal through a program that genuinely is not `notignored`.
  *
  * Unix only. The scratch commands are a symlink and a shebang script, and the
  * suite's own `PATH` manipulation has no Windows equivalent; the same reason
@@ -42,6 +42,12 @@ function isolatedEnvironment(t) {
   delete process.env.NOTIGNORED_BIN;
 }
 
+/** Point the SDK at `command` for the length of this journey. */
+function override(t, command) {
+  isolatedEnvironment(t);
+  process.env.NOTIGNORED_BIN = command;
+}
+
 function withFixture(t, label) {
   const dir = scratch(t, label);
   file(dir, "app.py", FIXTURE);
@@ -49,9 +55,8 @@ function withFixture(t, label) {
 }
 
 test("NOTIGNORED_BIN names the binary to run", unix, async (t) => {
-  isolatedEnvironment(t);
   const dir = withFixture(t, "env");
-  process.env.NOTIGNORED_BIN = BIN;
+  override(t, BIN);
 
   const report = await scan(["."], { cwd: dir });
 
@@ -133,24 +138,21 @@ test("an empty NOTIGNORED_BIN is no override at all", unix, async (t) => {
   );
 });
 
-test("the bin option outranks the environment", unix, async (t) => {
-  isolatedEnvironment(t);
-  const dir = withFixture(t, "bin-wins");
-  process.env.NOTIGNORED_BIN = notNotignored(t, "angry");
+test("the override outranks PATH", unix, async (t) => {
+  const dir = withFixture(t, "override-wins");
+  // The override is installed first, so the `PATH` this journey sets is the one
+  // its cleanup puts back.
+  override(t, notNotignored(t, "angry"));
+  process.env.PATH = binaryOnPath(t);
 
-  const report = await scan(["."], { cwd: dir, bin: BIN });
-
-  assert.deepEqual(
-    report.ignores.map((d) => d.rules),
-    [["F401"]],
-  );
+  await assert.rejects(scan(["."], { cwd: dir }), NotignoredExitError);
 });
 
-test("a bin that is not executable rejects as a spawn failure", async (t) => {
+test("an override that is not executable rejects as a spawn failure", async (t) => {
   const dir = scratch(t, "unspawnable");
-  const notAProgram = file(dir, "notes.txt", "this is not a program\n");
+  override(t, file(dir, "notes.txt", "this is not a program\n"));
 
-  await assert.rejects(scan(["."], { cwd: dir, bin: notAProgram }), (error) => {
+  await assert.rejects(scan(["."], { cwd: dir }), (error) => {
     assert.ok(error instanceof NotignoredSpawnError, `${error.name} is not a spawn error`);
     assert.match(error.message, /cannot run/);
     assert.ok(error.cause !== undefined, "the operating system's own error is carried");
@@ -158,26 +160,22 @@ test("a bin that is not executable rejects as a spawn failure", async (t) => {
   });
 });
 
-test("an empty bin is refused before anything is spawned", async () => {
-  await assert.rejects(scan(["."], { bin: "" }), NotignoredUsageError);
+test("a non-zero exit carries the exit code, the signal, and stderr", unix, async (t) => {
+  override(t, notNotignored(t, "angry"));
+
+  await assert.rejects(scan(["."]), (error) => {
+    assert.ok(error instanceof NotignoredExitError, `${error.name} is not an exit error`);
+    assert.equal(error.exitCode, 3);
+    assert.equal(error.signal, null);
+    assert.equal(error.stderr, "notignored: something went wrong\n");
+    return true;
+  });
 });
 
-test(
-  "a non-zero exit with nothing on stdout carries the exit code and stderr",
-  unix,
-  async (t) => {
-    await assert.rejects(scan(["."], { bin: notNotignored(t, "angry") }), (error) => {
-      assert.ok(error instanceof NotignoredExitError, `${error.name} is not an exit error`);
-      assert.equal(error.exitCode, 3);
-      assert.equal(error.signal, null);
-      assert.match(error.stderr, /something went wrong/);
-      return true;
-    });
-  },
-);
-
 test("output that is not JSON is a contract failure", unix, async (t) => {
-  await assert.rejects(scan(["."], { bin: notNotignored(t, "text") }), (error) => {
+  override(t, notNotignored(t, "text"));
+
+  await assert.rejects(scan(["."]), (error) => {
     assert.ok(
       error instanceof NotignoredContractError,
       `${error.name} is not a contract error`,
@@ -188,7 +186,9 @@ test("output that is not JSON is a contract failure", unix, async (t) => {
 });
 
 test("JSON that is not a report envelope is a contract failure", unix, async (t) => {
-  await assert.rejects(scan(["."], { bin: notNotignored(t, "not-object") }), (error) => {
+  override(t, notNotignored(t, "not-object"));
+
+  await assert.rejects(scan(["."]), (error) => {
     assert.ok(
       error instanceof NotignoredContractError,
       `${error.name} is not a contract error`,
@@ -199,7 +199,9 @@ test("JSON that is not a report envelope is a contract failure", unix, async (t)
 });
 
 test("a tool the contract does not have is refused, never skipped", unix, async (t) => {
-  await assert.rejects(scan(["."], { bin: notNotignored(t, "bad-tool") }), (error) => {
+  override(t, notNotignored(t, "bad-tool"));
+
+  await assert.rejects(scan(["."]), (error) => {
     assert.ok(
       error instanceof NotignoredContractError,
       `${error.name} is not a contract error`,
@@ -211,7 +213,9 @@ test("a tool the contract does not have is refused, never skipped", unix, async 
 });
 
 test("a scope the contract does not have is refused too", unix, async (t) => {
-  await assert.rejects(scan(["."], { bin: notNotignored(t, "bad-scope") }), (error) => {
+  override(t, notNotignored(t, "bad-scope"));
+
+  await assert.rejects(scan(["."]), (error) => {
     assert.ok(
       error instanceof NotignoredContractError,
       `${error.name} is not a contract error`,
@@ -225,19 +229,14 @@ test("a scope the contract does not have is refused too", unix, async (t) => {
 });
 
 test("an envelope version that is not a number is refused", unix, async (t) => {
-  await assert.rejects(scan(["."], { bin: notNotignored(t, "bad-version") }), (error) => {
+  override(t, notNotignored(t, "bad-version"));
+
+  await assert.rejects(scan(["."]), (error) => {
     assert.ok(
       error instanceof NotignoredContractError,
       `${error.name} is not a contract error`,
     );
     assert.match(error.message, /the report.version should be a non-negative integer/);
-    return true;
-  });
-});
-
-test("a directive missing a field names the field", unix, async (t) => {
-  await assert.rejects(scan(["."], { bin: notNotignored(t, "missing") }), (error) => {
-    assert.match(error.message, /ignores\[0\]\.column should be a positive integer/);
     return true;
   });
 });
@@ -248,7 +247,9 @@ test("a directive missing a field names the field", unix, async (t) => {
  * than refusing it.
  */
 test("an envelope from a newer build is refused with the upgrade to make", unix, async (t) => {
-  await assert.rejects(scan(["."], { bin: notNotignored(t, "future") }), (error) => {
+  override(t, notNotignored(t, "future"));
+
+  await assert.rejects(scan(["."]), (error) => {
     assert.ok(
       error instanceof NotignoredContractError,
       `${error.name} is not a contract error`,
@@ -259,8 +260,69 @@ test("an envelope from a newer build is refused with the upgrade to make", unix,
   });
 });
 
+/**
+ * Strict in both directions, at every object in the contract.
+ *
+ * A reader that checked only the fields it knew would accept a record whose
+ * meaning had changed under it — a `severity`, a `superseded_by` — and hand the
+ * caller a report that quietly says less than the one it was given. Each case
+ * below is one object boundary carrying a field version 1 does not define.
+ */
+for (const [mode, at, field] of [
+  ["extra-report", "the report", "superseded_by"],
+  ["extra-directive", "the report.ignores[0]", "severity"],
+  ["extra-suppressed", "the report.ignores[0].suppressed", "end_column"],
+  ["extra-error", "the report.errors[0]", "kind"],
+]) {
+  test(`an unknown field on ${at} is refused`, unix, async (t) => {
+    override(t, notNotignored(t, mode));
+
+    await assert.rejects(scan(["."]), (error) => {
+      assert.ok(
+        error instanceof NotignoredContractError,
+        `${error.name} is not a contract error`,
+      );
+      assert.ok(
+        error.message.includes(`${at} carries an unknown field "${field}"`),
+        `the message does not name ${at}.${field}: ${error.message}`,
+      );
+      assert.match(error.message, /upgrade notignored-sdk/);
+      return true;
+    });
+  });
+}
+
+/** The other direction, at the same four boundaries. */
+for (const [mode, wanted] of [
+  ["missing-errors", "the report.errors should be an array"],
+  ["missing-column", "the report.ignores[0].column should be a positive integer"],
+  [
+    "missing-start-line",
+    "the report.ignores[0].suppressed.start_line should be a positive integer",
+  ],
+  ["missing-message", "the report.errors[0].message should be a string"],
+]) {
+  test(`a missing field is refused: ${wanted}`, unix, async (t) => {
+    override(t, notNotignored(t, mode));
+
+    await assert.rejects(scan(["."]), (error) => {
+      assert.ok(
+        error instanceof NotignoredContractError,
+        `${error.name} is not a contract error`,
+      );
+      assert.ok(
+        error.message.includes(wanted),
+        `the message does not say so: ${error.message}`,
+      );
+      return true;
+    });
+  });
+}
+
+// No override and nothing installed by these: the arguments are decided before
+// the environment is consulted at all.
 test("a tool name the contract does not have is refused before spawning", async () => {
-  await assert.rejects(scan(["."], { tools: ["flake8"], bin: BIN }), (error) => {
+  await assert.rejects(scan(["."], { tools: ["flake8"] }), (error) => {
     assert.ok(error instanceof NotignoredUsageError, `${error.name} is not a usage error`);
     assert.match(error.message, /unknown tool "flake8"/);
     assert.match(error.message, /ruff/);
@@ -269,7 +331,7 @@ test("a tool name the contract does not have is refused before spawning", async 
 });
 
 test("tools must be an array", async () => {
-  await assert.rejects(scan(["."], { tools: "ruff", bin: BIN }), NotignoredUsageError);
+  await assert.rejects(scan(["."], { tools: "ruff" }), NotignoredUsageError);
 });
 
 test("options must be an object", async () => {
@@ -277,5 +339,5 @@ test("options must be an object", async () => {
 });
 
 test("cwd must be a non-empty string", async () => {
-  await assert.rejects(scan(["."], { cwd: "", bin: BIN }), NotignoredUsageError);
+  await assert.rejects(scan(["."], { cwd: "" }), NotignoredUsageError);
 });

@@ -1,11 +1,16 @@
 /**
  * Which `notignored` a scan runs, and what to say when there is none.
  *
- * Four sources, most explicit first: the `bin` option, the `NOTIGNORED_BIN`
- * environment variable, the `notignored-cli` npm launcher installed beside this
- * package, then `PATH`. The launcher outranks `PATH` for the same reason npm
- * prefers a project's own tooling to whatever is installed globally: a project
- * that pinned a version meant that version.
+ * Three sources, most explicit first: the `NOTIGNORED_BIN` environment
+ * variable, the `notignored-cli` npm launcher installed beside this package,
+ * then `PATH`. The launcher outranks `PATH` for the same reason npm prefers a
+ * project's own tooling to whatever is installed globally: a project that
+ * pinned a version meant that version.
+ *
+ * `scan` takes no binary argument. The approved signature is
+ * `scan(paths?, { diff, diffBase, tools, cwd })` and nothing else, so
+ * `NOTIGNORED_BIN` is the whole of explicit selection — which is also the one
+ * form a CI step or a test harness can set without touching call sites.
  */
 
 import { accessSync, constants, statSync } from "node:fs";
@@ -89,9 +94,7 @@ function onPath(): string | undefined {
  *
  * @throws {NotignoredBinaryNotFoundError} when no source yields one.
  */
-export function resolveBinary(bin?: string | undefined): ResolvedBinary {
-  if (bin !== undefined) return { command: bin, prefix: [] };
-
+export function resolveBinary(): ResolvedBinary {
   const override = process.env[BINARY_ENV_VAR];
   if (override !== undefined && override !== "") {
     return { command: override, prefix: [] };
