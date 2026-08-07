@@ -120,6 +120,11 @@ test("with nothing installed, the error says how to install one", unix, async (t
       );
     }
     assert.match(error.message, /NOTIGNORED_BIN/);
+    // Only mechanisms that exist. This message is the whole of what a caller
+    // with nothing installed has to go on, and the approved signature has no
+    // option of any kind for choosing a binary — so naming one here would send
+    // them looking for an argument they cannot pass.
+    assert.doesNotMatch(error.message, /option/);
     return true;
   });
 });

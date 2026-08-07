@@ -35,7 +35,7 @@ const INSTALL_GUIDANCE =
   "no notignored binary found. Install one with `npm install notignored-cli` " +
   "(or `-g`), `pip install notignored-cli`, or " +
   "`cargo install --git https://github.com/nickderobertis/notignored --locked`; " +
-  `or point the ${BINARY_ENV_VAR} environment variable (or scan's \`bin\` option) at an existing one.`;
+  `or point the ${BINARY_ENV_VAR} environment variable at an existing one.`;
 
 /** A resolved command and the arguments that must precede the scan's own. */
 export interface ResolvedBinary {
