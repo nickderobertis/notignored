@@ -10,16 +10,24 @@
 # workflow keeps passing after the record around it changes shape.
 #
 # Deliberately toolchain-free: bash, diff, and the installed binary. The
-# scheduled sweep runs every week on four runners, and anything it had to
-# install first would be a second thing that can rot.
+# scheduled sweep runs this every week on every OS, for both registries, and
+# anything it had to install first would be a second thing that can rot.
 set -euo pipefail
 
 # Collation decides the glob order below, which decides the order the records
 # come back in. Fix it so the golden is the same file on every runner.
 export LC_ALL=C
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(dirname "$here")"
+# Shell builtins only, no `dirname`: the first thing this reports is a host where
+# nothing installed `notignored`, and on that host PATH is exactly as likely to be
+# the thing that is wrong. Resolving our own assets must not depend on it.
+self="${BASH_SOURCE[0]}"
+here="${self%/*}"
+if [ "$here" = "$self" ]; then
+  here="."
+fi
+here="$(cd "$here" && pwd)"
+root="${here%/*}"
 
 fixtures="$root/tests/fixtures/smoke"
 expected="$root/tests/golden/smoke.json"

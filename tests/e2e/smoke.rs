@@ -3,9 +3,8 @@
 //! `release.yml`'s verify jobs and `published-smoke.yml` prove `pip install
 //! notignored-cli` and `npm install -g notignored-cli` on Linux, macOS, and
 //! Windows — but what they assert is `scripts/smoke-published.sh`, and nothing
-//! on a runner can
-//! tell whether that script's golden still describes the parser that shipped
-//! inside the package. A release is the wrong place to find out.
+//! on a runner can tell whether that script's golden still describes the parser
+//! that shipped inside the package. A release is the wrong place to find out.
 //!
 //! So this journey runs the **same file** those workflows run, over the same
 //! fixture tree and the same golden, against the freshly compiled `notignored`
@@ -70,28 +69,58 @@ fn smoke(args: &[&str]) -> Output {
         .parent()
         .expect("the built binary has a directory")
         .to_path_buf();
+    smoke_with_first_on_path(&bin_dir, args)
+}
+
+/// The same, with `first` ahead of the inherited PATH — the one knob that
+/// decides which `notignored` the script finds, which is the whole of what an
+/// install does.
+fn smoke_with_first_on_path(first: &Path, args: &[&str]) -> Output {
     let path = match std::env::var_os("PATH") {
         Some(existing) => {
-            let mut entries = vec![bin_dir];
+            let mut entries = vec![first.to_path_buf()];
             entries.extend(std::env::split_paths(&existing));
-            std::env::join_paths(entries).expect("a PATH with the built binary first")
+            std::env::join_paths(entries).expect("a PATH with the given directory first")
         }
-        None => bin_dir.into_os_string(),
+        None => first.as_os_str().to_os_string(),
     };
+    smoke_on_path(&path, args)
+}
+
+/// The `bash` that runs the script, resolved to an absolute path.
+///
+/// Resolved rather than spawned by name because one journey below hands the
+/// script a PATH holding nothing at all — the only way to model a host where no
+/// install put `notignored` anywhere — and a bash found through that PATH could
+/// not be started either.
+fn bash_program() -> PathBuf {
+    let name = if cfg!(windows) { "bash.exe" } else { "bash" };
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "no {name} on PATH\n\
+                 ACTION: install bash — the release and scheduled smoke workflows run \
+                 scripts/smoke-published.sh on every runner, so it has to be drivable here too"
+            )
+        })
+}
+
+/// The same, on exactly `path` — the only way to model a host where nothing
+/// installed `notignored` at all.
+fn smoke_on_path(path: &std::ffi::OsStr, args: &[&str]) -> Output {
     let script = repo_root().join("scripts").join("smoke-published.sh");
-    Command::new("bash")
+    Command::new(bash_program())
         .arg(bash_path(&script))
         .args(args)
         .current_dir(repo_root())
         .env("PATH", path)
         .output()
-        .unwrap_or_else(|error| {
-            panic!(
-                "cannot run scripts/smoke-published.sh: {error}\n\
-                 ACTION: install bash — the release and scheduled smoke workflows run this \
-                 script on every runner, so it has to be drivable here too"
-            )
-        })
+        .unwrap_or_else(|error| panic!("cannot run scripts/smoke-published.sh: {error}"))
 }
 
 fn stdout(output: &Output) -> String {
@@ -276,27 +305,163 @@ fn the_smoke_refuses_arguments_it_cannot_act_on() {
 ///
 /// The workflows run this from a fresh checkout at the released tag, where a
 /// path that moved shows up as an absent file rather than as a failing
-/// assertion. Reporting it as a drifted report would send whoever reads the run
-/// looking for a parser bug that is not there.
+/// assertion. Reporting any of these as a drifted report would send whoever
+/// reads the run looking for a parser bug that is not there.
 #[test]
 fn the_smoke_reports_assets_it_cannot_find() {
     let scratch = tempfile::tempdir().expect("a scratch directory");
-    let missing = scratch.path().join("gone");
-    let output = smoke(&[
-        "--fixtures",
-        &bash_path(&missing),
-        "--label",
-        "npm on ubuntu-latest",
-    ]);
+    let gone = bash_path(&scratch.path().join("gone"));
+    let empty = scratch.path().join("empty");
+    std::fs::create_dir_all(&empty).expect("create an empty fixture tree");
+    let empty = bash_path(&empty);
+
+    for (what, args, expected) in [
+        (
+            "a fixture tree that is not there",
+            vec!["--fixtures", gone.as_str()],
+            "no fixture directory at",
+        ),
+        (
+            "a golden that is not there",
+            vec!["--expected", gone.as_str()],
+            "no golden report at",
+        ),
+        (
+            // A checkout that succeeded and delivered nothing: the comparison
+            // would otherwise be against an empty argument list, which every
+            // build passes.
+            "a fixture tree with nothing in it",
+            vec!["--fixtures", empty.as_str()],
+            "no fixture files in",
+        ),
+    ] {
+        let mut args = args;
+        args.extend(["--label", "npm on ubuntu-latest"]);
+        let output = smoke(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{what} must fail the smoke\n{}",
+            stdout(&output)
+        );
+        let stderr = stderr(&output);
+        assert!(
+            stderr.contains("::error::npm on ubuntu-latest:") && stderr.contains(expected),
+            "{what} was not reported as a missing asset; wanted {expected:?}:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("ACTION:"),
+            "{what} was reported with no next action:\n{stderr}"
+        );
+    }
+}
+
+/// A host where the install put nothing on PATH is told to install it.
+///
+/// `pip install` and `npm install -g` both put their command somewhere the shell
+/// has to already be looking; a runner whose PATH the installer never updated
+/// gets an empty `command -v` and no other symptom.
+#[test]
+fn the_smoke_reports_an_install_that_never_reached_path() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    // Exactly one empty directory: even a `notignored` the developer happens to
+    // have installed must not satisfy this.
+    let output = smoke_on_path(
+        scratch.path().as_os_str(),
+        &["--label", "PyPI on macos-latest"],
+    );
     assert_eq!(
         output.status.code(),
         Some(1),
-        "a missing fixture tree must fail the smoke\n{}",
+        "a host with no notignored must fail the smoke\n{}",
         stdout(&output)
     );
     let stderr = stderr(&output);
     assert!(
-        stderr.contains("no fixture directory at") && stderr.contains("check out the repository"),
-        "the failure did not name the missing assets:\n{stderr}"
+        stderr.contains("::error::PyPI on macos-latest: no 'notignored' on PATH")
+            && stderr.contains("pip install notignored-cli"),
+        "the failure did not name the missing command or how to install it:\n{stderr}"
+    );
+}
+
+/// A scan that could not complete is reported as that, with the binary's own
+/// diagnosis.
+///
+/// The published binary is real, so the way this happens in the wild is the
+/// input: a file it cannot decode, a path it cannot read. That exits 2, not 1,
+/// and a smoke that only diffed the report would call it a drift.
+#[test]
+fn the_smoke_reports_a_scan_that_could_not_complete() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let tree = scratch.path().join("undecodable");
+    std::fs::create_dir_all(&tree).expect("create the fixture copy");
+    std::fs::write(tree.join("app.py"), b"x = 1  # noqa: E501 \xff\xfe\n")
+        .expect("write a file that is not UTF-8");
+
+    let output = smoke(&[
+        "--fixtures",
+        &bash_path(&tree),
+        "--label",
+        "npm on windows-latest",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a scan that could not complete must fail the smoke\n{}",
+        stdout(&output)
+    );
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("::error::npm on windows-latest: the scan exited non-zero"),
+        "the failure did not say the scan itself failed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("valid UTF-8"),
+        "the binary's own diagnosis was swallowed:\n{stderr}"
+    );
+}
+
+/// A command on PATH that cannot even report its version fails as an install
+/// problem.
+///
+/// npm and pip can both leave a launcher that resolves and a payload that does
+/// not run — a package unpacked without the executable bit, a binary for the
+/// wrong libc. The first thing the smoke asks it is `--version`, and that has to
+/// read as a broken install rather than as a report that differs.
+///
+/// POSIX-only: the branch needs a `notignored` that fails, which means putting a
+/// stand-in on PATH, and a shell stand-in is one on every runner where this
+/// branch can be reached. What is under test is the script's handling, not
+/// notignored.
+#[cfg(unix)]
+#[test]
+fn the_smoke_reports_a_binary_that_cannot_report_its_version() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let stub = scratch.path().join("notignored");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\necho 'notignored: cannot execute' >&2\nexit 126\n",
+    )
+    .expect("write the stand-in");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+        .expect("make the stand-in executable");
+
+    let output = smoke_with_first_on_path(scratch.path(), &["--label", "PyPI on ubuntu-latest"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a binary that cannot run must fail the smoke\n{}",
+        stdout(&output)
+    );
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("::error::PyPI on ubuntu-latest: 'notignored --version' exited non-zero"),
+        "the failure did not name the version check:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot execute"),
+        "the stand-in's own output was swallowed:\n{stderr}"
     );
 }
