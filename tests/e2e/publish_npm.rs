@@ -39,6 +39,9 @@ enum Registry {
     Absent,
     /// The registry is having a bad day: 503, which is neither of the above.
     Unavailable,
+    /// The package is absent, but the upload is refused — a token without rights
+    /// to this name, which is what a mis-scoped automation token looks like.
+    AbsentAndUnwritable,
 }
 
 /// A registry on loopback, and the record of what was PUT to it.
@@ -155,7 +158,13 @@ fn serve_one(mut stream: TcpStream, answer: Registry, published: &Arc<Mutex<Vec<
             .lock()
             .expect("the publish log")
             .push(name.to_string());
-        ("201 Created", format!("{{\"ok\":\"created {name}\"}}"))
+        match answer {
+            Registry::AbsentAndUnwritable => (
+                "403 Forbidden",
+                format!("{{\"error\":\"you do not have permission to publish {name}\"}}"),
+            ),
+            _ => ("201 Created", format!("{{\"ok\":\"created {name}\"}}")),
+        }
     } else {
         match answer {
             Registry::Published => (
@@ -165,7 +174,9 @@ fn serve_one(mut stream: TcpStream, answer: Registry, published: &Arc<Mutex<Vec<
                      \"versions\":{{\"0.1.0\":{{\"name\":\"{name}\",\"version\":\"0.1.0\"}}}}}}"
                 ),
             ),
-            Registry::Absent => ("404 Not Found", "{\"error\":\"Not found\"}".to_string()),
+            Registry::Absent | Registry::AbsentAndUnwritable => {
+                ("404 Not Found", "{\"error\":\"Not found\"}".to_string())
+            }
             Registry::Unavailable => (
                 "503 Service Unavailable",
                 "{\"error\":\"registry is down\"}".to_string(),
@@ -352,5 +363,68 @@ fn no_package_argument_is_refused() {
     assert!(
         stderr.contains("at least one package"),
         "the refusal does not say what was missing:\n{stderr}"
+    );
+}
+
+/// A publish the registry refuses fails the release, and says what npm said.
+///
+/// The registry agrees the version is new, so the script is right to try — and
+/// then the upload is rejected anyway, which is what a token scoped to the wrong
+/// package looks like. Swallowing that would leave a release reporting success
+/// with nothing on the registry, so the exit code has to carry it and npm's own
+/// reason has to reach the log.
+#[test]
+fn a_publish_the_registry_refuses_fails_the_release() {
+    let registry = FakeRegistry::start(Registry::AbsentAndUnwritable);
+    let (scratch, package) = fixture();
+
+    let output = publish(&registry, &package, scratch.path());
+    assert!(
+        !output.status.success(),
+        "a refused upload must fail the release: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        registry.publishes(),
+        vec!["notignored-cli".to_string()],
+        "the script did not actually attempt the publish it reported failing"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("could not publish") && stderr.contains("re-run the release"),
+        "the failure does not say what to do about it:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("permission"),
+        "npm's own reason never reached the log:\n{stderr}"
+    );
+}
+
+/// Something that is not a package at all is refused before any registry call.
+///
+/// `npm pack` is what turns the argument into a name and version, so a path that
+/// does not hold a manifest has no identity to ask the registry about. Guessing
+/// one would query — and possibly publish — under a name nobody chose.
+#[test]
+fn an_argument_that_is_not_a_package_is_refused_before_the_registry_is_asked() {
+    let registry = FakeRegistry::start(Registry::Absent);
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let not_a_package = scratch.path().join("not-a-package");
+    std::fs::create_dir_all(&not_a_package).expect("create the directory");
+
+    let output = publish(&registry, &not_a_package, scratch.path());
+    assert!(
+        !output.status.success(),
+        "a directory with no manifest is not a package"
+    );
+    assert!(
+        registry.publishes().is_empty(),
+        "the script published something it could not name: {:?}",
+        registry.publishes()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot read package metadata") && stderr.contains("npm-build.mjs"),
+        "the refusal does not name the fix:\n{stderr}"
     );
 }

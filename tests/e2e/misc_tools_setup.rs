@@ -63,22 +63,31 @@ fn the_script_is_silent_and_idempotent_once_the_pinned_tools_are_installed() {
     );
 }
 
-/// Every tool it claims to own is installed, at the version its pin file names.
+/// After the script runs, every tool it owns resolves at the version its pin
+/// file names.
 ///
-/// `tool_binary` resolves the tool under `.dev/<tool>` and asserts it reports the
-/// pin, so this fails both when the script stopped provisioning one and when it
-/// provisioned a different version than the repo declares. maturin is the reason
-/// this test exists: it is not a parity tool, so nothing else in the suite would
-/// notice it going missing until a wheel came out wrong.
+/// The assertion is on what running the installer *leaves behind*, not on what
+/// its source says: `tool_binary` resolves each tool under `.dev/<tool>` and
+/// asserts the binary reports the pin. On a cold checkout — every CI leg — the
+/// run above is the only thing that could have put it there, so this fails when
+/// the script stops provisioning one and when it provisions a version the repo
+/// does not declare. maturin is the reason it exists: it is not a parity tool, so
+/// nothing else in the suite would notice it going missing until a wheel came out
+/// wrong.
 #[test]
-fn the_script_provisions_every_tool_it_owns_at_its_pin() {
-    let script = std::fs::read_to_string(repo_root().join("scripts/setup-misc-tools.sh"))
-        .expect("read setup-misc-tools.sh");
+fn every_tool_the_script_owns_resolves_at_its_pin_afterwards() {
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/setup-misc-tools.sh"))
+        .current_dir(repo_root())
+        .output()
+        .expect("run setup-misc-tools.sh");
+    assert!(
+        output.status.success(),
+        "the installer failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     for tool in TOOLS {
-        assert!(
-            script.contains(&format!("\"{tool} ")),
-            "setup-misc-tools.sh no longer provisions {tool}"
-        );
         // Panics with the `just bootstrap` action when it is missing or wrong.
         let binary = tool_binary(tool);
         assert!(

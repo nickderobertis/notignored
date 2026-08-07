@@ -133,6 +133,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build, archive, checksum, and upload
+        # Same rule as the wheel and npm builds: four of these targets are
+        # compiled nowhere else, so a warning specific to one has no other job
+        # to surface it.
+        env:
+          RUSTFLAGS: "-D warnings"
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: notignored

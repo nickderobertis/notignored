@@ -613,3 +613,74 @@ fn the_package_builder_refuses_input_it_cannot_turn_into_a_package() {
         );
     }
 }
+
+/// A platform package whose binary will not exec fails legibly, not with a stack
+/// trace.
+///
+/// npm can deliver a package whose payload is unusable — an archive unpacked
+/// without the executable bit, a partially written file, a filesystem mounted
+/// `noexec`. The shim has already resolved the package by then, so this is a
+/// different failure from a missing one, and the user is one message away from
+/// filing it against the wrong repository. Replacing the binary with a directory
+/// is the one form of "resolves but will not run" that behaves the same for
+/// every user, root included.
+#[test]
+fn the_npm_launcher_explains_a_binary_it_cannot_run() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let binary = assert_cmd::cargo::cargo_bin("notignored");
+    let dist = scratch.path().join("dist");
+    let dist = dist.to_str().expect("a UTF-8 path");
+
+    let platform = npm_build(
+        "platform",
+        &[
+            "--target",
+            host_target(),
+            "--binary",
+            binary.to_str().expect("a UTF-8 binary path"),
+            "--out",
+            dist,
+        ],
+    );
+    let launcher = npm_build("launcher", &["--out", dist]);
+    let tarballs = scratch.path().join("tarballs");
+    let platform_tgz = npm_pack(&platform, &tarballs);
+    let launcher_tgz = npm_pack(&launcher, &tarballs);
+
+    let prefix = scratch.path().join("prefix");
+    let install = npm_install(&prefix, &[&platform_tgz, &launcher_tgz], &[]);
+    assert!(
+        install.status.success(),
+        "npm install failed\n{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let name = if cfg!(windows) {
+        "notignored.exe"
+    } else {
+        "notignored"
+    };
+    let installed = prefix
+        .join(if cfg!(windows) { "" } else { "lib" })
+        .join("node_modules")
+        .join(host_platform_package())
+        .join("bin")
+        .join(name);
+    std::fs::remove_file(&installed).expect("remove the installed binary");
+    std::fs::create_dir(&installed).expect("put a directory where the binary was");
+
+    let output = installed_npm_command(&prefix)
+        .arg("--version")
+        .output()
+        .expect("run the launcher");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the launcher must exit 1 when its binary will not run"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("failed to launch the notignored binary"),
+        "the launcher did not say it could not start the binary:\n{stderr}"
+    );
+}
