@@ -1,0 +1,42 @@
+{
+  "name": "notignored-sdk-python",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "python/notignored-sdk/src",
+  "tags": ["scope:sdk", "lang:python"],
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "parallel": false,
+        "commands": [
+          "bash ../../scripts/setup-python-tools.sh",
+          "uv sync --locked --quiet"
+        ],
+        "cwd": "python/notignored-sdk"
+      }
+    },
+    "format": {
+      "command": "bash ../../scripts/dev-tool.sh ruff format .",
+      "options": { "cwd": "python/notignored-sdk" }
+    },
+    "format-check": {
+      "command": "bash ../../scripts/dev-tool.sh ruff format --check .",
+      "options": { "cwd": "python/notignored-sdk" },
+      "inputs": ["default", "pythonToolchain"]
+    },
+    "lint": {
+      "command": "bash ../../scripts/dev-tool.sh ruff check .",
+      "options": { "cwd": "python/notignored-sdk" },
+      "inputs": ["default", "pythonToolchain"]
+    },
+    "test": {
+      "command": "uv run --quiet pytest --quiet",
+      "options": { "cwd": "python/notignored-sdk" }
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "test"]
+    }
+  }
+}

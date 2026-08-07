@@ -1,5 +1,15 @@
 /target
 /.dev
+# The Nx orchestrator's own install and computation cache. `scripts/nx.sh`
+# re-creates node_modules from the committed lockfile whenever it is missing.
+/node_modules
+/.nx
+# Each project's own provisioned environment; every one is re-created from a
+# committed lockfile by its `bootstrap` target.
+.venv/
+# Interpreter and runner scratch from the Python SDK's suite.
+__pycache__/
+.pytest_cache/
 # Assembled by scripts/npm-build.mjs and maturin; the committed sources are
 # npm/notignored/ and pyproject.toml.
 /npm/dist

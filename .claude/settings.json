@@ -18,6 +18,10 @@
     "allow": [
       "Bash(just bootstrap)",
       "Bash(just check)",
+      "Bash(just check-affected)",
+      "Bash(just affected-crate)",
+      "Bash(just nx show projects)",
+      "Bash(just nx graph)",
       "Bash(just test)",
       "Bash(just test-e2e)",
       "Bash(just lint)",

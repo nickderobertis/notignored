@@ -17,14 +17,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The full gate on a clean checkout: bootstrap from scratch, then `just check`
-  # (format, clippy, tests incl. e2e with the coverage threshold, docs).
+  # Which projects this pull request's diff can reach, derived once so every
+  # Rust-artifact job below can skip on an SDK-only change instead of paying the
+  # full matrix. On a push to main it answers `true` for everything.
+  #
+  # `just affected-crate` fails closed: with no derivable merge base — a shallow
+  # clone, a missing base branch — it says the crate is affected and the matrices
+  # run. Affected selection is a speed optimisation, and one that can silently
+  # skip a check is a correctness hole.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      crate: ${{ steps.affected.outputs.crate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `nx affected` needs the merge base, which a shallow checkout does not
+          # have.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: extractions/setup-just@v3
+      - name: Which projects the diff reaches
+        id: affected
+        run: echo "crate=$(just affected-crate)" >> "$GITHUB_OUTPUT"
+
+  # The full gate on a clean checkout: bootstrap from scratch, then the quality
+  # gate (format, clippy, tests incl. e2e with the coverage threshold, docs) over
+  # every project. A pull request runs it over the affected projects only; main
+  # runs the whole graph, so nothing affected-detection or a stale cache could
+  # miss survives past the merge.
   # Linux-only because coverage is measured here; macOS/Windows prove the
   # artifact via the `cross` job below.
   gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-node@v4
@@ -35,16 +66,22 @@ jobs:
           tool: just,nextest,cargo-llvm-cov
       - name: Bootstrap
         run: just bootstrap
-      - name: Full gate (fmt, clippy, tests + coverage, docs)
+      - name: Quality gate (affected projects)
+        if: github.event_name == 'pull_request'
+        run: just check-affected
+      - name: Quality gate (every project)
+        if: github.event_name != 'pull_request'
         run: just check
       # A committed lockfile that `just bootstrap`/`just check` had to change is
       # a stale generated file; fail rather than let it drift.
       - name: Committed generated files are up to date
-        run: git diff --exit-code -- Cargo.lock
+        run: git diff --exit-code -- Cargo.lock package-lock.json python/notignored-sdk/uv.lock
 
   # Prove the artifact builds and its tests pass on macOS and Windows (without
   # the coverage threshold, which is enforced on Linux).
   cross:
+    needs: changes
+    if: needs.changes.outputs.crate == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -74,6 +111,8 @@ jobs:
   # document it: a floor that only lives in Cargo.toml drifts the first time a
   # dependency raises its own.
   msrv:
+    needs: changes
+    if: needs.changes.outputs.crate == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +134,8 @@ jobs:
   # Advisory + license audit and unused-dependency check. Its own Linux-only job:
   # it needs a network advisory DB and must not be duplicated across the matrix.
   deny:
+    needs: changes
+    if: needs.changes.outputs.crate == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -109,7 +150,8 @@ jobs:
   # fetch — so the path users take is exercised on every PR, not only after a
   # release.
   install:
-    needs: gate
+    needs: [changes, gate]
+    if: needs.changes.outputs.crate == 'true'
     strategy:
       fail-fast: false
       matrix:

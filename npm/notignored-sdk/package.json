@@ -1,0 +1,17 @@
+{
+  "name": "notignored-sdk",
+  "version": "0.0.0-managed",
+  "private": true,
+  "description": "TypeScript SDK for notignored. Scaffolded and wired into the project graph; the SDK itself has not landed yet.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": ["src"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nickderobertis/notignored.git",
+    "directory": "npm/notignored-sdk"
+  }
+}
