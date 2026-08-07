@@ -457,3 +457,50 @@ fn the_readmes_name_the_platforms_the_release_builds() {
         );
     }
 }
+
+/// Only the jobs that read the repository are given a token that can.
+///
+/// The release workflow holds the credentials for three registries, so its token
+/// is worth keeping small: a top-level grant is inherited by every job, including
+/// the ones that only move artifacts between jobs or install from a public
+/// registry. This ties the grant to the evidence — a job that checks out gets
+/// repository access, and a job that does not gets none — so adding a job cannot
+/// silently widen the token.
+#[test]
+fn only_the_jobs_that_read_the_repository_may() {
+    let workflow = release_workflow();
+    assert_eq!(
+        workflow.get("permissions").scalar(),
+        "{}",
+        "the workflow grants a permission to every job by default"
+    );
+
+    let jobs = jobs();
+    for name in jobs.keys() {
+        let job = jobs.get(name);
+        let checks_out = job.find("steps").is_some_and(|steps| {
+            steps.list().iter().any(|step| {
+                step.find("uses")
+                    .is_some_and(|uses| uses.scalar().starts_with("actions/checkout@"))
+            })
+        });
+        let granted = job
+            .find("permissions")
+            .is_some_and(|permissions| permissions.find("contents").is_some());
+        assert_eq!(
+            granted,
+            checks_out,
+            "`{name}` {} the repository but {} `contents` access",
+            if checks_out {
+                "checks out"
+            } else {
+                "never reads"
+            },
+            if granted {
+                "is granted"
+            } else {
+                "is not granted"
+            }
+        );
+    }
+}

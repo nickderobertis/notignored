@@ -54,8 +54,10 @@ on:
   release:
     types: [published]
 
-permissions:
-  contents: read
+# Nothing by default: the jobs that read the repository ask for `contents: read`
+# themselves, and the three that only move artifacts between jobs or install from
+# a public registry get a token with no scopes at all.
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -92,6 +94,8 @@ jobs:
   # publish an artifact that would not pass the gate.
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -155,6 +159,8 @@ jobs:
     needs: [guard, test]
     if: ${{ needs.guard.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -185,6 +191,8 @@ jobs:
   build-wheels:
     name: build-wheels (${{ matrix.target }})
     needs: test
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -319,6 +327,8 @@ jobs:
   build-npm:
     name: build-npm (${{ matrix.target }})
     needs: test
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -378,6 +388,8 @@ jobs:
   # `id-token: write` on this job.
   publish-npm:
     needs: build-npm
+    permissions:
+      contents: read
     if: ${{ vars.NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     defaults:
