@@ -87,7 +87,7 @@ In CI there is nothing to install: the [GitHub Action](#on-a-pull-request-the-gi
 fetches the release binary itself and posts what the pull request added.
 
 ```yaml
-- uses: nickderobertis/notignored@main
+- uses: nickderobertis/notignored@v0
 ```
 
 ## Try it
@@ -204,8 +204,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # the base branch has to be fetched to diff against it
-      - uses: nickderobertis/notignored@main
+      - uses: nickderobertis/notignored@v0
 ```
+
+`@v0` is a **floating major tag**: it follows every release in the `0.x` line and
+moves only once that release's artifacts have published, so it never resolves to
+unreleased work. It will keep meaning `0.x` after `v1` exists. Pin exactly —
+`nickderobertis/notignored@v0.1.10` — where a reproducible build matters more
+than picking up fixes; the tag for a specific version never moves.
 
 | Input | Default | Meaning |
 | --- | --- | --- |
@@ -220,7 +226,7 @@ It exposes `count` (how many suppressions the change added) and `report-path`
 gate on a threshold:
 
 ```yaml
-      - uses: nickderobertis/notignored@main
+      - uses: nickderobertis/notignored@v0
         id: notignored
       - if: steps.notignored.outputs.count != '0'
         run: echo "this change adds ${{ steps.notignored.outputs.count }} suppression(s)"

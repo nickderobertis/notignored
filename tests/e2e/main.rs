@@ -18,6 +18,7 @@ mod examples;
 mod installer;
 mod js_tools_setup;
 mod llmlint_parity;
+mod major_tag;
 mod markdown;
 mod misc_tools_setup;
 mod nx_workspace;

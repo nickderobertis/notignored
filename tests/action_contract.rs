@@ -334,3 +334,117 @@ impl ToVec for Node {
         self.list().to_vec()
     }
 }
+
+/// The `nickderobertis/notignored@<ref>` spellings the README hands a consumer,
+/// paired with whether each one is a `uses:` line rather than prose.
+fn readme_action_refs() -> Vec<(String, bool)> {
+    let readme = read("README.md");
+    let mut refs = Vec::new();
+    for line in readme.lines() {
+        let is_uses = line
+            .trim_start()
+            .trim_start_matches("- ")
+            .starts_with("uses:");
+        for (at, _) in line.match_indices("nickderobertis/notignored@") {
+            let rest = &line[at + "nickderobertis/notignored@".len()..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_alphanumeric() && !"._-".contains(c))
+                .unwrap_or(rest.len());
+            refs.push((rest[..end].to_string(), is_uses));
+        }
+    }
+    assert!(
+        !refs.is_empty(),
+        "the README no longer shows how to consume the action"
+    );
+    refs
+}
+
+/// What a consumer copies out of the README is a floating major tag.
+///
+/// It used to be `@main`, which ships every merged commit — released or not — to
+/// every consumer on their next run. A major tag follows patches and minors,
+/// never a breaking change, and (because `release.yml`'s `major-tag` job is what
+/// moves it) never a release whose artifacts failed to publish. Nothing else is
+/// acceptable in an example, because an example is what gets pasted.
+#[test]
+fn the_readme_tells_consumers_to_use_the_floating_major_tag() {
+    let refs = readme_action_refs();
+    let floating: Vec<&str> = refs
+        .iter()
+        .map(|(reference, _)| reference.as_str())
+        .filter(|reference| is_floating_major(reference))
+        .collect();
+    let major = *floating
+        .first()
+        .expect("the README shows the action pinned to a floating major tag such as @v0");
+
+    for (reference, is_uses) in &refs {
+        assert!(
+            is_floating_major(reference) || is_exact_version(reference),
+            "the README consumes the action at `@{reference}`; a branch or an \
+             arbitrary ref ships unreleased work to everyone who copies it"
+        );
+        if *is_uses {
+            assert_eq!(
+                reference, major,
+                "a `uses:` example pins `@{reference}` rather than the floating major \
+                 tag `@{major}`; an exact version in a copied example goes stale"
+            );
+        }
+    }
+
+    // The reproducible alternative, offered in prose beside the examples: a
+    // version tag never moves. Its major has to be the same line the floating
+    // tag follows, or the two paragraphs describe different releases.
+    let exact = refs
+        .iter()
+        .map(|(reference, _)| reference.as_str())
+        .find(|reference| is_exact_version(reference))
+        .expect("the README offers an exact pin as the reproducible alternative");
+    assert_eq!(
+        exact.split('.').next(),
+        Some(major),
+        "the exact-pin example `@{exact}` is not in the `@{major}` line the floating \
+         tag follows"
+    );
+}
+
+/// The floating tag the README promises is maintained by the release, not by
+/// hand.
+///
+/// A README that says `@v0` while nothing moves `v0` is worse than `@main`: it
+/// pins consumers to whatever release happened to be current when someone last
+/// remembered. The logic itself is proven by `tests/e2e/major_tag.rs`, and *when*
+/// it runs by `tests/packaging_contract.rs`; this is the edge between them and
+/// the documentation.
+#[test]
+fn the_release_pipeline_maintains_the_tag_the_readme_documents() {
+    let job = parse(&read(".github/workflows/release.yml"))
+        .get("jobs")
+        .get("major-tag")
+        .clone();
+    assert!(
+        run_steps(job.get("steps").list())
+            .iter()
+            .any(|step| step.get("run").scalar().contains("update-major-tag.sh")),
+        "nothing in the release moves the floating major tag the README documents"
+    );
+}
+
+fn is_floating_major(reference: &str) -> bool {
+    reference
+        .strip_prefix('v')
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn is_exact_version(reference: &str) -> bool {
+    let Some(rest) = reference.strip_prefix('v') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+}
