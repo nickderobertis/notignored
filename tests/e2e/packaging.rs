@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::support::{repo_root, tool_binary};
+use crate::support::{cargo_version, repo_root, tool_binary};
 
 /// The Rust target triple for the host, as `release.yml`'s matrices spell it.
 fn host_target() -> &'static str {
@@ -56,22 +56,6 @@ fn host_platform_package() -> String {
         other => other,
     };
     format!("notignored-cli-{platform}-{arch}")
-}
-
-/// The version in `Cargo.toml`'s `[package]` section — the only version source
-/// either package is allowed to have.
-fn cargo_version() -> String {
-    let toml = std::fs::read_to_string(repo_root().join("Cargo.toml")).expect("read Cargo.toml");
-    let package = toml.split("[package]").nth(1).expect("a [package] section");
-    package
-        .split("\n[")
-        .next()
-        .unwrap_or(package)
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("version"))
-        .and_then(|rest| rest.split('"').nth(1))
-        .expect("[package] declares a version")
-        .to_string()
 }
 
 /// Run `command`, returning its stdout — or panic with everything it printed.

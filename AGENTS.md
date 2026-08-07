@@ -144,7 +144,10 @@ carries `0.0.0-managed` so it can never become a second one — release-plz bump
 `Cargo.toml` alone. Adding a target means the release matrices, `npm-build.mjs`,
 and the launcher's `PACKAGES` map together; `tests/packaging_contract.rs` fails
 the build when they disagree, and `tests/e2e/packaging.rs` builds and installs
-both packages from the real binary on every gate run.
+both packages from the real binary on every gate run. A test never spells a
+version out either — it reads `support::cargo_version()`, because a release PR's
+only payload *is* the bump, so a literal turns the one commit class that must
+always be green into a red gate.
 
 Publishing is token-based (`PYPI_TOKEN` / `NPM_TOKEN`), switched by the
 `PYPI_PUBLISH` / `NPM_PUBLISH` repository variables — not Trusted Publishing, so

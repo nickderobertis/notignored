@@ -28,13 +28,16 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::support::repo_root;
+use crate::support::{cargo_version, repo_root};
 
 /// How the fake registry answers a metadata read.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Registry {
-    /// The package is live at this version: 200 with a versions map.
-    Published,
+    /// The package is live at the versions listed: 200 with a versions map.
+    ///
+    /// What is in that map decides the whole journey, so it is never a literal:
+    /// see [`this_version`] and [`an_earlier_version`].
+    Published(Vec<String>),
     /// The package has never been published: 404, which is npm's `E404`.
     Absent,
     /// The registry is having a bad day: 503, which is neither of the above.
@@ -61,6 +64,43 @@ impl Drop for FakeRegistry {
     }
 }
 
+/// The version this build publishes — the one `scripts/npm-build.mjs` stamps
+/// into the package it assembles, read from `Cargo.toml` at run time.
+fn this_version() -> String {
+    cargo_version()
+}
+
+/// The version a previous release left on the registry: this build's with its
+/// last non-zero component stepped back, so it is derived from the one version
+/// source and no future bump can make the two collide.
+///
+/// Strictly *lower* rather than merely different, because npm is: it refuses to
+/// move the `latest` tag backwards, so publishing under a registry whose latest
+/// outranks this build fails on the tag rather than on the decision under test.
+fn an_earlier_version() -> String {
+    let version = this_version();
+    // A pre-release or build suffix would not parse; the crate has never carried
+    // one, and release-plz does not produce them.
+    let mut parts: Vec<u32> = version
+        .split('.')
+        .map(|part| {
+            part.parse()
+                .unwrap_or_else(|error| panic!("{version} is not major.minor.patch: {error}"))
+        })
+        .collect();
+    assert_eq!(parts.len(), 3, "{version} is not major.minor.patch");
+    let last = parts
+        .iter()
+        .rposition(|&part| part > 0)
+        .unwrap_or_else(|| panic!("no version is below {version}"));
+    parts[last] -= 1;
+    parts
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 impl FakeRegistry {
     /// Serve until dropped, answering every metadata read with `answer`.
     fn start(answer: Registry) -> Self {
@@ -77,7 +117,7 @@ impl FakeRegistry {
         let worker = std::thread::spawn(move || {
             while !stop.load(Ordering::SeqCst) {
                 match listener.accept() {
-                    Ok((stream, _)) => serve_one(stream, answer, &recorded),
+                    Ok((stream, _)) => serve_one(stream, &answer, &recorded),
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(5));
                     }
@@ -104,8 +144,8 @@ impl FakeRegistry {
 ///
 /// npm reads a package with `GET /<name>` and publishes with `PUT /<name>`. Only
 /// what the script branches on is modelled: the status, and for a published
-/// package a `versions` map holding the one it asks about.
-fn serve_one(mut stream: TcpStream, answer: Registry, published: &Arc<Mutex<Vec<String>>>) {
+/// package the `versions` map it matches the requested version against.
+fn serve_one(mut stream: TcpStream, answer: &Registry, published: &Arc<Mutex<Vec<String>>>) {
     // An accepted socket inherits the listener's O_NONBLOCK on BSD-derived
     // systems (macOS) but not on Linux, so set it rather than depend on which.
     if stream.set_nonblocking(false).is_err() {
@@ -167,13 +207,7 @@ fn serve_one(mut stream: TcpStream, answer: Registry, published: &Arc<Mutex<Vec<
         }
     } else {
         match answer {
-            Registry::Published => (
-                "200 OK",
-                format!(
-                    "{{\"name\":\"{name}\",\"dist-tags\":{{\"latest\":\"0.1.0\"}},\
-                     \"versions\":{{\"0.1.0\":{{\"name\":\"{name}\",\"version\":\"0.1.0\"}}}}}}"
-                ),
-            ),
+            Registry::Published(versions) => ("200 OK", packument(name, versions)),
             Registry::Absent | Registry::AbsentAndUnwritable => {
                 ("404 Not Found", "{\"error\":\"Not found\"}".to_string())
             }
@@ -191,6 +225,25 @@ fn serve_one(mut stream: TcpStream, answer: Registry, published: &Arc<Mutex<Vec<
     );
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
+}
+
+/// The metadata document npm reads for `name`, listing exactly `versions`.
+///
+/// `npm view <name>@<version>` fetches this whole document and resolves the
+/// requested version against the `versions` map itself, so a name that is live
+/// at some *other* version answers 200 here and still reports `E404` to the
+/// script — which is precisely the state every release after the first is in.
+fn packument(name: &str, versions: &[String]) -> String {
+    let latest = versions.last().expect("a published package has a version");
+    let entries: Vec<String> = versions
+        .iter()
+        .map(|version| format!("\"{version}\":{{\"name\":\"{name}\",\"version\":\"{version}\"}}"))
+        .collect();
+    format!(
+        "{{\"name\":\"{name}\",\"dist-tags\":{{\"latest\":\"{latest}\"}},\
+         \"versions\":{{{}}}}}",
+        entries.join(",")
+    )
 }
 
 /// Assemble the launcher package at the crate's own version, into `out`.
@@ -257,7 +310,7 @@ fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
     (scratch, package)
 }
 
-/// A version the registry has never seen is published.
+/// A name the registry has never seen is published.
 #[test]
 fn a_version_the_registry_does_not_have_is_published() {
     let registry = FakeRegistry::start(Registry::Absent);
@@ -276,7 +329,40 @@ fn a_version_the_registry_does_not_have_is_published() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("published notignored-cli@") && stdout.contains("already on npm none"),
+        stdout.contains(&format!("published notignored-cli@{}", this_version()))
+            && stdout.contains("already on npm none"),
+        "the run's one summary line does not say what it published:\n{stdout}"
+    );
+}
+
+/// A name that is live, but not at this version, is published.
+///
+/// This is what every release after the first actually meets, and it is a
+/// different registry answer from an absent package: 200 with a metadata
+/// document, which npm then resolves the requested version against and reports
+/// `E404` for. Mistaking "the name exists" for "this version exists" would skip
+/// every publish from the second release onward, and the release would report
+/// success with nothing new on the registry.
+#[test]
+fn a_name_live_at_another_version_still_publishes_this_one() {
+    let registry = FakeRegistry::start(Registry::Published(vec![an_earlier_version()]));
+    let (scratch, package) = fixture();
+
+    let output = publish(&registry, &package, scratch.path());
+    assert!(
+        output.status.success(),
+        "publishing a version the registry does not list must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        registry.publishes(),
+        vec!["notignored-cli".to_string()],
+        "the script skipped a version that was not on the registry"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!("published notignored-cli@{}", this_version()))
+            && stdout.contains("already on npm none"),
         "the run's one summary line does not say what it published:\n{stdout}"
     );
 }
@@ -286,9 +372,13 @@ fn a_version_the_registry_does_not_have_is_published() {
 /// npm versions are immutable, so a re-run — to finish a sibling job, say —
 /// would fail on the second publish and redden a release that had worked. The
 /// script asks first, and this is what proves it does not ask and publish anyway.
+///
+/// The version the registry holds is *this build's*, read from `Cargo.toml`:
+/// spelling it out would make the next release PR — whose only payload is that
+/// bump — arrive at the gate looking like a double-publish.
 #[test]
 fn a_version_already_on_the_registry_is_not_published_again() {
-    let registry = FakeRegistry::start(Registry::Published);
+    let registry = FakeRegistry::start(Registry::Published(vec![this_version()]));
     let (scratch, package) = fixture();
 
     let output = publish(&registry, &package, scratch.path());
@@ -304,7 +394,8 @@ fn a_version_already_on_the_registry_is_not_published_again() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("published none") && stdout.contains("already on npm notignored-cli@"),
+        stdout.contains("published none")
+            && stdout.contains(&format!("already on npm notignored-cli@{}", this_version())),
         "the run's one summary line does not say what it skipped:\n{stdout}"
     );
     assert_eq!(

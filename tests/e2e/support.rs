@@ -34,6 +34,27 @@ pub fn notignored(cwd: &Path) -> Command {
     command
 }
 
+/// The version in `Cargo.toml`'s `[package]` section — the only version source
+/// the wheel and the npm packages are allowed to have, and the one release-plz
+/// bumps.
+///
+/// Read at run time on purpose: a journey that spelled this build's version out
+/// as a literal would pass until the next release PR and fail on the bump alone,
+/// which is the one commit class that must never redden the gate.
+pub fn cargo_version() -> String {
+    let toml = std::fs::read_to_string(repo_root().join("Cargo.toml")).expect("read Cargo.toml");
+    let package = toml.split("[package]").nth(1).expect("a [package] section");
+    package
+        .split("\n[")
+        .next()
+        .unwrap_or(package)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("version"))
+        .and_then(|rest| rest.split('"').nth(1))
+        .expect("[package] declares a version")
+        .to_string()
+}
+
 /// The version this repo pins for `tool`, from `.<tool>-version`.
 pub fn pinned_version(tool: &str) -> String {
     let path = repo_root().join(format!(".{tool}-version"));
