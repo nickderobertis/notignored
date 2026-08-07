@@ -321,6 +321,8 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 name = "notignored"
 version = "0.1.7"
 dependencies = [
+ "anstream",
+ "anstyle",
  "assert_cmd",
  "clap",
  "ignore",
