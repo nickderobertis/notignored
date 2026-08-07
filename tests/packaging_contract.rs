@@ -58,12 +58,20 @@ const SMOKE_SCRIPT: &str = "scripts/smoke-published.sh";
 
 /// The runner labels every post-publish verification uses.
 ///
-/// One leg per OS, because `pip install` and `npm install -g` each resolve a
-/// *different* artifact per platform and only a runner of that platform can
-/// prove the right one was picked. The two released targets with no leg —
-/// `aarch64-unknown-linux-gnu` and `x86_64-apple-darwin` — are covered by the
-/// build matrices and by `tests/e2e/packaging.rs` on whichever host runs it.
-const VERIFY_RUNNERS: [&str; 3] = ["ubuntu-latest", "macos-latest", "windows-latest"];
+/// One leg per *installable artifact*, not per OS: `pip install` and `npm
+/// install -g` each resolve a different wheel and a different platform package
+/// per platform **and architecture**, and only a runner of that pair can prove
+/// the right one was picked. `macos-latest` is arm64, so `macos-15-intel` is
+/// what covers `x86_64-apple-darwin` — without it, `notignored-cli-darwin-x64`
+/// is published and never installed. The one released target still with no leg,
+/// `aarch64-unknown-linux-gnu`, is covered by the build matrices and by
+/// `tests/e2e/packaging.rs` on whichever host runs it.
+const VERIFY_RUNNERS: [&str; 4] = [
+    "ubuntu-latest",
+    "macos-latest",
+    "macos-15-intel",
+    "windows-latest",
+];
 
 /// Every job that installs a published package and smoke-tests it, as
 /// `(workflow, job)`.

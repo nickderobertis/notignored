@@ -9,10 +9,10 @@ name: Published smoke
 # nothing in this repository installs from a registry between releases.
 #
 # So this runs the identical `scripts/smoke-published.sh` those jobs run, against
-# `latest` rather than a tag, on Linux, macOS, and Windows, once a week. The
-# registry's own idea of the version (`pip show`, `npm view`) is what the binary
-# is held to, so a package whose metadata and payload disagree fails here rather
-# than confusing someone reading `--version`.
+# `latest` rather than a tag, on Linux, both macOS architectures, and Windows,
+# once a week. The registry's own idea of the version (`pip show`, `npm view`) is
+# what the binary is held to, so a package whose metadata and payload disagree
+# fails here rather than confusing someone reading `--version`.
 #
 # Deliberately cheap: a checkout, the language runtime that owns the installer,
 # `pip install` / `npm install -g`, and bash. No Rust toolchain, no build, no
@@ -65,7 +65,7 @@ jobs:
       # Every platform reports: the first red leg must not hide a second.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -111,7 +111,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
