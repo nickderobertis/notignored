@@ -15,7 +15,7 @@ added something.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from ._errors import NotignoredContractError
@@ -26,7 +26,7 @@ from ._errors import NotignoredContractError
 SUPPORTED_REPORT_VERSION = 1
 
 
-class Tool(str, Enum):
+class Tool(StrEnum):
     """A lint or type-check tool whose suppression comments notignored parses.
 
     The values are what the CLI writes in a report and takes on ``--tool``, so a
@@ -44,20 +44,14 @@ class Tool(str, Enum):
     SHELLCHECK = "shellcheck"
     LLMLINT = "llmlint"
 
-    def __str__(self) -> str:
-        return str(self.value)
 
-
-class Scope(str, Enum):
+class Scope(StrEnum):
     """How far a directive's suppression reaches."""
 
     LINE = "line"
     NEXT_LINE = "next-line"
     FILE = "file"
     BLOCK = "block"
-
-    def __str__(self) -> str:
-        return str(self.value)
 
 
 @dataclass(frozen=True)

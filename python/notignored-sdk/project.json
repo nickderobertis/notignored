@@ -31,7 +31,7 @@
       "inputs": ["default", "pythonToolchain"]
     },
     "typecheck": {
-      "command": "bash ../../scripts/dev-tool.sh mypy src",
+      "command": "bash ../../scripts/python-sdk-typecheck.sh",
       "options": { "cwd": "python/notignored-sdk" },
       "inputs": ["default", "pythonToolchain"]
     },

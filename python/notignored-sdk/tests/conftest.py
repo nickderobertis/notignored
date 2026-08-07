@@ -1,24 +1,28 @@
 """What every journey here drives: the real binary this workspace builds.
 
-Nothing in this suite mocks the subprocess or the CLI. `notignored_binary` is
-compiled from the crate beside this project, so a report shape that moved in
-`src/` fails here on the same commit that moved it — which is the whole reason
-the SDK's Nx project depends on the crate's.
+Nothing in this suite mocks or stands in for the CLI. `notignored_binary` is
+compiled from the crate beside this project — so a report shape that moved in
+`src/` fails here on the same commit that moved it — and an autouse fixture puts
+it on `NOTIGNORED_BIN`, which is how the SDK is told where a binary is now that
+its public signature carries no binary argument.
 
-`stub_binary` is the one exception, and it is not a mock of the CLI: it stands in
-for a *broken or newer* `notignored`, which a working one cannot be. It is how
-the contract-error branches — output that is not JSON, an envelope from a future
-version, a tool this SDK has never heard of — are driven for real.
+The dividing line is what that binary can actually produce. Every state it *can*
+reach — a report, `--diff`, the tool filter, a non-zero exit — is driven with it
+and with nothing else. Two states it *cannot* reach are covered without
+fabricating a CLI to fake them: it never prints a malformed report, and with
+`--format json` it never prints nothing. Those are proven by calling the strict
+reader directly with the payload a broken or newer build would emit
+(`test_contract.py`), and by pointing `NOTIGNORED_BIN` at real unrelated programs
+— the misconfiguration a user actually hits — to show the plumbing turns their
+stdout into a typed error (`test_errors.py`).
 """
 
 from __future__ import annotations
 
-import json
 import os
-import stat
 import subprocess
-from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -55,6 +59,17 @@ def notignored_binary() -> Path:
     return binary
 
 
+@pytest.fixture(autouse=True)
+def use_the_workspace_binary(notignored_binary: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point every call at the binary this workspace built.
+
+    Autouse so no test can silently fall through to a `notignored` that happens
+    to be installed on the machine; the tests that are *about* resolution set the
+    variable again, and the later `monkeypatch` wins.
+    """
+    monkeypatch.setenv("NOTIGNORED_BIN", str(notignored_binary))
+
+
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
     """A small polyglot source tree with one suppression per language."""
@@ -70,45 +85,18 @@ def tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
-@pytest.fixture
-def stub_binary(tmp_path: Path) -> Callable[..., Path]:
-    """Build an executable that prints `stdout` and exits `code`, whatever its arguments.
-
-    Written per platform rather than as a `#!`-script, because a shebang is not a
-    thing Windows runs.
-    """
-
-    made: list[Path] = []
-
-    def build(stdout: str, code: int = 0) -> Path:
-        payload = tmp_path / f"stub-{len(made)}.json"
-        payload.write_text(stdout, encoding="utf-8")
-        if os.name == "nt":
-            script = tmp_path / f"stub-{len(made)}.cmd"
-            script.write_text(
-                f"@echo off\r\ntype {payload}\r\nexit /b {code}\r\n",
-                encoding="utf-8",
-            )
-        else:
-            script = tmp_path / f"stub-{len(made)}.sh"
-            script.write_text(
-                f'#!/bin/sh\ncat "{payload}"\nexit {code}\n',
-                encoding="utf-8",
-            )
-            script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-        made.append(script)
-        return script
-
-    return build
-
-
 def report_payload(
     *,
-    directive: dict[str, object] | None = None,
-    **overrides: object,
-) -> str:
-    """A serialized report envelope, so a test can bend one field out of contract."""
-    ignore: dict[str, object] = {
+    directive: dict[str, Any] | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """A decoded report envelope, so a test can bend one field out of contract.
+
+    This is the shape the real CLI emits; the overrides are what a *newer or
+    broken* build could emit and this one cannot, which is the only reason it is
+    written here rather than read off a real run.
+    """
+    ignore: dict[str, Any] = {
         "tool": "ruff",
         "scope": "line",
         "rules": ["E501"],
@@ -121,9 +109,9 @@ def report_payload(
         "suppressed": {"start_line": 1, "end_line": 1},
     }
     ignore.update(directive or {})
-    envelope: dict[str, object] = {"version": 1, "ignores": [ignore], "errors": []}
+    envelope: dict[str, Any] = {"version": 1, "ignores": [ignore], "errors": []}
     envelope.update(overrides)
-    return json.dumps(envelope)
+    return envelope
 
 
 @pytest.fixture

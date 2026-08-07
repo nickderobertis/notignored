@@ -23,7 +23,11 @@ description = "Typed Python SDK for notignored: every lint and type-check suppre
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+# 3.11 is the floor because `Tool` and `Scope` are real `enum.StrEnum`s, which
+# landed there. A `(str, Enum)` lookalike would compare equal to its wire value
+# but stringify as `Tool.RUFF`, which is the kind of near-miss that reaches a log
+# line or an f-string and is never noticed.
+requires-python = ">=3.11"
 authors = [{ name = "Nick DeRobertis" }]
 keywords = ["lint", "noqa", "suppression", "code-review", "sdk"]
 classifiers = [
@@ -31,7 +35,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -75,7 +78,7 @@ select = ["E4", "E7", "E9", "F", "I", "UP", "B", "ASYNC", "S", "RUF"]
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 warn_unreachable = true
 

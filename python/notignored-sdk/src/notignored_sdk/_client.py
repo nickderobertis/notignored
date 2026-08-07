@@ -8,6 +8,10 @@ directly and an async service the other.
 
 Arguments are validated *before* a process is spawned, and paths go after a `--`
 separator so a filename that starts with a dash can never be read as a flag.
+
+Which binary runs is not an argument: `NOTIGNORED_BIN` is the explicit override
+and `PATH` is the fallback, so the two entry points carry exactly the flags the
+CLI has and nothing else.
 """
 
 from __future__ import annotations
@@ -29,8 +33,8 @@ from ._errors import (
 )
 from ._model import Report, Tool, report_from_payload
 
-#: Points the SDK at a specific binary without threading one through every call.
-#: An explicit ``binary=`` argument still wins over it.
+#: Names the `notignored` to run. The public signature carries no binary
+#: argument — this is the explicit override, and it wins over ``PATH``.
 BINARY_ENV_VAR = "NOTIGNORED_BIN"
 
 #: Anything `os.fspath` accepts: `str`, `pathlib.Path`, or another path-like.
@@ -41,10 +45,8 @@ PathLike = Union[str, "os.PathLike[str]"]
 _STREAM_LIMIT = 64 * 1024 * 1024
 
 
-def _resolve_binary(binary: PathLike | None) -> str:
-    """Which `notignored` this call runs: the argument, the env override, PATH."""
-    if binary is not None:
-        return os.fspath(binary)
+def _resolve_binary() -> str:
+    """Which `notignored` this call runs: the env override, then the one on PATH."""
     override = os.environ.get(BINARY_ENV_VAR)
     if override:
         return override
@@ -95,7 +97,6 @@ def _command(
     diff: bool,
     diff_base: str | None,
     tools: Sequence[Tool | str] | None,
-    binary: PathLike | None,
 ) -> list[str]:
     """The argument vector this call implies.
 
@@ -110,7 +111,7 @@ def _command(
             raise TypeError(f"diff_base is {type(diff_base).__name__}, not a git revision")
     selected = _paths(paths)
     names = _tools(tools)
-    argv = [_resolve_binary(binary), "--format", "json"]
+    argv = [_resolve_binary(), "--format", "json"]
     for name in names:
         argv.extend(("--tool", name))
     if diff:
@@ -136,21 +137,18 @@ def _spawn_failure(command: str, error: OSError) -> NotignoredSpawnError:
 def _report(returncode: int, stdout: bytes, stderr: bytes) -> Report:
     """One finished run, as a report or as the error that stopped it.
 
-    A non-zero exit with a report on stdout is *not* an error: an unreadable file
-    makes the CLI exit 2 and still print the report that names it, and dropping
-    that would hide the very thing `Report.errors` exists to carry.
+    Every non-zero exit is a :class:`NotignoredExitError` carrying the CLI's own
+    stderr — including the exit 2 it uses for a file it could not read, which it
+    reports on stderr as well as in the report's `errors`. Only a clean run
+    returns, so `Report.errors` is empty in everything handed back here.
     """
+    if returncode != 0:
+        raise NotignoredExitError(returncode, stderr.decode("utf-8", errors="replace"))
     if not stdout.strip():
-        if returncode != 0:
-            raise NotignoredExitError(returncode, stderr.decode("utf-8", errors="replace"))
         raise NotignoredContractError("notignored printed no report")
     try:
         payload: Any = json.loads(stdout)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        if returncode != 0:
-            raise NotignoredExitError(
-                returncode, stderr.decode("utf-8", errors="replace")
-            ) from error
         message = f"notignored printed output that is not JSON: {error}"
         raise NotignoredContractError(message) from error
     return report_from_payload(payload)
@@ -163,7 +161,6 @@ def scan(
     diff_base: str | None = None,
     tools: Sequence[Tool | str] | None = None,
     cwd: PathLike | None = None,
-    binary: PathLike | None = None,
 ) -> Report:
     """Report every suppression comment `notignored` finds.
 
@@ -176,13 +173,12 @@ def scan(
         rejects ``--diff-base`` without ``--diff``.
     :param tools: Report only these tools; ``None`` reports all of them.
     :param cwd: Directory to run in. Report paths are relative to it.
-    :param binary: The `notignored` to run. Defaults to the ``NOTIGNORED_BIN``
-        environment variable, then to the one on ``PATH``.
-    :raises NotignoredNotFoundError: No `notignored` binary could be run.
-    :raises NotignoredExitError: The scan could not run and printed no report.
+    :raises NotignoredNotFoundError: No `notignored` binary could be run. Set
+        ``NOTIGNORED_BIN`` to name one explicitly.
+    :raises NotignoredExitError: The CLI exited non-zero; carries its stderr.
     :raises NotignoredContractError: The report is not the contract this SDK reads.
     """
-    argv = _command(paths, diff, diff_base, tools, binary)
+    argv = _command(paths, diff, diff_base, tools)
     try:
         completed = subprocess.run(  # noqa: S603  # a vector this module built, never a shell
             argv,
@@ -202,13 +198,12 @@ async def ascan(
     diff_base: str | None = None,
     tools: Sequence[Tool | str] | None = None,
     cwd: PathLike | None = None,
-    binary: PathLike | None = None,
 ) -> Report:
     """Await :func:`scan`'s result without blocking the event loop.
 
     Same arguments, same report, same errors; see :func:`scan`.
     """
-    argv = _command(paths, diff, diff_base, tools, binary)
+    argv = _command(paths, diff, diff_base, tools)
     try:
         process = await asyncio.create_subprocess_exec(
             *argv,
