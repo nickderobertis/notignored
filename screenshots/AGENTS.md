@@ -122,10 +122,9 @@ the human report's format changes.
 ## The strict gate
 
 CI (`fail-on-drift: true`) fails when a capture diverges from the committed
-baseline. That job is deliberately **not** a required check — see the repo
-`AGENTS.md` for the fork-pull-request reason it cannot be one — so read a red
-`Visual docs` as "the output moved; bless it or explain it", not as advisory
-noise.
+baseline. That job cannot be a required check — its report lane needs write
+permissions a fork's pull request is never granted — so read a red `Visual docs`
+as "the output moved; bless it or explain it", not as advisory noise.
 
 The local pre-push guard (`.githooks/pre-push`, opt in with
 `git config core.hooksPath .githooks`) re-captures **only** when a `[guard].paths`
