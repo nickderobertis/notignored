@@ -1,7 +1,7 @@
 //! The public record contract: what a suppression looks like once parsed.
 //!
 //! These types are a **versioned wire contract** consumed by downstream tooling
-//! (review bots, CI jobs, the planned GitHub Action). Field names, the [`Scope`]
+//! (review bots, CI jobs, the GitHub Action). Field names, the [`Scope`]
 //! variants, and the [`Report`] envelope shape are fixed: changing one is a
 //! breaking change that bumps [`REPORT_VERSION`] and moves the checked-in golden
 //! report in the same commit. New fields must be optional and round-trip.
@@ -19,9 +19,9 @@ pub const REPORT_VERSION: u32 = 1;
 
 /// A lint or type-check tool whose suppression comments we understand.
 ///
-/// The full planned set is fixed here so the registry, the `--tool` filter, and
-/// the README table all agree; [`Tool::is_implemented`] reports which ones have
-/// a parser today.
+/// The set is fixed here so the registry, the `--tool` filter, and the README
+/// table all agree; `tests/tools_contract.rs` fails the build when one of them
+/// drifts.
 ///
 /// `ValueEnum` is derived here rather than in the CLI layer so `--tool --help`
 /// lists the tools straight from the contract and cannot drift from it.
@@ -91,14 +91,6 @@ impl Tool {
             Tool::Shellcheck => "shellcheck",
             Tool::Llmlint => "llmlint",
         }
-    }
-
-    /// Whether a parser for this tool is registered today.
-    ///
-    /// Planned tools stay in [`Tool::ALL`] (and in the README table) so the
-    /// contract is visible before the parser lands.
-    pub fn is_implemented(self) -> bool {
-        crate::tools::registry().iter().any(|p| p.tool() == self)
     }
 }
 
@@ -316,15 +308,6 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("flake8"), "{msg}");
         assert!(msg.contains("ruff"), "{msg}");
-    }
-
-    #[test]
-    fn only_the_registered_tools_report_as_implemented() {
-        // Every tool in the contract has a parser today; a planned one added
-        // here reports as unimplemented until its module joins the registry.
-        for tool in Tool::ALL {
-            assert!(tool.is_implemented(), "{tool} has no registered parser");
-        }
     }
 
     #[test]

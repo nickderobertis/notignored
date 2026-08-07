@@ -134,7 +134,7 @@ fn every_scope_has_its_documented_spelling() {
 }
 
 #[test]
-fn every_planned_tool_has_its_documented_spelling() {
+fn every_declared_tool_has_its_documented_spelling() {
     let spellings: Vec<String> = Tool::ALL
         .into_iter()
         .map(|tool| {

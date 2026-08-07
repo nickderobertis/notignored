@@ -49,6 +49,30 @@ fetches the release binary itself and posts what the pull request added.
 - uses: nickderobertis/notignored@main
 ```
 
+## Try it
+
+[`examples/`](examples) holds a handful of tiny files — Python, TypeScript,
+shell, Rust — each carrying the kind of suppression, and the kind of reason,
+real code collects. Point the binary at them:
+
+```console
+$ notignored examples/
+examples/api_client.py:3:20 mypy import-untyped (line) -- the vendored SDK ships no type stubs
+examples/api_client.py:4:28 ruff F401 (line) -- re-exported so callers can configure retries
+examples/deploy.sh:8:1 shellcheck SC2086 (next-line) -- the flags file is ours, and has to split into separate arguments
+examples/deploy.sh:13:3 llmlint tool_output_is_signal (file) -- example input the README quickstart scans, not a script this project runs
+examples/retry.rs:6:1 rust dead_code (next-line) -- the scheduler starts calling this once backoff lands
+examples/widget.ts:6:3 eslint no-console (next-line) -- the mount path is traced in production
+examples/widget.ts:9:3 typescript * (next-line) -- the vendored analytics global is declared without its options bag
+notignored: 7 ignores in 4 files
+```
+
+Seven suppressions, seven tools, one pass over four files — no linter was run. Each
+line is `path:line:column tool rules (scope) -- reason`; `--format json` gives
+the same records as the envelope [below](#output), and `--format markdown` gives
+the comment the action posts. That block is checked against the real binary by
+`tests/e2e/examples.rs`, so it is output, not an illustration.
+
 ## Usage
 
 ```
@@ -216,18 +240,18 @@ The `json` format emits the full report envelope:
 
 ## Supported tools
 
-| Tool | Directives | Status |
-| --- | --- | --- |
-| `eslint` | `// eslint-disable-line rule`, `// eslint-disable-next-line rule -- reason`, `/* eslint-disable rule -- reason */` … `/* eslint-enable rule */` | **Supported** |
-| `biome` | `// biome-ignore lint/group/rule: reason`, `// biome-ignore-all lint/group/rule: reason`, `// biome-ignore-start lint/group/rule: reason` … `// biome-ignore-end lint/group/rule: reason` | **Supported** |
-| `ruff` | `# noqa`, `# noqa: E501, F401`, `# ruff: noqa`, `# ruff: noqa: E501` | **Supported** |
-| `typescript` | `// @ts-ignore`, `// @ts-expect-error reason`, `/* @ts-ignore */`, `// @ts-nocheck` | **Supported** |
-| `mypy` | `# type: ignore`, `# type: ignore[arg-type, index]`, `# mypy: ignore-errors`, `# mypy: disable-error-code="arg-type"` | **Supported** |
-| `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]`, `# pyright: reportMissingImports=false` | **Supported** |
-| `ty` | `# ty: ignore`, `# ty: ignore[invalid-argument-type]` | **Supported** |
-| `rust` | `#[allow(dead_code)]`, `#[allow(clippy::needless_collect, dead_code)]`, `#[expect(dead_code, reason = "…")]`, `#![allow(…)]`, `#![expect(…, reason = "…")]` | **Supported** |
-| `shellcheck` | `# shellcheck disable=SC2086`, `# shellcheck disable=SC2086,SC2046`, `# shellcheck disable=SC2000-SC2100`, `# shellcheck disable=all`, `# shellcheck disable=SC2086  # reason` | **Supported** |
-| `llmlint` | `ignore[rule, …] reason`, `ignore-file[rule, …] reason`, `ignore-block[rule, …] reason` … `ignore-end[rule, …]` — each written after the `llmlint` keyword and a colon, in the host language's comment syntax | **Supported** |
+| Tool | Directives |
+| --- | --- |
+| `eslint` | `// eslint-disable-line rule`, `// eslint-disable-next-line rule -- reason`, `/* eslint-disable rule -- reason */` … `/* eslint-enable rule */` |
+| `biome` | `// biome-ignore lint/group/rule: reason`, `// biome-ignore-all lint/group/rule: reason`, `// biome-ignore-start lint/group/rule: reason` … `// biome-ignore-end lint/group/rule: reason` |
+| `ruff` | `# noqa`, `# noqa: E501, F401`, `# ruff: noqa`, `# ruff: noqa: E501` |
+| `typescript` | `// @ts-ignore`, `// @ts-expect-error reason`, `/* @ts-ignore */`, `// @ts-nocheck` |
+| `mypy` | `# type: ignore`, `# type: ignore[arg-type, index]`, `# mypy: ignore-errors`, `# mypy: disable-error-code="arg-type"` |
+| `pyright` | `# pyright: ignore`, `# pyright: ignore[reportArgumentType]`, `# pyright: reportMissingImports=false` |
+| `ty` | `# ty: ignore`, `# ty: ignore[invalid-argument-type]` |
+| `rust` | `#[allow(dead_code)]`, `#[allow(clippy::needless_collect, dead_code)]`, `#[expect(dead_code, reason = "…")]`, `#![allow(…)]`, `#![expect(…, reason = "…")]` |
+| `shellcheck` | `# shellcheck disable=SC2086`, `# shellcheck disable=SC2086,SC2046`, `# shellcheck disable=SC2000-SC2100`, `# shellcheck disable=all`, `# shellcheck disable=SC2086  # reason` |
+| `llmlint` | `ignore[rule, …] reason`, `ignore-file[rule, …] reason`, `ignore-block[rule, …] reason` … `ignore-end[rule, …]` — each written after the `llmlint` keyword and a colon, in the host language's comment syntax |
 
 Scope follows each tool's own rules, not a house convention:
 
@@ -261,10 +285,11 @@ Scope follows the tool rather than the syntax. `// eslint-disable-line` is
 `// biome-ignore-start` … `// biome-ignore-end`) are `block`, running to
 end-of-file with `suppressed.end_line: null` when they are never closed.
 
-Adding one is three touch points: a module under `src/tools/`, one line in
-`src/tools/mod.rs::registry()`, and one row above. The registry is the single
-source of truth for the Status column: `tests/tools_contract.rs` fails the build
-if a row here and the registered parsers disagree.
+Adding one is four touch points: a module under `src/tools/`, one line in
+`src/tools/mod.rs::registry()`, one row above, and a directive in
+`tests/fixtures/polyglot/`. `tests/tools_contract.rs` fails the build if a row
+here and the registered parsers disagree, and `tests/e2e/polyglot.rs` fails it
+if a registered tool is missing from that fixture tree.
 
 ## Where a directive reaches, and who honours it
 

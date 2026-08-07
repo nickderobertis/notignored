@@ -52,10 +52,8 @@ pub trait ToolParser: Send + Sync {
 
 /// Every registered parser, in [`Tool::ALL`] order.
 ///
-/// Planned tools keep their place as a comment so the next contributor swaps one
-/// line rather than reshuffling the list. Each planned entry stays listed in
-/// [`Tool::ALL`] and in the README table, so the contract is visible before the
-/// parser exists.
+/// Every tool the contract declares has one, and `tests/tools_contract.rs`
+/// fails the build if this list and [`Tool::ALL`] ever stop naming the same set.
 pub fn registry() -> Vec<Box<dyn ToolParser>> {
     vec![
         Box::new(eslint::EslintParser),

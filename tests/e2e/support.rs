@@ -518,21 +518,13 @@ pub fn pyright_diagnostics(
                 String::from_utf8_lossy(&output.stderr)
             )
         });
-    // The absolute paths pyright emits are already symlink-resolved, so the root
-    // has to be too or nothing lines up.
-    let root = cwd
-        .canonicalize()
-        .unwrap_or_else(|error| panic!("canonical checker root {}: {error}", cwd.display()));
     report["generalDiagnostics"]
         .as_array()
         .expect("pyright reports generalDiagnostics")
         .iter()
         .map(|diagnostic| {
             (
-                relative_to(
-                    &root,
-                    diagnostic["file"].as_str().expect("a diagnostic file"),
-                ),
+                relative_to(cwd, diagnostic["file"].as_str().expect("a diagnostic file")),
                 diagnostic["rule"].as_str().map(str::to_string),
                 diagnostic["range"]["start"]["line"]
                     .as_u64()
@@ -752,12 +744,7 @@ pub fn git(dir: &Path, args: &[&str]) {
 /// Normalize, deduplicate, and sort the paths a checker named, all relative to
 /// the directory it ran in.
 fn collect_paths<'a>(cwd: &Path, paths: impl Iterator<Item = &'a str>) -> Vec<String> {
-    // The absolute paths a checker emits are already symlink-resolved, so the
-    // root has to be too or nothing lines up.
-    let root = cwd
-        .canonicalize()
-        .unwrap_or_else(|error| panic!("canonical checker root {}: {error}", cwd.display()));
-    let mut found: Vec<String> = paths.map(|path| relative_to(&root, path)).collect();
+    let mut found: Vec<String> = paths.map(|path| relative_to(cwd, path)).collect();
     found.sort();
     found.dedup();
     found
@@ -774,19 +761,62 @@ fn collect_paths<'a>(cwd: &Path, paths: impl Iterator<Item = &'a str>) -> Vec<St
 /// the assertion. Compare the two the way Windows itself does instead — case- and
 /// separator-insensitively — and return the tail.
 ///
+/// Symlinks are the other half of the same problem, and the reason resolution
+/// happens **here** rather than at each call site: whether an absolute path
+/// arrives resolved is the checker's choice, not the caller's. Pyright answers
+/// with the path the filesystem resolved to, ESLint answers with the spelling it
+/// was handed — so a root that is either one can meet a reported path that is
+/// the other, in both directions. macOS is where that bites, because every
+/// temporary directory there lives behind `/var -> /private/var`. Each side is
+/// therefore tried as spelled *and* as [`Path::canonicalize`] resolves it.
+///
+/// A **relative** reported path is never resolved: it is relative to the
+/// checker's working directory rather than this process's, so resolving it here
+/// would invent a path and could strip a tail belonging to a different file.
+///
 /// The tail comes back byte-for-byte, and a path that is genuinely outside `root`
 /// comes back whole, so an assertion still has to name the exact file: this
 /// normalizes spellings, it does not widen what counts as a match.
 pub fn relative_to(root: &Path, reported: &str) -> String {
-    let reported = portable(reported);
-    let root = portable(&root.to_string_lossy());
+    let path = Path::new(reported);
+    for reported in spellings(path, path.is_absolute()) {
+        for root in spellings(root, true) {
+            if let Some(tail) = strip_root(&root, &reported) {
+                return tail;
+            }
+        }
+    }
+    portable(reported)
+}
+
+/// A path as written and — when `resolve` is set and it resolves to something
+/// else — as the filesystem resolves it. As-written comes first, so a pair that
+/// already agreed keeps its byte-for-byte tail.
+///
+/// A path that does not exist has no resolved spelling, which is what lets the
+/// hand-written Windows and UNC paths below go through the same function.
+fn spellings(path: &Path, resolve: bool) -> Vec<String> {
+    let written = portable(&path.to_string_lossy());
+    let Some(resolved) = resolve.then(|| path.canonicalize().ok()).flatten() else {
+        return vec![written];
+    };
+    let resolved = portable(&resolved.to_string_lossy());
+    if resolved == written {
+        vec![written]
+    } else {
+        vec![written, resolved]
+    }
+}
+
+/// `reported` with `root`'s prefix removed, or `None` when it does not name a
+/// path under `root`.
+fn strip_root(root: &str, reported: &str) -> Option<String> {
     let root = root.trim_end_matches('/');
     reported
         .get(..root.len())
         .filter(|head| head.eq_ignore_ascii_case(root))
         .and_then(|_| reported[root.len()..].strip_prefix('/'))
-        .unwrap_or(&reported)
-        .to_string()
+        .map(str::to_string)
 }
 
 /// `path` with `/` separators and without the verbatim `\\?\` prefix, which
@@ -880,11 +910,70 @@ pub fn parse_report(stdout: &[u8]) -> serde_json::Value {
 /// The gate runs on Linux, so every Windows and UNC path below is written by
 /// hand: without them the normalization is only ever exercised on the one
 /// platform whose paths already happen to line up, and a `d:/…`-shaped
-/// regression waits for CI to find it.
+/// regression waits for CI to find it. The symlink cases go one better — a
+/// symlink can be *made* anywhere, so macOS's `/var -> /private/var` shape is
+/// reproduced here rather than described.
 #[cfg(test)]
 mod paths {
     use super::{portable, relative_to, split_path_field, ty_diagnostic_path};
     use std::path::Path;
+
+    /// macOS puts every temporary directory behind `/var -> /private/var`, so a
+    /// scratch root a test spelled and the resolved path a checker answers with
+    /// are two different strings for one directory. Built here with an explicit
+    /// symlink, which any POSIX platform can do.
+    ///
+    /// Both directions matter, because whether an absolute path arrives resolved
+    /// is the checker's choice: pyright reports the resolved spelling, ESLint
+    /// reports the one it was handed.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_scratch_root_and_a_resolved_checker_path_are_one_directory() {
+        let scratch = tempfile::tempdir().expect("scratch dir");
+        // `canonicalize` first: the temporary directory may itself sit behind a
+        // symlink, and this test is about the one it adds below.
+        let real = scratch
+            .path()
+            .canonicalize()
+            .expect("resolve scratch")
+            .join("real");
+        std::fs::create_dir(&real).expect("create the real root");
+        let linked = scratch.path().join("linked");
+        std::os::unix::fs::symlink(&real, &linked).expect("symlink the scratch root");
+        std::fs::write(real.join("violation.py"), "x = 1\n").expect("write the fixture");
+        let spelled =
+            |root: &Path, at: &Path| relative_to(root, &at.join("violation.py").to_string_lossy());
+
+        // The root as the test spelled it, the file as the checker resolved it.
+        assert_eq!(spelled(&linked, &real), "violation.py");
+        // ...and the same pair the other way round.
+        assert_eq!(spelled(&real, &linked), "violation.py");
+        // Neither side needs resolving when both already agree.
+        assert_eq!(spelled(&real, &real), "violation.py");
+
+        // Resolving may not pull in a file that is genuinely outside the root:
+        // `elsewhere.py` sits beside the link, not under it.
+        let outside = scratch.path().join("elsewhere.py");
+        let outside = outside.to_string_lossy();
+        assert_eq!(relative_to(&linked, &outside), portable(&outside));
+    }
+
+    /// A relative path is relative to the *checker's* working directory, not this
+    /// process's, so it is never resolved here — resolving it would name a
+    /// different file that happens to exist beside the test runner.
+    ///
+    /// `examples/retry.rs` exists relative to the crate root, which is where
+    /// cargo runs a test from. Were the resolution unconditional, this would come
+    /// back as `notignored/examples/retry.rs` against the parent root below.
+    #[test]
+    fn a_relative_checker_path_is_never_resolved_against_this_process() {
+        let crate_root = super::repo_root();
+        let parent = crate_root.parent().expect("the crate root has a parent");
+        assert_eq!(
+            relative_to(parent, "examples/retry.rs"),
+            "examples/retry.rs"
+        );
+    }
 
     /// The exact pair that failed CI: pyright's forward-slashed, lowercase-drive
     /// absolute path against the verbatim root `canonicalize` returns.
