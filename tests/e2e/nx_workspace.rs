@@ -12,7 +12,7 @@
 
 use std::process::Command;
 
-use crate::support::repo_root;
+use crate::support::{bash_program, repo_root};
 
 /// Every project in the graph, and the uniform targets each one owes.
 ///
@@ -38,8 +38,12 @@ const UNIFORM_TARGETS: [&str; 6] = [
 /// invocation, and a nested command that wrote cache entries would race the run
 /// that spawned it.
 fn nx(args: &[&str]) -> String {
-    let output = Command::new("bash")
-        .arg(repo_root().join("scripts/nx.sh"))
+    let output = Command::new(bash_program())
+        // Named relative to the working directory below, not as an absolute
+        // path: on Windows an absolute one carries a drive letter and
+        // backslashes, and the script resolves its own root through `dirname`,
+        // which reads neither.
+        .arg("scripts/nx.sh")
         .args(args)
         .current_dir(repo_root())
         .output()
@@ -164,9 +168,9 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
 /// `scripts/nx-affected.sh --affects <project>` — its verdict and its reasoning —
 /// with the environment a CI leg hands it.
 fn affects(project: &str, base_ref: Option<&str>) -> (String, String) {
-    let mut command = Command::new("bash");
+    let mut command = Command::new(bash_program());
     command
-        .arg(repo_root().join("scripts/nx-affected.sh"))
+        .arg("scripts/nx-affected.sh")
         .arg("--affects")
         .arg(project)
         .current_dir(repo_root())
