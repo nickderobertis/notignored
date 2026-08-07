@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.11](https://github.com/nickderobertis/notignored/compare/v0.1.10...v0.1.11) - 2026-08-07
+
+### Added
+
+- *(release)* maintain a floating `v0` tag for GitHub Action consumers ([#39](https://github.com/nickderobertis/notignored/pull/39))
+
 ## [0.1.10](https://github.com/nickderobertis/notignored/compare/v0.1.9...v0.1.10) - 2026-08-07
 
 ### Added
