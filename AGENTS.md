@@ -66,7 +66,7 @@ follow-ups.
 Three projects, one graph: `notignored` (the crate, rooted at the repo root),
 `notignored-sdk-python`, `notignored-sdk-npm`. The SDKs are wired-but-empty
 scaffolds — their placeholder suites prove the graph and CI, and each carries its
-own nested `AGENTS.md`.
+own nested `AGENTS.md` and a `.github/CODEOWNERS` line routing its reviews.
 
 Nx **runs** targets; it never decides what one does. A target names its project's
 own language-native tool (`_crate-*` recipes for cargo, ruff for the Python SDK,
@@ -74,8 +74,9 @@ biome for the TS SDK), and the repo-wide verbs — `bootstrap`, `check`, `lint`,
 `test`, `format`, `fmt-check`, `upgrade` — shell out to `nx run-many`/`nx affected`
 rather than looping over projects. Adding a project means a `project.json`
 declaring the same six target names (`bootstrap`, `format`, `format-check`,
-`lint`, `test`, `check`), a nested `AGENTS.md`, and a line in
-`tests/e2e/nx_workspace.rs`; nothing in the justfile has to change.
+`lint`, `test`, `check`) plus one `scope:` tag, a nested `AGENTS.md`, a
+`CODEOWNERS` line, and a line in `tests/e2e/nx_workspace.rs`; nothing in the
+justfile has to change.
 
 Affected selection rests on **project roots, not `namedInputs`** — Nx maps a
 changed file to the project whose root is its longest prefix, and treats a
@@ -92,6 +93,24 @@ base, `scripts/nx-affected.sh` runs the whole graph and says so.
 `just bootstrap` is serialized (`--parallel=1`): projects share the
 `scripts/setup-*.sh` installers, which recreate a `.dev/<tool>` tree from scratch
 when a pin moves, and two of those at once race on the same directory.
+
+**Boundaries are enforced on tags, over the whole graph.** Each project declares
+one `scope:` tag and the CLI is the base layer — an SDK may depend on it, nothing
+may depend on an SDK. `tests/e2e/nx_workspace.rs` checks every edge Nx resolved
+against that layering and that the graph stays acyclic. Not Nx's
+`@nx/enforce-module-boundaries`: that rule is ESLint's and reaches only the one
+TypeScript project, so it could not see an edge from the Rust crate at all.
+
+**`scripts/nx.sh` is quiet on success and preserves what it swallowed.** Every
+gate recipe runs through it, so its output is `just check`'s output. A green run
+is one line naming `.logs/nx.log`; a failure streams that log to stderr and names
+it again. `scripts/preserved-log.sh` owns the file: owner-only, truncated per
+*invocation*, and diverted to `nx.<pid>.log` when an enclosing run has claimed the
+stable path — which happens on every gate, because `just check` runs the e2e suite
+through Nx and those journeys spawn the wrapper again. Credential-shaped
+environment values are masked on the way in, since a log outlives the terminal.
+`NOTIGNORED_NX_SHOW_OUTPUT=1` streams instead, for the callers that parse Nx's
+stdout.
 
 ## The ignore-record contract (fixed)
 
