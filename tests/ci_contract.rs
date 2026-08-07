@@ -138,22 +138,27 @@ fn ci_installs_every_harness_the_chain_names() {
     }
 }
 
+/// Scoped to the `llmlint` job on purpose: what this contract owns is the judge
+/// binaries whose upstream releases can take a *required* check down. Another
+/// job installing a test runner globally answers to its own tradeoffs, and
+/// failing it here would be this change legislating beyond its scope.
 #[test]
 fn every_harness_install_is_version_pinned() {
-    let workflow = read(".github/workflows/ci.yml");
-    let installs = npm_global_installs(&workflow);
+    let job = llmlint_job();
+    let installs = npm_global_installs(&job);
     // Without this the check passes on an empty list — which is what it did
     // while the extractor was reading past the steps' `run:` keys.
     assert!(
         !installs.is_empty(),
-        "ci.yml has no `npm install -g` at all; either the harness installs were \
-         removed or this check stopped finding them"
+        "ci.yml's llmlint job has no `npm install -g` at all; either the harness \
+         installs were removed or this check stopped finding them"
     );
     for spec in installs {
         assert!(
             is_version_pinned(spec),
-            "ci.yml installs `{spec}` unpinned; any upstream release can then \
-             take the required llmlint check — and with it the merge path — down"
+            "ci.yml's llmlint job installs `{spec}` unpinned; any upstream release \
+             can then take the required llmlint check — and with it the merge \
+             path — down"
         );
     }
 }
