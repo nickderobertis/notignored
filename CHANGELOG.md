@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/nickderobertis/notignored/compare/v0.1.2...v0.1.3) - 2026-08-07
+
+### Changed
+
+- recompose notignored as an Nx monorepo ([#16](https://github.com/nickderobertis/notignored/pull/16))
+
 ## [0.1.2](https://github.com/nickderobertis/notignored/compare/v0.1.1...v0.1.2) - 2026-08-07
 
 ### Added
