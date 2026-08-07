@@ -1,0 +1,22 @@
+# Every asset attached to the real GitHub Release v0.1.11, verbatim, as
+# `gh release view v0.1.11 --json assets` reported it.
+#
+# This is the naming contract with the bytes on it: tests/install_contract.rs
+# renders the URLs scripts/install.sh builds for each published target and
+# asserts every one names a line below. Nothing here is derived from the script,
+# so a template that drifts to a name no release carries fails against the
+# release rather than against itself — which is exactly what the appended
+# `.tar.gz.sha256` did, unnoticed, from the first release through v0.1.11.
+#
+# A past release's manifest cannot go stale. Replace it only if the naming
+# contract deliberately changes, and then with a *newer* release's real listing.
+notignored-v0.1.11-aarch64-apple-darwin.sha256
+notignored-v0.1.11-aarch64-apple-darwin.tar.gz
+notignored-v0.1.11-aarch64-unknown-linux-gnu.sha256
+notignored-v0.1.11-aarch64-unknown-linux-gnu.tar.gz
+notignored-v0.1.11-x86_64-apple-darwin.sha256
+notignored-v0.1.11-x86_64-apple-darwin.tar.gz
+notignored-v0.1.11-x86_64-pc-windows-msvc.sha256
+notignored-v0.1.11-x86_64-pc-windows-msvc.zip
+notignored-v0.1.11-x86_64-unknown-linux-gnu.sha256
+notignored-v0.1.11-x86_64-unknown-linux-gnu.tar.gz

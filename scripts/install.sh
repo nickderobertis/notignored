@@ -32,9 +32,17 @@ BIN_FILE="$BIN"
 # The release-asset naming contract, shared with the `archive:` input of
 # taiki-e/upload-rust-binary-action in .github/workflows/release.yml. The two
 # must spell it identically or an install path 404s the moment they drift;
-# tests/install_contract.rs fails the build when they disagree. Keep the line
-# below verbatim — the test reads it.
+# tests/install_contract.rs fails the build when they disagree. Keep the two
+# lines below verbatim — the test reads them.
+#
+# That template names the asset *stem*: the upload action derives both published
+# names from it by giving it an extension, the archive's and `.sha256`. The
+# checksum is therefore a sibling of the archive, not a suffix on it —
+# `notignored-v0.1.11-x86_64-unknown-linux-gnu.sha256`, never
+# `…-unknown-linux-gnu.tar.gz.sha256`, which is what this script asked for
+# through v0.1.11 and 404'd on every release it had ever cut.
 # ASSET_NAME_TEMPLATE: $bin-$tag-$target
+# CHECKSUM_NAME_TEMPLATE: $bin-$tag-$target.sha256
 BASE_URL="${NOTIGNORED_RELEASE_BASE_URL:-https://github.com/$REPO/releases/download}"
 API_URL="${NOTIGNORED_RELEASE_API_URL:-https://api.github.com}"
 
@@ -152,13 +160,16 @@ case "$VERSION" in
     *) err "invalid release tag: $VERSION (expected vX.Y.Z)" ;;
 esac
 
-ARCHIVE="$BIN-$VERSION-$TARGET.$EXT"
+# Both published names come off the one stem — see ASSET_NAME_TEMPLATE above.
+ASSET="$BIN-$VERSION-$TARGET"
+ARCHIVE="$ASSET.$EXT"
+CHECKSUM="$ASSET.sha256"
 fetch "$BASE_URL/$VERSION/$ARCHIVE" "$WORK/$ARCHIVE" \
     || err "cannot download $ARCHIVE — check that release $VERSION publishes this target"
-fetch "$BASE_URL/$VERSION/$ARCHIVE.sha256" "$WORK/$ARCHIVE.sha256" \
+fetch "$BASE_URL/$VERSION/$CHECKSUM" "$WORK/$CHECKSUM" \
     || err "cannot download the checksum for $ARCHIVE; refusing to install unverified — retry, or install from source: cargo install --git https://github.com/$REPO --locked"
 
-expected="$(cut -d' ' -f1 < "$WORK/$ARCHIVE.sha256")"
+expected="$(cut -d' ' -f1 < "$WORK/$CHECKSUM")"
 actual="$(sha256_of "$WORK/$ARCHIVE")" \
     || err "cannot compute the SHA-256 of $ARCHIVE; refusing to install unverified — install sha256sum, shasum, or openssl, or install from source: cargo install --git https://github.com/$REPO --locked"
 [ "$expected" = "$actual" ] \

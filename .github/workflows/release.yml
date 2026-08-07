@@ -18,6 +18,10 @@ name: Release
 #   * upload        — build each target on a native runner and attach the archive
 #                     + sha256 checksum to the Release (what scripts/install.sh
 #                     downloads).
+#   * verify-install— install that Release with scripts/install.sh, the way the
+#                     README one-liner and the GitHub Action's default do, and
+#                     smoke-test what it put on PATH. Ungated: the Release
+#                     publishes whatever the registry variables say.
 #   * publish-crate — idempotent crates.io publish; self-activates the day
 #                     CARGO_REGISTRY_TOKEN is set.
 #   * build-wheels  — wrap the prebuilt binary in per-platform PyPI wheels with
@@ -49,9 +53,10 @@ name: Release
 #                     consumers to use) onto this release, LAST, after every
 #                     publish and verify job. See scripts/update-major-tag.sh.
 #
-# Both verify jobs run the version at publish time only. `published-smoke.yml`
-# runs the identical script against whatever the registries serve as `latest`, on
-# a weekly schedule, so rot between releases surfaces without one.
+# Every verify job runs the version at publish time only. `published-smoke.yml`
+# runs the identical scripts against whatever the registries and the Release
+# serve as `latest`, on a weekly schedule, so rot between releases surfaces
+# without one.
 #
 # The version is never written here: every artifact takes it from Cargo.toml
 # (maturin via `dynamic = ["version"]`, npm via scripts/npm-build.mjs), so
@@ -182,6 +187,70 @@ jobs:
           # does need is RELEASE_PLZ_TOKEN, which cuts the Release that starts
           # this workflow — see release-plz.yml and the note at the top.
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Post-upload gate: install the release that was just attached, the way the
+  # README one-liner and the GitHub Action's default `version: latest` install it.
+  #
+  # `upload` proves the assets were attached; nothing proved they could be
+  # *fetched under the names the installer builds*. That gap is why every release
+  # through v0.1.11 shipped an installer that 404'd its own checksum and refused
+  # to install — the archive downloaded fine, and `scripts/install.sh` asked for
+  # `<archive>.tar.gz.sha256` where the upload publishes `<archive>.sha256`. The
+  # dogfood workflow could not see it either: it runs `version: local`, which
+  # compiles from source. So this leg runs the real script against the real
+  # Release, then hands what it installed to the same smoke script the registry
+  # verify jobs use.
+  #
+  # Ungated: a GitHub Release always publishes, whatever PYPI_PUBLISH and
+  # NPM_PUBLISH say, so this leg always has something to install.
+  #
+  # Three legs, not four: `install.sh`'s ZIP branch needs `unzip` under a POSIX
+  # shell, which the Windows image does not ship — the Windows install path the
+  # README documents is `cargo install`, covered by ci.yml on windows-latest.
+  verify-install:
+    name: verify-install (${{ matrix.os }})
+    needs: upload
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The installer and the smoke assets, at the tag that was published.
+      - uses: actions/checkout@v4
+      - name: Check the release tag is a version
+        run: |
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"
+            exit 1
+          fi
+      # Release assets are served from a CDN that converges after the upload API
+      # answers, so the install is the propagation probe here for the same reason
+      # it is for PyPI and npm — see scripts/retry-install.sh.
+      - name: Install the published release with scripts/install.sh
+        env:
+          # Not needed to resolve a pinned tag, but install.sh sends it to
+          # api.github.com alone and a future --version-less run would want it.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/retry-install.sh \
+            --label "GitHub Release notignored $GITHUB_REF_NAME on $RUNNER_OS/$RUNNER_ARCH" \
+            --action "check the release's assets — upload may have attached no archive or no .sha256 for this target" \
+            -- sh scripts/install.sh --version "$GITHUB_REF_NAME" --to "$RUNNER_TEMP/notignored-bin"
+          echo "$RUNNER_TEMP/notignored-bin" >> "$GITHUB_PATH"
+      # Single-shot, like every other post-install assertion: a wrong version or
+      # a broken binary must fail now rather than be retried for ten minutes.
+      - name: Smoke-test what the Release served
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          bash scripts/smoke-published.sh \
+            --expect-version "$ver" \
+            --label "GitHub Release notignored $ver on $RUNNER_OS/$RUNNER_ARCH"
 
   # crates.io publishing: runs whenever CARGO_REGISTRY_TOKEN is set. Gated on the
   # same `test` job as the binary upload, but NOT on `upload` — a flaky
@@ -761,6 +830,7 @@ jobs:
   major-tag:
     needs:
       - upload
+      - verify-install
       - publish-crate
       - publish-pypi
       - verify-pypi

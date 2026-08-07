@@ -72,22 +72,27 @@ const RETRY_SCRIPT: &str = "scripts/retry-install.sh";
 /// pip and npm both cache the index response they just read, so a second attempt
 /// without these would re-read the cached "no such version" page for the whole
 /// budget — a retry polling its own memory.
-const RETRIED_COMMANDS: [&str; 3] = [
+const RETRIED_COMMANDS: [&str; 4] = [
     "pip install --no-cache-dir ",
     "npm install -g --prefer-online ",
     "npm install --prefer-online ",
+    // The GitHub Release's own installer. It needs no cache-bypass flag: it
+    // fetches an asset URL with curl, which caches nothing between attempts.
+    "sh scripts/install.sh ",
 ];
 
 /// Every job that installs an *exact* version, as `(workflow, job)`.
 ///
-/// The release's three verify jobs install the version the Release just
+/// The release's four verify jobs install the version the Release just
 /// published; the sweep's npm job pins whatever `npm view` reported, so it races
-/// the same index whenever it runs near a release. The sweep's PyPI job is not
-/// here on purpose: it installs `latest`, which has no version to wait for.
-const PINNED_INSTALLS: [(&str, &str); 4] = [
+/// the same index whenever it runs near a release. The sweep's PyPI and
+/// GitHub-Release jobs are not here on purpose: each installs `latest`, which
+/// has no version to wait for.
+const PINNED_INSTALLS: [(&str, &str); 5] = [
     (RELEASE, "verify-pypi"),
     (RELEASE, "verify-python-sdk"),
     (RELEASE, "verify-npm"),
+    (RELEASE, "verify-install"),
     (SMOKE, "npm"),
 ];
 
@@ -108,13 +113,31 @@ const VERIFY_RUNNERS: [&str; 4] = [
     "windows-latest",
 ];
 
-/// Every job that installs a published package and smoke-tests it, as
-/// `(workflow, job)`.
-const VERIFICATIONS: [(&str, &str); 4] = [
-    (RELEASE, "verify-pypi"),
-    (RELEASE, "verify-npm"),
-    (SMOKE, "pypi"),
-    (SMOKE, "npm"),
+/// The runners the GitHub Release's own installer is verified on.
+///
+/// `scripts/install.sh` is the POSIX-shell surface, and its ZIP branch needs
+/// `unzip` under that shell, which the Windows image does not ship — the install
+/// path the README gives Windows users is `cargo install`, covered by `ci.yml`'s
+/// install jobs on windows-latest. The `x86_64-pc-windows-msvc` asset *names* are
+/// still held to a real release's manifest by `tests/install_contract.rs`, so the
+/// failure that made this leg necessary could not hide on the leg it lacks.
+const INSTALLER_RUNNERS: [&str; 3] = ["ubuntu-latest", "macos-latest", "macos-15-intel"];
+
+/// Every job that installs a published artifact and smoke-tests it, as
+/// `(workflow, job, runners)`.
+///
+/// The GitHub Release is the third install surface, and until v0.1.12 the only
+/// one nothing here installed from: `scripts/install.sh` asked for the checksum
+/// as `<archive>.tar.gz.sha256` where every release publishes `<archive>.sha256`,
+/// so it 404'd and refused to install on every release it ever cut. The dogfood
+/// workflow runs `version: local`, which compiles from source, so it saw nothing.
+const VERIFICATIONS: [(&str, &str, &[&str]); 6] = [
+    (RELEASE, "verify-pypi", &VERIFY_RUNNERS),
+    (RELEASE, "verify-npm", &VERIFY_RUNNERS),
+    (RELEASE, "verify-install", &INSTALLER_RUNNERS),
+    (SMOKE, "pypi", &VERIFY_RUNNERS),
+    (SMOKE, "npm", &VERIFY_RUNNERS),
+    (SMOKE, "github-release", &INSTALLER_RUNNERS),
 ];
 
 fn workflow(relative: &str) -> Node {
@@ -405,7 +428,7 @@ fn every_published_package_is_smoke_tested_on_every_supported_os() {
         repo_root().join(SMOKE_SCRIPT).is_file(),
         "{SMOKE_SCRIPT} is gone, and every verification below calls it"
     );
-    for (file, name) in VERIFICATIONS {
+    for (file, name, expected_runners) in VERIFICATIONS {
         let job = workflow(file).get("jobs").get(name).clone();
         let runners: Vec<&str> = job
             .get("strategy")
@@ -416,8 +439,8 @@ fn every_published_package_is_smoke_tested_on_every_supported_os() {
             .map(Node::scalar)
             .collect();
         assert_eq!(
-            runners, VERIFY_RUNNERS,
-            "`{name}` in {file} no longer verifies the published package on every OS"
+            runners, expected_runners,
+            "`{name}` in {file} no longer verifies the published artifact on every OS"
         );
         assert_eq!(
             job.get("runs-on").scalar(),
@@ -458,20 +481,29 @@ fn every_published_package_is_smoke_tested_on_every_supported_os() {
 /// takes to become the default — which is the window this job exists to cover.
 #[test]
 fn the_release_verification_installs_the_version_it_asserts() {
-    for (name, specifier) in [
+    for (name, specifier, from_the_tag) in [
         (
             "verify-pypi",
             "pip install --no-cache-dir \"notignored-cli==${ver}\"",
+            "${GITHUB_REF_NAME#v}",
         ),
         (
             "verify-npm",
             "npm install -g --prefer-online \"notignored-cli@${ver}\"",
+            "${GITHUB_REF_NAME#v}",
+        ),
+        // The installer takes a release *tag*, not a bare version, so it reads
+        // the ref unstripped; the smoke assertion in the next step strips it.
+        (
+            "verify-install",
+            "sh scripts/install.sh --version \"$GITHUB_REF_NAME\"",
+            "$GITHUB_REF_NAME",
         ),
     ] {
         let job = job(name);
         let installs = scripts(&job)
             .iter()
-            .any(|script| script.contains(specifier) && script.contains("${GITHUB_REF_NAME#v}"));
+            .any(|script| script.contains(specifier) && script.contains(from_the_tag));
         assert!(
             installs,
             "`{name}` no longer installs the released version with `{specifier}`"
