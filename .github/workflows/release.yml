@@ -193,6 +193,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build wheel
+        # The gate denies warnings on Linux only; these targets are compiled
+        # nowhere else, so deny them here too rather than let a
+        # platform-specific one ship unread.
+        env:
+          RUSTFLAGS: "-D warnings"
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
@@ -252,6 +257,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # A Release can be cut by hand with any tag, and the version below is
+      # sliced straight out of it — so check the shape before it becomes a
+      # package specifier. Anything but vX.Y.Z means the Release is not one this
+      # pipeline built.
+      - name: Check the release tag is a version
+        run: |
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"; exit 1 ;;
+          esac
       - name: Wait for the version to land on PyPI
         run: |
           ver="${GITHUB_REF_NAME#v}"
@@ -318,6 +333,9 @@ jobs:
       - name: Build the platform binary
         env:
           TARGET: ${{ matrix.target }}
+          # Same reason as the wheels: a warning that only this target emits has
+          # no other job to surface it.
+          RUSTFLAGS: "-D warnings"
         run: |
           rustup target add "$TARGET"
           cargo build --release --locked --target "$TARGET"
@@ -404,6 +422,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      # A Release can be cut by hand with any tag, and the version below is
+      # sliced straight out of it — so check the shape before it becomes a
+      # package specifier. Anything but vX.Y.Z means the Release is not one this
+      # pipeline built.
+      - name: Check the release tag is a version
+        run: |
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::release tag '$GITHUB_REF_NAME' is not a vX.Y.Z version tag"; exit 1 ;;
+          esac
       - name: Wait for the version to land on npm
         run: |
           ver="${GITHUB_REF_NAME#v}"

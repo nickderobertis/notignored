@@ -19,6 +19,7 @@ mod llmlint_parity;
 mod markdown;
 mod packaging;
 mod polyglot;
+mod publish_npm;
 mod python_tools_setup;
 mod python_types_parity;
 mod ruff_grammar;
