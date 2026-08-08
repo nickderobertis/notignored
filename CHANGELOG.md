@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.12](https://github.com/nickderobertis/notignored/compare/v0.1.11...v0.1.12) - 2026-08-08
+
+### Fixed
+
+- *(release)* release the action surface, so #42's installer fix ships ([#45](https://github.com/nickderobertis/notignored/pull/45))
+
 ## [0.1.11](https://github.com/nickderobertis/notignored/compare/v0.1.10...v0.1.11) - 2026-08-07
 
 ### Added
