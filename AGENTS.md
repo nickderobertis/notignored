@@ -357,6 +357,16 @@ single-shot, so a wrong version fails now instead of in ten minutes.
   failed to publish. `scripts/update-major-tag.sh` refuses a pre-release and
   refuses to walk the tag backwards onto an older release. README examples use
   `@v0`; the dogfood workflow stays `uses: ./`.
+- **Anything a consumer receives at the action tag must be release-relevant.**
+  release-plz decides the crate changed by diffing its *packaged* files — the
+  `[package] include` set — so a fix to a file `action.yml` runs but `include`
+  omits cuts no release and never moves `v0`. That is how v0.1.11 shipped an
+  installer that 404'd its own checksum and stayed the `@v0` default after the
+  fix merged. `include` therefore carries `action.yml` and the scripts the
+  composite invokes, for release *scope* rather than for the `.crate`;
+  `tests/action_contract.rs` walks the action's `$GITHUB_ACTION_PATH`
+  references transitively and fails when one falls outside that set. A new
+  action script is added to `include` in the same change.
 - **We are pre-1.0**, so a breaking change is a minor bump, not a major.
   Revisit the mapping in `release-plz.toml` at 1.0.
 

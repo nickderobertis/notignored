@@ -10,10 +10,35 @@ homepage = "https://github.com/nickderobertis/notignored"
 readme = "README.md"
 keywords = ["cli", "lint", "noqa", "suppression", "code-review"]
 categories = ["command-line-utilities", "development-tools"]
-# Package only what a consumer needs: the sources, manifest, readme, and license.
-# Excludes the CLAUDE.md/AGENTS.md symlink (registries reject symlinks), CI
-# config, scripts, and the e2e fixtures.
-include = ["src/**/*.rs", "Cargo.toml", "README.md", "LICENSE"]
+# Package what a consumer receives: the sources, manifest, readme, license — and
+# the composite action's own surface, which ships at the git tag rather than in
+# the archive. Excludes the CLAUDE.md/AGENTS.md symlink (registries reject
+# symlinks), CI config, the other scripts, and the e2e fixtures.
+#
+# The action entries are here for release *scope*, not for the archive.
+# release-plz decides a package changed by diffing its **packaged files** against
+# the last release ("Getting packaged files for crate at …"), so a fix to
+# `scripts/install.sh` — the default install path of `uses: nickderobertis/
+# notignored@v0` — was invisible to it: v0.1.11's installer 404'd its own
+# checksum, #42 fixed it, and release-plz opened no release PR, leaving `v0`
+# pinned to the broken tree. Listing the action surface here is release-plz's own
+# mechanism for that (it has no path-trigger config), and it costs three text
+# files in the `.crate`. Anything else a consumer receives at the tag belongs
+# here too; `tests/action_contract.rs`'s
+# `every_file_the_action_runs_at_the_tag_is_release_relevant` holds the line.
+#
+# Anchored with a leading `/`: `include` takes gitignore patterns, so a bare
+# `action.yml` would also match any nested one (which is why `README.md` above
+# pulls in the SDKs' readmes).
+include = [
+  "src/**/*.rs",
+  "Cargo.toml",
+  "README.md",
+  "LICENSE",
+  "/action.yml",
+  "/scripts/install.sh",
+  "/scripts/action/comment.sh",
+]
 # `examples/` is documentation for the CLI — sample sources carrying the
 # suppressions the README shows it reporting — not cargo examples. Left on,
 # cargo would auto-discover the Rust one as a build target and compile a file
