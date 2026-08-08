@@ -13,6 +13,8 @@
 #[path = "support/workflow_yaml.rs"]
 mod workflow_yaml;
 
+use std::collections::BTreeSet;
+
 use workflow_yaml::{parse, read, repo_root, run_steps, Node};
 
 fn action() -> Node {
@@ -201,6 +203,146 @@ fn the_install_step_builds_from_source_or_installs_a_verified_release() {
         install.get("env").get("VERSION").scalar(),
         "${{ inputs.version }}",
         "the version input must reach the script through the environment"
+    );
+}
+
+/// The prefix a composite step uses to reach its own checkout — which, for
+/// `uses: nickderobertis/notignored@v0`, is the tree at the tag.
+const ACTION_PATH: &str = "$GITHUB_ACTION_PATH";
+
+/// The repo-relative paths a shell script reaches for under `$GITHUB_ACTION_PATH`.
+///
+/// A bare `$GITHUB_ACTION_PATH` (the `cargo install --path` branch) names the
+/// checkout itself, not a file, and is left out — the crate sources it needs are
+/// the package by definition.
+fn referenced_paths(script: &str) -> Vec<String> {
+    script
+        .match_indices(ACTION_PATH)
+        .filter_map(|(at, _)| script[at + ACTION_PATH.len()..].strip_prefix('/'))
+        .map(|tail| {
+            tail.chars()
+                .take_while(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | '`' | ';' | ')'))
+                .collect::<String>()
+        })
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+/// Every file the action hands to the runner, discovered transitively: the
+/// composite's `run:` scripts name what they invoke, and those scripts may name
+/// more.
+fn action_runtime_paths() -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let mut queue: Vec<String> = action()
+        .get("runs")
+        .get("steps")
+        .to_vec()
+        .iter()
+        .filter_map(|step| step.find("run").map(|run| run.scalar().to_string()))
+        .flat_map(|script| referenced_paths(&script))
+        .collect();
+    while let Some(path) = queue.pop() {
+        if !found.insert(path.clone()) {
+            continue;
+        }
+        assert!(
+            repo_root().join(&path).is_file(),
+            "the action reaches for `{path}`, which is not in this repository"
+        );
+        queue.extend(referenced_paths(&read(&path)));
+    }
+    found
+}
+
+/// The files `cargo package` would ship — which is also the set release-plz
+/// diffs to decide the crate changed, and so the set that can move `v0`.
+fn packaged_files() -> BTreeSet<String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = std::process::Command::new(&cargo)
+        .args(["package", "--list", "--allow-dirty"])
+        .current_dir(repo_root())
+        .output()
+        .expect("run `cargo package --list`");
+    assert!(
+        output.status.success(),
+        "`cargo package --list` failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.trim().replace('\\', "/"))
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// The paths in `required` that `packaged` does not cover.
+fn outside_release_scope(required: &BTreeSet<String>, packaged: &BTreeSet<String>) -> Vec<String> {
+    required
+        .iter()
+        .filter(|path| !packaged.contains(*path))
+        .cloned()
+        .collect()
+}
+
+/// Anything a consumer receives at the action tag has to be release-relevant.
+///
+/// `@v0` serves the tree at a tag and the tag only moves on a release, but
+/// release-plz decides the crate changed by diffing its *packaged* files — so a
+/// file the action runs and `include` omits can be fixed on `main` and never
+/// reach a single consumer. That is not hypothetical: `scripts/install.sh`
+/// asked for a checksum name no release publishes, the fix landed, release-plz
+/// saw nothing, and `@v0` stayed pinned to the broken installer.
+#[test]
+fn every_file_the_action_runs_at_the_tag_is_release_relevant() {
+    let packaged = packaged_files();
+    let required = action_runtime_paths();
+    assert!(
+        !required.is_empty(),
+        "no `$GITHUB_ACTION_PATH` reference found; the reader stopped seeing them"
+    );
+    assert_eq!(
+        outside_release_scope(&required, &packaged),
+        Vec::<String>::new(),
+        "the action runs these at the tag but `[package] include` omits them, so \
+         changing one cannot cut a release: add each to Cargo.toml's `include`"
+    );
+    // The manifest itself is what the runner reads first, and the `local`
+    // branch compiles the checkout in place.
+    for path in ["action.yml", "Cargo.toml", "Cargo.lock", "src/main.rs"] {
+        assert!(
+            packaged.contains(path),
+            "`{path}` ships to action consumers but is outside the release scope"
+        );
+    }
+}
+
+/// The two readers above, on the cases they have to tell apart.
+#[test]
+fn the_release_scope_check_reads_references_and_reports_the_uncovered() {
+    assert_eq!(
+        referenced_paths(r#"sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to "$root/bin""#),
+        vec!["scripts/install.sh"]
+    );
+    // A bare reference is the checkout, not a file; `$GITHUB_ACTION_PATHX` is a
+    // different variable and must not be read as one.
+    assert_eq!(
+        referenced_paths(r#"cargo install --path "$GITHUB_ACTION_PATH" && x=$GITHUB_ACTION_PATHX"#),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        referenced_paths("bash $GITHUB_ACTION_PATH/scripts/a.sh; $GITHUB_ACTION_PATH/b.sh"),
+        vec!["scripts/a.sh", "b.sh"]
+    );
+
+    let packaged = BTreeSet::from(["scripts/install.sh".to_string()]);
+    let required = BTreeSet::from([
+        "scripts/install.sh".to_string(),
+        "scripts/new.sh".to_string(),
+    ]);
+    assert_eq!(
+        outside_release_scope(&required, &packaged),
+        vec!["scripts/new.sh"],
+        "a script the action runs but the package omits must be reported"
     );
 }
 
