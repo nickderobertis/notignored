@@ -8,19 +8,28 @@ its public signature carries no binary argument.
 
 The dividing line is what that binary can actually produce. Every state it *can*
 reach — a report, `--diff`, the tool filter, a non-zero exit — is driven with it
-and with nothing else. Two states it *cannot* reach are covered without
-fabricating a CLI to fake them: it never prints a malformed report, and with
-`--format json` it never prints nothing. Those are proven by calling the strict
-reader directly with the payload a broken or newer build would emit
-(`test_contract.py`), and by pointing `NOTIGNORED_BIN` at real unrelated programs
-— the misconfiguration a user actually hits — to show the plumbing turns their
-stdout into a typed error (`test_errors.py`).
+and with nothing else, and nothing may stand in for those. Three ways cover the
+states it cannot reach, in this order of preference:
+
+* pointing `NOTIGNORED_BIN` at real unrelated programs — the misconfiguration a
+  user actually hits — for output that is not a report and for no output at all
+  (`test_errors.py`);
+* `newer_notignored` below, which is a `notignored` this SDK cannot read: the
+  one branch a user reaches by *upgrading the CLI past the SDK*, whose report
+  names a word this version's contract does not define. It exists because the
+  public entry point takes no payload, so the rejection a user meets can only be
+  reached through a program that prints one — the same reason the TypeScript SDK
+  keeps `test/fixtures/not-notignored.mjs`;
+* calling the strict reader directly with the payload a broken build would emit,
+  for the field-by-field shape rules (`test_contract.py`).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +121,34 @@ def report_payload(
     envelope: dict[str, Any] = {"version": 1, "ignores": [ignore], "errors": []}
     envelope.update(overrides)
     return envelope
+
+
+@pytest.fixture
+def newer_notignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[dict[str, Any]], Path]:
+    """Point the SDK at a `notignored` whose report this SDK cannot read.
+
+    The returned callable takes the payload that build prints — the one thing a
+    test of this branch is really about — installs the stand-in program from
+    `tests/fixtures/` beside it, and puts it on `NOTIGNORED_BIN`. What comes back
+    is the path the SDK will run, for the assertions that name it.
+    """
+
+    def install(payload: dict[str, Any]) -> Path:
+        home = tmp_path / "newer-notignored"
+        home.mkdir(exist_ok=True)
+        (home / "report.json").write_text(json.dumps(payload), encoding="utf-8")
+        program = home / "notignored"
+        program.write_text(
+            (Path(__file__).parent / "fixtures" / "not_notignored.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        program.chmod(0o755)
+        monkeypatch.setenv("NOTIGNORED_BIN", str(program))
+        return program
+
+    return install
 
 
 @pytest.fixture

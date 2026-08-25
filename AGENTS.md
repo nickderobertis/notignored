@@ -132,7 +132,13 @@ Both SDK readers **carry a field they do not know past**, so an additive field
 does not break a consumer holding an older SDK; the version check is what catches
 an envelope whose meaning has really moved. What they still refuse is a **word**
 whose vocabulary this contract defines — an unknown `tool`, `scope`, or `change`
-— because guessing at one reports a suppression as something it is not.
+— because guessing at one reports a suppression as something it is not. Those
+three vocabularies are restated in three languages and generated from none, so
+each SDK's suite reads the words out of `src/model.rs` and holds its own — and
+the list its refusal names a user — against them exhaustively
+(`tests/test_vocabulary.py`, `test/vocabulary.test.mjs`). Adding a variant means
+all three in one change; both suites name `crateSource`, so the crate-side half
+of that is what makes them run.
 
 `--diff` records carry one field a tree scan does not: `change`, `added` or
 `justification-edited`, set by `src/diff.rs::classify` and omitted (never null)

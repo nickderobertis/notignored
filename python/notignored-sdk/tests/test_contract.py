@@ -2,12 +2,15 @@
 
 A working `notignored` cannot print any of these payloads — the SDK pins its CLI
 exactly, which is what makes strictness safe — so there is no real run that
-produces one. Rather than fabricate a CLI that would, these call the real strict
-reader with the payload a *newer or broken* build would emit. Nothing is mocked:
-the code under test is the code that ships, invoked directly.
+produces one. These call the real strict reader with the payload a *newer or
+broken* build would emit, field by field. Nothing is mocked: the code under test
+is the code that ships, invoked directly.
 
-The plumbing that carries its verdict out through `scan()` is proven separately,
-against a real subprocess, in `test_errors.py`.
+Two things are proven elsewhere, both against a real subprocess: the plumbing
+that carries any verdict out through `scan()` (`test_errors.py`), and the one
+branch a user reaches by upgrading the CLI past the SDK — a report naming a word
+this version's contract does not define — which `test_vocabulary.py` drives
+end to end through `scan` and `ascan`.
 """
 
 from __future__ import annotations

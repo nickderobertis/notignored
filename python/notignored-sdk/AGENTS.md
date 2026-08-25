@@ -38,13 +38,27 @@
   the SDK trees affect this one. **Nothing here stands in for the CLI**, and the
   dividing line is what the workspace binary can actually produce: every state it
   *can* reach — reports, `--diff`, the tool filter, a non-zero exit — is covered
-  by driving that binary, and nothing else may stand in for those. The two states
-  it *cannot* reach are covered without fabricating one: `tests/test_contract.py`
-  calls the strict reader directly with the payload a broken or newer build would
-  emit, and `tests/test_errors.py` points `NOTIGNORED_BIN` at real unrelated
-  programs (`echo`, `true`) — the misconfiguration a user actually hits — to
-  prove the plumbing carries that verdict out through `scan()`. A patched second
-  build of the crate, or test-only behaviour in the CLI, is not the answer.
+  by driving that binary, and nothing else may stand in for those. For the states
+  it *cannot* reach, in this order of preference: `tests/test_errors.py` points
+  `NOTIGNORED_BIN` at real unrelated programs (`echo`, `true`) — the
+  misconfiguration a user actually hits — to prove the plumbing carries a verdict
+  out through `scan()`; `tests/fixtures/not_notignored.py` is a `notignored` this
+  SDK cannot read, kept for the **one** branch a user reaches by upgrading the CLI
+  past the SDK — a report naming a word this contract does not define — because
+  the public entry point takes no payload, so that rejection can be reached no
+  other way (`tests/test_vocabulary.py`; the TypeScript SDK keeps
+  `test/fixtures/not-notignored.mjs` for the same branch and has since it landed);
+  and `tests/test_contract.py` calls the strict reader directly for the
+  field-by-field shape rules. A patched second build of the crate, or test-only
+  behaviour in the CLI, is not the answer.
+- **The three vocabularies are gated against the crate's, not only against
+  themselves.** `Tool`, `Scope` and `Change` are restated in Rust, TypeScript and
+  here, with nothing generating one from another, so `tests/test_vocabulary.py`
+  reads the words out of `src/model.rs` and holds both this SDK's enums and the
+  "known:" list each refusal names against them, exhaustively. A variant added on
+  either side fails until both have it; `npm/notignored-sdk/test/vocabulary.test.mjs`
+  is the other half, and the `crateSource` input above is what makes a crate-side
+  addition run this suite.
 - **Its lockfile is its own.** `uv.lock` here pins the dev tier; the repo root has
   no uv project. `bootstrap` runs `uv sync --locked`, so a dependency change
   means committing the refreshed lock in the same commit.

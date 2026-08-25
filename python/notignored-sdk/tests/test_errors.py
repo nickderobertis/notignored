@@ -7,7 +7,9 @@ reach — output that is not a report, and no output at all — use a real, unre
 program on `NOTIGNORED_BIN`, which is not a fabricated CLI but the
 misconfiguration a user actually hits: coreutils' `echo` prints something that is
 not a report, and `true` prints nothing. What each malformed *payload* means is
-proven against the reader itself in `test_contract.py`.
+proven against the reader itself in `test_contract.py`, and the one payload a
+user can really meet — a report from a CLI newer than this SDK — is driven
+through `scan()` in `test_vocabulary.py`.
 """
 
 from __future__ import annotations
