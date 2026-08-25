@@ -180,20 +180,47 @@ pub struct Changed {
     pub undecodable: Vec<String>,
 }
 
-/// One hunk of a unified diff: the base lines it replaced, and the new lines it
-/// wrote in their place.
+/// One hunk of a unified diff: what it replaced, what it wrote in place of it,
+/// or both.
 ///
-/// Both sides are kept because both are needed. The new side decides which
-/// directives a change *touched*, and the base side is where their counterparts
-/// lived — the pairing [`classify`] does.
+/// Both sides are needed. The new side decides which directives a change
+/// *touched*, and the base side is where their counterparts lived — the pairing
+/// [`classify`] does. They are a hunk's three shapes rather than two independent
+/// `Option`s because a header that says a hunk replaced nothing *and* wrote
+/// nothing describes no hunk at all, and nothing downstream could act on one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Hunk {
-    /// Inclusive 1-based `(first, last)` on the base side, or `None` for a pure
-    /// insertion, which replaced nothing.
-    base: Option<(u32, u32)>,
-    /// The same on the new side, or `None` for a pure deletion, which wrote
-    /// nothing.
-    new: Option<(u32, u32)>,
+enum Hunk {
+    /// Lines written where there were none. Nothing was replaced, so no
+    /// counterpart can have lived inside it.
+    Inserted { new: (u32, u32) },
+    /// Lines taken away, writing nothing in their place.
+    Deleted { base: (u32, u32) },
+    /// Base lines replaced by new ones — the only shape a pairing can use.
+    Replaced { base: (u32, u32), new: (u32, u32) },
+}
+
+impl Hunk {
+    /// The hunk two sides of a header describe, or `None` when they describe
+    /// neither a replacement, an insertion, nor a deletion.
+    ///
+    /// Inclusive 1-based `(first, last)` on each side, `None` where that side
+    /// holds no lines.
+    fn from_sides(base: Option<(u32, u32)>, new: Option<(u32, u32)>) -> Option<Hunk> {
+        match (base, new) {
+            (Some(base), Some(new)) => Some(Hunk::Replaced { base, new }),
+            (Some(base), None) => Some(Hunk::Deleted { base }),
+            (None, Some(new)) => Some(Hunk::Inserted { new }),
+            (None, None) => None,
+        }
+    }
+
+    /// The new lines this hunk wrote, if it wrote any.
+    fn new_lines(self) -> Option<(u32, u32)> {
+        match self {
+            Hunk::Inserted { new } | Hunk::Replaced { new, .. } => Some(new),
+            Hunk::Deleted { .. } => None,
+        }
+    }
 }
 
 fn overlaps(range: (u32, u32), start: u32, end: u32) -> bool {
@@ -216,7 +243,7 @@ impl FileChange {
     /// Not "holds no hunks": a change that only deleted lines from a file has
     /// hunks and adds nothing, and there is no new suppression to find in it.
     pub fn adds_no_lines(&self) -> bool {
-        self.hunks.iter().all(|hunk| hunk.new.is_none())
+        self.hunks.iter().all(|hunk| hunk.new_lines().is_none())
     }
 
     /// Whether any line of the inclusive span `start..=end` was added.
@@ -226,7 +253,7 @@ impl FileChange {
     pub fn intersects(&self, start: u32, end: u32) -> bool {
         self.hunks
             .iter()
-            .filter_map(|hunk| hunk.new)
+            .filter_map(|hunk| hunk.new_lines())
             .any(|new| overlaps(new, start, end))
     }
 
@@ -279,10 +306,10 @@ impl FileChange {
                 let last = first.checked_add(count - 1).ok_or_else(malformed)?;
                 Ok(Some((first, last)))
             };
-            hunks.push(Hunk {
-                base: side('-')?,
-                new: side('+')?,
-            });
+            // A header claiming neither side holds a line is one this build
+            // cannot act on, and reading it as "nothing changed here" is the
+            // silent miss the malformed-header rule exists to prevent.
+            hunks.push(Hunk::from_sides(side('-')?, side('+')?).ok_or_else(malformed)?);
         }
         Ok(FileChange { hunks, base: None })
     }
@@ -778,6 +805,22 @@ pub fn classify(report: &mut Report, changes: &BTreeMap<String, FileChange>, too
     }
 }
 
+/// How many lines a directive silences past its first, or `None` when its reach
+/// has no end — a whole file, or an unterminated block.
+///
+/// The *length*, never the range: absolute line numbers move whenever the change
+/// inserts a line above a directive, so comparing them would call every shifted
+/// suppression a new one. The length is what says whether a suppression still
+/// silences what it silenced, which is the question `added` asks — a block whose
+/// end marker moved down now covers code it did not, however unchanged its words
+/// are.
+fn reach(directive: &IgnoreDirective) -> Option<u32> {
+    directive
+        .suppressed
+        .end_line
+        .map(|end| end.saturating_sub(directive.suppressed.start_line))
+}
+
 /// Pair one file's reported directives with the ones its pre-image held, hunk by
 /// hunk, writing a verdict for each.
 ///
@@ -796,7 +839,14 @@ fn pair(
     let mut head_paired = vec![false; reported.len()];
     let mut base_used = vec![false; previous.len()];
     for hunk in hunks {
-        let (Some(base_range), Some(new_range)) = (hunk.base, hunk.new) else {
+        // Only a replacement can pair anything: an insertion has no base side
+        // for a counterpart to have lived on, and a deletion wrote no line for a
+        // reported directive to occupy.
+        let &Hunk::Replaced {
+            base: base_range,
+            new: new_range,
+        } = hunk
+        else {
             continue;
         };
         for (slot, &index) in reported.iter().enumerate() {
@@ -819,6 +869,7 @@ fn pair(
             head_paired[slot] = true;
             if candidate.rules == head.rules
                 && candidate.scope == head.scope
+                && reach(candidate) == reach(head)
                 && candidate.reason != head.reason
             {
                 verdicts[index] = Change::JustificationEdited;
@@ -1417,25 +1468,30 @@ mod tests {
         assert_eq!(
             change.hunks,
             vec![
-                Hunk {
-                    base: Some((2, 2)),
-                    new: Some((2, 2)),
+                Hunk::Replaced {
+                    base: (2, 2),
+                    new: (2, 2),
                 },
                 // A pure insertion replaced nothing, so no base directive can be
                 // inside it.
-                Hunk {
-                    base: None,
-                    new: Some((10, 11)),
-                },
-                Hunk {
-                    base: Some((20, 21)),
-                    new: None,
-                },
+                Hunk::Inserted { new: (10, 11) },
+                Hunk::Deleted { base: (20, 21) },
             ]
         );
         // Selection is unchanged by any of it: only the new side decides.
         assert!(change.intersects(2, 2) && change.intersects(10, 11));
         assert!(!change.intersects(21, 21));
+    }
+
+    /// A header describing neither side is not a hunk, and reading it as one
+    /// would be reading "nothing changed here" off a header git wrote to say
+    /// something did.
+    #[test]
+    fn a_header_that_holds_no_lines_on_either_side_is_an_error() {
+        let error = FileChange::parse("@@ -1,0 +1,0 @@\n", "git diff").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("unreadable hunk header"), "{message}");
+        assert!(message.contains("-1,0 +1,0"), "{message}");
     }
 
     /// A base side this build cannot read is an error for the same reason the

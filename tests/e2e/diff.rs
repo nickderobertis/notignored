@@ -1266,3 +1266,59 @@ fn the_human_report_says_which_suppressions_were_only_rejustified() {
         "notignored: 0 added, 1 justification edited in 1 file\n"
     );
 }
+
+/// A suppression that silences more code than it did is an addition, however
+/// unchanged its words are.
+///
+/// The case is a block: its scope and its rules are the same words either side
+/// of the change, so only how far it *reaches* says that the pull request
+/// silenced two more lines. Calling that a rewritten justification would tell a
+/// reviewer the opposite of what happened, on the entry they are least likely to
+/// look at twice.
+#[test]
+fn a_block_that_swallowed_more_lines_is_added_even_when_its_reason_moved_too() {
+    let repo = git_repo();
+    let root = repo.path();
+    let block = |reason: &str, lines: &str| {
+        format!(
+            "/* eslint-disable no-console -- {reason} */\n{lines}/* eslint-enable no-console */\n"
+        )
+    };
+    write(
+        root,
+        "app.js",
+        &block("the CLI prints here", "console.log(1);\n"),
+    );
+    commit(root, "baseline");
+
+    // The reason is reworded *and* the end marker moves down: two more lines of
+    // real code are now silenced.
+    git(root, &["checkout", "-q", "-b", "widened"]);
+    write(
+        root,
+        "app.js",
+        &block(
+            "the CLI writes its report here",
+            "console.log(1);\nconsole.log(2);\nconsole.log(3);\n",
+        ),
+    );
+    commit(root, "widen the block while rewording it");
+    assert_eq!(
+        classified(&json_report(root, &["--diff", "--diff-base", "main"])),
+        vec!["app.js:1 added"]
+    );
+
+    // The control, on the same directive: the words move and the reach does not.
+    git(root, &["checkout", "-q", "main"]);
+    git(root, &["checkout", "-q", "-b", "reworded"]);
+    write(
+        root,
+        "app.js",
+        &block("the CLI writes its report here", "console.log(1);\n"),
+    );
+    commit(root, "reword only");
+    assert_eq!(
+        classified(&json_report(root, &["--diff", "--diff-base", "main"])),
+        vec!["app.js:1 justification-edited"]
+    );
+}

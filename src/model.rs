@@ -169,9 +169,10 @@ impl fmt::Display for Scope {
 ///
 /// The two words are held to their plain meanings, because a reviewer reads
 /// them on every pull request. [`Change::JustificationEdited`] says the
-/// *justification* moved and nothing else did; a directive whose rules or scope
-/// the change altered is [`Change::Added`], because it now silences something
-/// its base version did not.
+/// *justification* moved and nothing else did; a directive whose rules, scope,
+/// or reach the change altered is [`Change::Added`], because it now silences
+/// something its base version did not — a block whose end marker moved down has
+/// swallowed real code, however unchanged its own words are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Change {
