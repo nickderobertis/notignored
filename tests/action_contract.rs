@@ -55,17 +55,64 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
     }
 }
 
+/// Two counts, not one: `count` is a published output workflows gate builds on,
+/// and folding rewritten justifications into it would start failing pull
+/// requests that added no suppression — the false alarm the word exists to
+/// remove, moved from the comment to the build.
 #[test]
-fn the_action_exposes_the_count_and_the_report_it_produced() {
+fn the_action_exposes_both_counts_and_the_report_it_produced() {
     let outputs = action().get("outputs").clone();
-    assert_eq!(outputs.keys(), vec!["count", "report-path"]);
     assert_eq!(
-        outputs.get("count").get("value").scalar(),
-        "${{ steps.scan.outputs.count }}"
+        outputs.keys(),
+        vec!["count", "justification-edited-count", "report-path"]
+    );
+    for output in ["count", "justification-edited-count", "report-path"] {
+        assert_eq!(
+            outputs.get(output).get("value").scalar(),
+            format!("${{{{ steps.scan.outputs.{output} }}}}"),
+            "the {output} output is not the scan step's own"
+        );
+    }
+    assert!(
+        outputs
+            .get("count")
+            .get("description")
+            .scalar()
+            .contains("added"),
+        "`count` no longer documents that it counts additions"
+    );
+    // Every surface spells out what was edited; "edited" alone reads as the
+    // silenced code having changed.
+    let edited = outputs
+        .get("justification-edited-count")
+        .get("description")
+        .scalar()
+        .to_string();
+    assert!(edited.contains("justification"), "{edited}");
+
+    // The comment step decides whether to post from both counts, so both have
+    // to reach it — through `env`, like everything else.
+    let comment = action()
+        .get("runs")
+        .get("steps")
+        .list()
+        .iter()
+        .find(|step| {
+            step.find("run")
+                .is_some_and(|run| run.scalar().contains("comment.sh"))
+        })
+        .expect("the composite has a comment step")
+        .clone();
+    assert_eq!(
+        comment
+            .get("env")
+            .get("JUSTIFICATION_EDITED_COUNT")
+            .scalar(),
+        "${{ steps.scan.outputs.justification-edited-count }}"
     );
     assert_eq!(
-        outputs.get("report-path").get("value").scalar(),
-        "${{ steps.scan.outputs.report-path }}"
+        comment.get("env").get("COUNT").scalar(),
+        "${{ steps.scan.outputs.count }}"
     );
 }
 

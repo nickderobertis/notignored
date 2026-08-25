@@ -74,6 +74,34 @@ fn pull_request() -> tempfile::TempDir {
     repo
 }
 
+/// A repository whose branch rewrites the justification of a suppression the
+/// base already carried, and adds one of its own.
+///
+/// The pull request the two counts have to tell apart: one number is what it
+/// silenced that it did not before, the other is what it merely reworded.
+fn rejustified_pull_request() -> tempfile::TempDir {
+    let repo = git_repo();
+    write(
+        repo.path(),
+        "src/app.py",
+        "import os  # noqa: F401  # imported for its side effects\n",
+    );
+    commit(repo.path(), "base");
+    git(
+        repo.path(),
+        &["update-ref", "refs/remotes/origin/main", "main"],
+    );
+
+    git(repo.path(), &["checkout", "-q", "-b", "feature"]);
+    write(
+        repo.path(),
+        "src/app.py",
+        "import os  # noqa: F401  # imported for the side effects of importing it\n",
+    );
+    commit(repo.path(), "reword the justification");
+    repo
+}
+
 /// The environment one composite run sees, over `repo`.
 struct Run {
     output: Output,
@@ -84,10 +112,19 @@ struct Run {
 
 impl Run {
     fn count(&self) -> &str {
+        self.output_named("count")
+    }
+
+    fn justification_edited_count(&self) -> &str {
+        self.output_named("justification-edited-count")
+    }
+
+    /// One `name=value` line of the step's `$GITHUB_OUTPUT` file.
+    fn output_named(&self, name: &str) -> &str {
         self.outputs
             .lines()
-            .find_map(|line| line.strip_prefix("count="))
-            .expect("the step sets a count output")
+            .find_map(|line| line.strip_prefix(&format!("{name}=")))
+            .unwrap_or_else(|| panic!("the step sets a {name} output:\n{}", self.outputs))
     }
 }
 
@@ -259,4 +296,116 @@ fn a_base_the_checkout_never_fetched_names_the_fix() {
         String::from_utf8_lossy(&run.output.stdout) + String::from_utf8_lossy(&run.output.stderr);
     assert!(reported.contains("origin/release-9"), "{reported}");
     assert!(reported.contains("fetch-depth: 0"), "{reported}");
+}
+
+/// The two numbers a workflow reads, over a pull request that did one of each.
+///
+/// `count` keeps meaning additions — a build gating on it must not start
+/// failing the day somebody rewords a reason — so the rewritten justification
+/// is counted beside it, not into it, and the step says both out loud.
+#[test]
+fn the_step_counts_additions_and_rewritten_justifications_apart() {
+    let repo = rejustified_pull_request();
+    write(
+        repo.path(),
+        "src/extra.py",
+        "import sys  # noqa: F401  # re-exported for callers\n",
+    );
+    commit(repo.path(), "add one as well");
+
+    let run = scan(repo.path(), &[("GITHUB_BASE_REF", "main")]);
+    assert!(
+        run.output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    assert_eq!(run.count(), "1");
+    assert_eq!(run.justification_edited_count(), "1");
+
+    let log = String::from_utf8_lossy(&run.output.stdout);
+    assert!(
+        log.contains("1 suppression(s) added, 1 justification(s) edited"),
+        "the step's log line names one number or the wrong words: {log}"
+    );
+    assert!(
+        run.body
+            .contains("### notignored: 1 suppression added, 1 justification edited"),
+        "{}",
+        run.body
+    );
+}
+
+/// A pull request that rewrote a justification and added nothing: the number a
+/// build gates on is zero, and the other number is what happened.
+#[test]
+fn a_branch_that_only_rewrote_a_justification_adds_nothing() {
+    let repo = rejustified_pull_request();
+    let run = scan(repo.path(), &[("GITHUB_BASE_REF", "main")]);
+    assert!(
+        run.output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    assert_eq!(run.count(), "0");
+    assert_eq!(run.justification_edited_count(), "1");
+    assert!(
+        run.body.contains("### notignored: 1 justification edited"),
+        "{}",
+        run.body
+    );
+}
+
+/// The action installs `latest` by default but can be pinned to any release, so
+/// the step has to stay correct against a build from before the word existed.
+///
+/// The binary here is the real one, aged: a shim strips `change` off every
+/// record on its way out, which is exactly the report an older `notignored`
+/// wrote. Absence must count as added — treating it as "not added" would
+/// silently zero the count those users have been reading all along.
+#[test]
+fn a_report_from_a_notignored_that_never_classified_counts_every_record_as_added() {
+    let repo = pull_request();
+    let real = assert_cmd::cargo::cargo_bin("notignored");
+    let shim = repo.path().join(".runner/aged-notignored");
+    std::fs::create_dir_all(shim.parent().expect("a runner directory")).expect("create it");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\n\
+             set -eu\n\
+             # Only the JSON report is a report; the markdown body is left alone.\n\
+             for arg in \"$@\"; do\n\
+             \x20 if [ \"$arg\" = json ]; then\n\
+             \x20   {real} \"$@\" | jq '.ignores |= map(del(.change))'\n\
+             \x20   exit $?\n\
+             \x20 fi\n\
+             done\n\
+             exec {real} \"$@\"\n",
+            real = real.display()
+        ),
+    )
+    .expect("write the aged shim");
+    std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("make the shim executable");
+
+    let run = scan(
+        repo.path(),
+        &[
+            ("GITHUB_BASE_REF", "main"),
+            ("NOTIGNORED", &shim.to_string_lossy()),
+        ],
+    );
+    assert!(
+        run.output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.output.stderr)
+    );
+    assert!(
+        !run.report.contains("\"change\""),
+        "the shim did not age the report:\n{}",
+        run.report
+    );
+    // The same number this pull request reported before the field existed.
+    assert_eq!(run.count(), "1");
+    assert_eq!(run.justification_edited_count(), "0");
 }

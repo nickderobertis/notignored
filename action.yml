@@ -41,6 +41,12 @@ outputs:
   count:
     description: How many suppressions the change added.
     value: ${{ steps.scan.outputs.count }}
+  justification-edited-count:
+    description: >-
+      How many existing suppressions had their justification rewritten. These are
+      not counted by `count`, which keeps meaning additions, so a workflow gating
+      on it does not start failing when somebody rewords a reason.
+    value: ${{ steps.scan.outputs.justification-edited-count }}
   report-path:
     description: Path to the JSON report the scan wrote.
     value: ${{ steps.scan.outputs.report-path }}
@@ -130,13 +136,20 @@ runs:
           --max-entries "$MAX_ENTRIES" \
           ${scan_paths[@]+"${scan_paths[@]}"} > "$body"
 
-        count="$(jq '.ignores | length' "$report")"
+        # `count` keeps its documented meaning — suppressions this change added —
+        # so a workflow gating on it does not start failing the day somebody
+        # rewords a justification. A record with no `change` field is one an
+        # older notignored wrote, and it counts as added: the absence must
+        # reproduce the number that build reported, not silently zero it.
+        count="$(jq '[.ignores[] | select((.change // "added") == "added")] | length' "$report")"
+        edited="$(jq '[.ignores[] | select(.change == "justification-edited")] | length' "$report")"
         {
           echo "count=$count"
+          echo "justification-edited-count=$edited"
           echo "report-path=$report"
           echo "body-path=$body"
         } >> "$GITHUB_OUTPUT"
-        echo "notignored: $count suppression(s) added since $base"
+        echo "notignored: $count suppression(s) added, $edited justification(s) edited since $base"
 
     - name: Upsert the sticky pull-request comment
       shell: bash
@@ -144,4 +157,5 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         BODY_FILE: ${{ steps.scan.outputs.body-path }}
         COUNT: ${{ steps.scan.outputs.count }}
+        JUSTIFICATION_EDITED_COUNT: ${{ steps.scan.outputs.justification-edited-count }}
       run: bash "$GITHUB_ACTION_PATH/scripts/action/comment.sh"
