@@ -322,11 +322,13 @@ fn the_comment_heading_counts_what_the_change_actually_did() {
     let diff = ["--diff", "--diff-base", "main"];
 
     // Nothing found is nothing to count by kind: a `--diff` run over a change
-    // that touched no directive renders the all-clear body it always rendered.
+    // that touched no directive renders the all-clear body it always rendered,
+    // stamped with the commit that found nothing.
     assert_eq!(
         body(&diff),
         format!(
-            "{}\n\n### notignored\n\nNo lint or type-check suppressions found.\n",
+            "{}\n\n### notignored\n\nNo lint or type-check suppressions found.\n\n\
+             ---\n\n<sub>Suppressions as of [`0123456`](https://github.com/{REPO}/commit/{SHA}).</sub>\n",
             notignored::cli::MARKER
         )
     );
@@ -416,5 +418,124 @@ fn the_comment_heading_counts_what_the_change_actually_did() {
     assert!(
         both_reworded.contains("### notignored: 1 suppression added, 1 justification edited\n"),
         "{both_reworded}"
+    );
+}
+
+/// The provenance footer, driven end to end over both bodies a reviewer can be
+/// looking at.
+///
+/// The action upserts one comment and edits it in place on every push, so
+/// nothing else in the body says which tree it describes: after a push a
+/// reviewer has no way to tell a current comment from a stale one, and the sha
+/// is the one fact that answers it. The all-clear body carries it for the same
+/// reason and needs it most — "found nothing" is the reading a stale comment
+/// makes most expensive.
+#[test]
+fn the_body_closes_with_the_commit_its_suppressions_were_read_from() {
+    let render = |fixture: &str, permalink: &[&str]| -> String {
+        let output = notignored(&repo_root())
+            .args([fixture, "--format", "markdown"])
+            .args(permalink)
+            .output()
+            .expect("run notignored");
+        assert!(
+            output.status.success(),
+            "exit: {:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("a UTF-8 comment body")
+    };
+
+    // Both bodies: the one that lists suppressions, and the one that reports
+    // none. Their last block is the same either way.
+    for (fixture, ends_with) in [
+        ("tests/fixtures/markdown/single.py", "  </details>\n\n"),
+        (
+            "tests/fixtures/markdown/clean.py",
+            "No lint or type-check suppressions found.\n",
+        ),
+    ] {
+        let linked = render(fixture, &["--github-repo", REPO, "--github-sha", SHA]);
+        assert!(
+            linked.ends_with(&format!(
+                "\n---\n\n<sub>Suppressions as of [`0123456`](https://github.com/{REPO}/commit/{SHA}).</sub>\n"
+            )),
+            "{fixture} did not close with the linked stamp:\n{linked}"
+        );
+        // The abbreviation is shown and the full id is only ever the link
+        // target: a forty-digit sha in the prose is not what a reviewer
+        // compares against the checks list.
+        assert!(
+            !linked.contains(&format!("`{SHA}`")),
+            "the stamp spelled the sha out in full:\n{linked}"
+        );
+
+        // No repository, so no permalink can be built — for the stamp exactly as
+        // for every entry above it.
+        let unlinked = render(fixture, &["--github-sha", SHA]);
+        assert!(
+            unlinked.ends_with("\n---\n\n<sub>Suppressions as of `0123456`.</sub>\n"),
+            "{fixture} did not close with the unlinked stamp:\n{unlinked}"
+        );
+        assert!(
+            !unlinked.contains("https://github.com/"),
+            "{fixture} linked somewhere without a repository:\n{unlinked}"
+        );
+
+        // No sha: a local run is a preview of a tree that has no commit, so
+        // there is nothing truthful to stamp and the body ends as it always did.
+        let preview = render(fixture, &[]);
+        assert!(
+            preview.ends_with(ends_with),
+            "{fixture} did not end where an unstamped body ends:\n{preview}"
+        );
+        for absent in ["<sub>", "\n---\n"] {
+            assert!(
+                !preview.contains(absent),
+                "an unstamped body carries {absent:?}:\n{preview}"
+            );
+        }
+    }
+}
+
+/// The stamp is the **last** block of the body, below the section naming what
+/// the scan could not read — a body carrying both is the one place their order
+/// is decided, and the footer is what a reviewer checks the whole comment's age
+/// against.
+#[test]
+fn the_stamp_closes_the_body_below_what_could_not_be_scanned() {
+    let dir = tempfile::tempdir().expect("a temporary tree");
+    fs::write(
+        dir.path().join("app.py"),
+        "x = 1  # noqa: E501  # the vendor URL cannot be wrapped\n",
+    )
+    .expect("write the readable file");
+    // Not UTF-8, so the scan reports it rather than panicking on it.
+    fs::write(dir.path().join("broken.py"), [b'x', b' ', 0xff, b'\n'])
+        .expect("write the unreadable file");
+
+    let output = notignored(dir.path())
+        .args(["--format", "markdown"])
+        .args(["--github-repo", REPO, "--github-sha", SHA])
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a file that could not be scanned exits 2"
+    );
+    let body = String::from_utf8(output.stdout).expect("a UTF-8 comment body");
+
+    let (listed, tail) = body
+        .split_once("#### Could not be scanned\n")
+        .unwrap_or_else(|| panic!("nothing was reported as unscannable:\n{body}"));
+    assert!(listed.contains("- **ruff E501**"), "{body}");
+    assert!(tail.starts_with("\n- `broken.py` — "), "{body}");
+    assert!(
+        body.ends_with(&format!(
+            "\n---\n\n<sub>Suppressions as of [`0123456`](https://github.com/{REPO}/commit/{SHA}).</sub>\n"
+        )),
+        "the stamp is not the last block of the body:\n{body}"
     );
 }

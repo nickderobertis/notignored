@@ -197,6 +197,12 @@ that *only* rewrites a justification does get one: its heading counts the
 justifications edited and no additions, and each rejustified entry says so
 beside its rule.
 
+Because that one comment is edited rather than replaced, it closes with a
+footer naming the commit its suppressions were read from — abbreviated, and
+linked to that commit — so a reviewer coming back after a push can tell at a
+glance whether they are reading the current tree or a comment the next scan has
+yet to catch up with.
+
 ```yaml
 # .github/workflows/notignored.yml
 name: notignored
