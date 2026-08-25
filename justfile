@@ -212,6 +212,24 @@ screenshots-gif:
     @cargo build --release --locked --bin notignored
     @python3 scripts/demo-gif.py
 
+# llmlint: ignore-block[changed_behavior_has_e2e] a test of either success path
+# would have to install the browser these deliberately keep out of the gate
+# (screenshots/AGENTS.md); their failure paths are driven by tests/e2e/pr_comment.rs.
+# Install the pinned markdown/highlighting/browser toolchain (needs Node.js 20+).
+screenshots-comment-tools:
+    @bash scripts/setup-comment-render.sh
+
+# A recipe's doc is only its LAST comment line, so this one stays on one.
+# Nothing gates the result: re-run it whenever the markdown body moves (screenshots/AGENTS.md).
+screenshots-pr-comment:
+    @command -v node >/dev/null || { echo "node not found: the render needs Node.js 20+, see https://nodejs.org" >&2; exit 1; }
+    @bash scripts/setup-comment-render.sh
+    @RUSTFLAGS="-D warnings" cargo build --release --locked --bin notignored
+    @bash scripts/pr-comment-body.sh | node scripts/comment-render/render.mjs \
+      docs/screenshots/pr-comment-rendered.png docs/screenshots/pr-comment-rendered-dark.png
+
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
 # Refresh the committed baseline manifest from a fresh capture (after an
 # INTENDED output change). Commit shots/baseline/ + docs/screenshots/ alongside.
 screenshots-bless: screenshots

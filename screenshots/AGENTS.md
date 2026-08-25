@@ -44,9 +44,8 @@ uniform:
   rules, so it renders as `*`.
 - `scripts/deploy.sh`'s `# shellcheck disable=SC2086` has **no reason at all**,
   which is the finding this tool exists to surface. That is what its
-  `llmlint: ignore-file[suppressions_justified]` footer buys, per the repo
-  `AGENTS.md` convention — and the footer is itself a directive we parse, so it
-  shows up in the report like any other.
+  `llmlint: ignore-file[suppressions_justified]` footer buys — and the footer is
+  itself a directive we parse, so it shows up in the report like any other.
 
 `change/` holds the files the `diff` scene overwrites the base tree with. Keep
 its additions **appended**, not interleaved: `--diff` reports a directive when the
@@ -116,6 +115,35 @@ hash-gated (a GIF is not byte-reproducible across Pillow versions), so it is
 regenerated on demand (`just screenshots-gif`) and committed. Regenerate it when
 the human report's format changes.
 
+## The rendered comment (`docs/screenshots/pr-comment-rendered{,-dark}.png`)
+
+The `pr-comment` scene photographs the markdown **source**; this pair
+photographs what a reviewer actually meets, and it is what the README's main
+text leads the Action with. `scripts/pr-comment-body.sh` produces the body from
+the same fixture, overlay and `permalink_sha` that scene uses, so the two cannot
+tell different stories; `scripts/comment-render/` then styles it, and that half —
+**and only that half** — is a mimic of GitHub rather than output.
+
+The mimic invents nothing — no comment author, avatar or timestamp, and nothing
+about the body. The one thing it decides is which `<details>` is open, which is
+a click a reader makes for themselves.
+
+Not hash-gated, for the GIF's reason: a raster is not reproducible across
+browser builds and font stacks, so a Chromium bump nobody made would redden
+`Visual docs`. Nothing therefore notices when it goes stale, so re-run
+`just screenshots-pr-comment` whenever the markdown renderer, the fixture or the
+overlay moves.
+
+Its toolchain is a **browser download**, so it stays out of everything an
+ordinary contributor runs: pinned in `scripts/comment-render/package-lock.json`,
+installed into `.dev/comment-render` on demand the way `scripts/setup-js.sh`
+installs the pinned linters. That is what the `changed_behavior_has_e2e`
+suppressions in `scripts/comment-render/render.mjs` and the capture recipes buy,
+and it costs coverage: nothing in the gate renders a comment, so a maintainer
+running the recipe and looking at what it wrote is the only proof the styling
+still holds. Closing that needs a browser CI and a clean clone both already
+have; a stand-in would prove less than nothing.
+
 ## Commands
 
 - `just screenshots-tools` — install the pinned `freeze` (needs Go). screencomp
@@ -146,5 +174,7 @@ Editing either renderer (`src/cli/render.rs`, `src/cli/markdown.rs`), the CLI
 surface, a parser under `src/tools/`, the fixture, or the scenes in
 `scripts/screenshots.sh` will change the SVGs. That is expected — run
 `just screenshots-bless` and commit the new baseline + `docs/screenshots/`.
+Anything that moves the markdown body moves the rendered-comment PNGs too, and
+nothing gates those: run `just screenshots-pr-comment` in the same change.
 Bumping `freeze-version` or the vendored font reflows every shot; bless once and
 keep the pins in step (the contract test will tell you if you didn't).
