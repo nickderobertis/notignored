@@ -12,6 +12,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use super::render::ChangeCounts;
+use super::{github_repo, github_sha};
 use crate::model::{Change, IgnoreDirective, Report, Scope};
 use crate::source::Language;
 
@@ -85,11 +86,32 @@ impl Default for MarkdownOptions {
 }
 
 impl MarkdownOptions {
+    /// The commit these options may name, or `None` when there is none to name
+    /// or the one given could not have come from `--github-sha`.
+    ///
+    /// [`render_markdown`] is public, so these two strings also reach the
+    /// renderer from a library caller, who never passed through the flags' value
+    /// parsers. Those parsers *are* the definition of what may be interpolated
+    /// into a github.com URL, so they are the check here too rather than a
+    /// second spelling of one: a value the command line would have rejected is
+    /// written into no link and no body, and the run renders exactly as one that
+    /// was told nothing does.
+    fn commit(&self) -> Option<&str> {
+        let sha = self.sha.as_deref()?;
+        github_sha(sha).is_ok().then_some(sha)
+    }
+
+    /// The `owner/repo` these options may link to, under the same rule.
+    fn repository(&self) -> Option<&str> {
+        let repo = self.repo.as_deref()?;
+        github_repo(repo).is_ok().then_some(repo)
+    }
+
     /// The `https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>`
     /// permalink for a directive, or `None` when this run was not told where the
     /// source lives.
     fn permalink(&self, directive: &IgnoreDirective) -> Option<String> {
-        let (repo, sha) = (self.repo.as_ref()?, self.sha.as_ref()?);
+        let (repo, sha) = (self.repository()?, self.commit()?);
         Some(format!(
             "https://github.com/{repo}/blob/{sha}/{}#L{}",
             encode_path(&directive.path),
@@ -181,11 +203,11 @@ fn body(report: &Report, options: &MarkdownOptions, source: &dyn SnippetSource) 
 /// markdown` is a preview, and there is nothing truthful to stamp. Without a
 /// repository the id renders unlinked, exactly as a permalink cannot be built.
 fn stamp(options: &MarkdownOptions) -> Option<String> {
-    let sha = options.sha.as_ref()?;
-    // `--github-sha`'s value parser bounds the flag to 7–64 hex digits, so this
-    // is a whole abbreviation and neither form has anything to escape.
+    let sha = options.commit()?;
+    // A commit id is 7 to 64 hex digits — what `commit` above accepted — so the
+    // abbreviation is whole and neither form has anything to escape.
     let short: String = sha.chars().take(SHORT_SHA).collect();
-    let commit = match &options.repo {
+    let commit = match options.repository() {
         Some(repo) => format!("[`{short}`](https://github.com/{repo}/commit/{sha})"),
         None => format!("`{short}`"),
     };
@@ -834,6 +856,38 @@ mod tests {
                 None => assert!(!rendered.contains("not shown"), "{rendered}"),
             }
         }
+    }
+
+    /// A value the command line would have rejected reaches the renderer only
+    /// from a library caller, and is interpolated into neither a link nor the
+    /// footer: the body degrades to the one a run told nothing renders.
+    #[test]
+    fn a_repo_or_sha_the_flags_would_have_rejected_is_never_interpolated() {
+        let mut report = Report::new();
+        report.ignores.push(directive(12, Some("why")));
+
+        // A slug that closes the link and opens its own.
+        let injected = MarkdownOptions {
+            repo: Some("acme/widgets)](https://evil.example".into()),
+            ..options()
+        };
+        let rendered = render(&report, &injected);
+        assert!(!rendered.contains("evil.example"), "{rendered}");
+        assert!(rendered.contains("— `src/app.py:12`"), "{rendered}");
+        // The sha is still a commit id, so the footer is still true, unlinked.
+        assert!(
+            rendered.ends_with("---\n\n<sub>Suppressions as of `0123456`.</sub>\n"),
+            "{rendered}"
+        );
+
+        // A branch name pins nothing, so it names no commit to stamp.
+        let moving = MarkdownOptions {
+            sha: Some("main".into()),
+            ..options()
+        };
+        let rendered = render(&report, &moving);
+        assert!(!rendered.contains("https://github.com/"), "{rendered}");
+        assert!(!rendered.contains("<sub>"), "{rendered}");
     }
 
     /// The cap is the caller's to set, and a body under it is unchanged by it.

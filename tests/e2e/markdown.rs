@@ -498,3 +498,44 @@ fn the_body_closes_with_the_commit_its_suppressions_were_read_from() {
         }
     }
 }
+
+/// The stamp is the **last** block of the body, below the section naming what
+/// the scan could not read — a body carrying both is the one place their order
+/// is decided, and the footer is what a reviewer checks the whole comment's age
+/// against.
+#[test]
+fn the_stamp_closes_the_body_below_what_could_not_be_scanned() {
+    let dir = tempfile::tempdir().expect("a temporary tree");
+    fs::write(
+        dir.path().join("app.py"),
+        "x = 1  # noqa: E501  # the vendor URL cannot be wrapped\n",
+    )
+    .expect("write the readable file");
+    // Not UTF-8, so the scan reports it rather than panicking on it.
+    fs::write(dir.path().join("broken.py"), [b'x', b' ', 0xff, b'\n'])
+        .expect("write the unreadable file");
+
+    let output = notignored(dir.path())
+        .args(["--format", "markdown"])
+        .args(["--github-repo", REPO, "--github-sha", SHA])
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a file that could not be scanned exits 2"
+    );
+    let body = String::from_utf8(output.stdout).expect("a UTF-8 comment body");
+
+    let (listed, tail) = body
+        .split_once("#### Could not be scanned\n")
+        .unwrap_or_else(|| panic!("nothing was reported as unscannable:\n{body}"));
+    assert!(listed.contains("- **ruff E501**"), "{body}");
+    assert!(tail.starts_with("\n- `broken.py` — "), "{body}");
+    assert!(
+        body.ends_with(&format!(
+            "\n---\n\n<sub>Suppressions as of [`0123456`](https://github.com/{REPO}/commit/{SHA}).</sub>\n"
+        )),
+        "the stamp is not the last block of the body:\n{body}"
+    );
+}
