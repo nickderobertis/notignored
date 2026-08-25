@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.14](https://github.com/nickderobertis/notignored/compare/v0.1.13...v0.1.14) - 2026-08-25
+
+### Added
+
+- *(diff)* say whether a reported suppression was added or edited ([#49](https://github.com/nickderobertis/notignored/pull/49))
+
 ## [0.1.13](https://github.com/nickderobertis/notignored/compare/v0.1.12...v0.1.13) - 2026-08-25
 
 ### Fixed
