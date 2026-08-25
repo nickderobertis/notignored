@@ -75,10 +75,10 @@ fn pull_request() -> tempfile::TempDir {
 }
 
 /// A repository whose branch rewrites the justification of a suppression the
-/// base already carried, and adds one of its own.
+/// base already carried, and does nothing else.
 ///
-/// The pull request the two counts have to tell apart: one number is what it
-/// silenced that it did not before, the other is what it merely reworded.
+/// The half of the pull request the two counts have to tell apart; a caller
+/// that wants the other half commits an addition on top.
 fn rejustified_pull_request() -> tempfile::TempDir {
     let repo = git_repo();
     write(
@@ -489,6 +489,14 @@ fn a_truncated_report_fails_the_step_instead_of_counting_zero() {
         );
         assert!(stderr.contains("ACTION:"), "{stderr}");
     }
+    // Where the reader itself has something to say — a half-written file is a
+    // parse error, not a well-formed report of the wrong shape — its words are
+    // kept rather than swallowed.
+    let stderr = String::from_utf8_lossy(&counted(truncated.path()).stderr).into_owned();
+    assert!(
+        stderr.contains("jq:"),
+        "jq's own diagnostic was dropped: {stderr}"
+    );
 
     // And an unset report is a wiring mistake, named the same way.
     let unset = Command::new("bash")

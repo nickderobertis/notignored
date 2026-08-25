@@ -33,14 +33,19 @@ REPORT="${REPORT:-}"
 # counted: an array of records, each of them an object, each `change` a string.
 # A truncated write or a build whose envelope moved would otherwise count as
 # zero findings, which reads exactly like a clean pull request.
-jq -e '(.ignores | type == "array")
-       and all(.ignores[];
-               (type == "object")
-               and ((has("change") | not) or (.change | type == "string")))' \
-    "$REPORT" >/dev/null 2>&1 || die \
-    "report $REPORT is not a report of suppression records" \
-    "check that the scan step completed and wrote the whole envelope; a truncated \
-report must not count as a clean one"
+# jq's own diagnostic is kept and reported: a filter that answered "no" says
+# nothing on stderr, while a jq that is missing or broken says exactly what went
+# wrong, and the two failures need different fixing.
+if ! refused="$(jq -e '(.ignores | type == "array")
+                       and all(.ignores[];
+                               (type == "object")
+                               and ((has("change") | not)
+                                    or (.change | type == "string")))' \
+    "$REPORT" 2>&1 >/dev/null)"; then
+    die "report $REPORT is not a report of suppression records${refused:+: $refused}" \
+        "check that the scan step completed and wrote the whole envelope, and that \
+jq is on PATH; a truncated report must not count as a clean one"
+fi
 
 COUNT_HINT="re-run the scan step; the report it wrote cannot be counted"
 edited="$(jq '[.ignores[] | select(.change == "justification-edited")] | length' "$REPORT")" \

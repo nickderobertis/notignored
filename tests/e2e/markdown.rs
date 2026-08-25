@@ -384,7 +384,7 @@ fn the_comment_heading_counts_what_the_change_actually_did() {
     );
 
     // Rejustified only: the pull request that this whole distinction exists
-    // for. Two justifications rewritten, no suppression added, and the word
+    // for. A justification rewritten, no suppression added, and the word
     // "added" nowhere in the body.
     git(root, &["checkout", "-q", "main"]);
     git(root, &["checkout", "-q", "-b", "reword-only"]);
