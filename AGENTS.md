@@ -171,7 +171,7 @@ justification. `src/tools/python.rs::segments` owns that boundary; a new Python
 parser adds an `opens_directive` recognizer to it. llmlint's reasons wrap, so it
 walks the same boundary one line **down** — a wrapped reason stops at a line that
 opens any tool's directive — through the whole-crate union
-`src/tools/mod.rs::opens_directive`. A new parser in any language adds its
+`src/tools/mod.rs::starts_with_directive`. A new parser in any language adds its
 recognizer there too, or a reason will swallow its directive.
 
 ## The GitHub Action

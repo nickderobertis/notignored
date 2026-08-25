@@ -51,7 +51,7 @@ pub trait ToolParser: Send + Sync {
 }
 
 /// True when `after_marker` — a comment's text with its opening marker removed
-/// — opens a directive for another tool the crate parses.
+/// — starts with a directive belonging to another tool.
 ///
 /// This is the boundary two parsers need. `python::segments` walks it along one
 /// line, so a `# noqa` never lands in the neighbouring directive's reason; the
@@ -59,18 +59,42 @@ pub trait ToolParser: Send + Sync {
 /// never lands in a wrapped justification. Each tool contributes its own
 /// recognizer, so neither has to know another's keywords.
 ///
-/// Two tools are absent. Rust's suppressions are attributes rather than
-/// comments, so no comment line can open one. llmlint's own grammar is tested by
-/// its parser directly: folding it in here would make an llmlint directive bound
-/// a ruff or mypy record too, which is a change to those parsers and not this
-/// boundary's to make.
-pub(crate) fn opens_directive(after_marker: &str) -> bool {
-    python::opens_directive(after_marker)
-        || shellcheck::opens_directive(after_marker)
-        || eslint::opens_directive(after_marker)
-        || biome::opens_directive(after_marker)
-        || typescript::opens_directive(after_marker)
+/// "Starts with" is the whole claim: a directive that *closes* a range —
+/// `biome-ignore-end` — starts the text just as one that opens a range does, and
+/// is just as much a live directive rather than prose.
+///
+/// Two tools are absent, and [`RECOGNIZERS`] is what keeps the list to those
+/// two. Rust's suppressions are attributes rather than comments, so no comment
+/// line can open one. llmlint's own grammar is tested by its parser directly:
+/// folding it in here would make an llmlint directive bound a ruff or mypy
+/// record too, which is a change to those parsers and not this boundary's to
+/// make.
+pub(crate) fn starts_with_directive(after_marker: &str) -> bool {
+    RECOGNIZERS
+        .iter()
+        .any(|(_, recognizes)| recognizes(after_marker))
 }
+
+/// One tool's answer to "does this comment body start with my directive?".
+type Recognizer = fn(&str) -> bool;
+
+/// One recognizer per tool with a comment grammar, keyed by the tool so
+/// `tests::every_tool_with_a_comment_grammar_has_a_recognizer` can hold the set
+/// against [`Tool::ALL`]. A tool registered without one here would be swallowed
+/// as the justification of the suppression above it, silently.
+///
+/// The Python four keep the older `opens_directive` name their own union in
+/// `python.rs` calls them by; none of them has a closing form to contradict it.
+const RECOGNIZERS: [(Tool, Recognizer); 8] = [
+    (Tool::Eslint, eslint::starts_with_directive),
+    (Tool::Biome, biome::starts_with_directive),
+    (Tool::Ruff, ruff::opens_directive),
+    (Tool::Typescript, typescript::starts_with_directive),
+    (Tool::Mypy, mypy::opens_directive),
+    (Tool::Pyright, pyright::opens_directive),
+    (Tool::Ty, ty::opens_directive),
+    (Tool::Shellcheck, shellcheck::starts_with_directive),
+];
 
 /// Every registered parser, in [`Tool::ALL`] order.
 ///
@@ -150,8 +174,12 @@ mod tests {
             " @ts-expect-error the API is untyped",
             " @ts-nocheck",
         ] {
-            assert!(opens_directive(directive), "{directive:?}");
+            assert!(starts_with_directive(directive), "{directive:?}");
         }
+        // A directive that closes a range is still a directive.
+        assert!(starts_with_directive(
+            " biome-ignore-end lint/style/useConst: done"
+        ));
         // Prose, a mode switch this crate does not report, and the two forms
         // their own tools honour only in a block comment.
         for prose in [
@@ -161,8 +189,25 @@ mod tests {
             " eslint-disable",
             " eslint-enable",
         ] {
-            assert!(!opens_directive(prose), "{prose:?}");
+            assert!(!starts_with_directive(prose), "{prose:?}");
         }
+    }
+
+    /// The union is a second list of parsers, so it needs a gate against the
+    /// registry: a tool added to [`Tool::ALL`] with a comment grammar and no
+    /// recognizer here would silently stop bounding anyone's reason.
+    #[test]
+    fn every_tool_with_a_comment_grammar_has_a_recognizer() {
+        let mut covered: Vec<Tool> = RECOGNIZERS.iter().map(|(tool, _)| *tool).collect();
+        covered.sort();
+        let mut expected: Vec<Tool> = Tool::ALL
+            .into_iter()
+            // Rust's suppressions are attributes, and llmlint's parser tests its
+            // own grammar — both documented on `starts_with_directive`.
+            .filter(|tool| !matches!(tool, Tool::Rust | Tool::Llmlint))
+            .collect();
+        expected.sort();
+        assert_eq!(covered, expected);
     }
 
     /// A parser needs nothing beyond the three contract methods to be

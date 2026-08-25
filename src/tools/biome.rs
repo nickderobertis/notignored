@@ -144,7 +144,7 @@ fn close_range(out: &mut [IgnoreDirective], open: &mut Vec<usize>, rules: &[Stri
 /// True when the text after a comment marker opens a Biome suppression.
 ///
 /// The line-below boundary uses this; see [`crate::tools::opens_directive`].
-pub(super) fn opens_directive(after_marker: &str) -> bool {
+pub(super) fn starts_with_directive(after_marker: &str) -> bool {
     directive(after_marker).is_some()
 }
 

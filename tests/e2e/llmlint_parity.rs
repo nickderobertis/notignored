@@ -298,7 +298,9 @@ fn a_reason_stops_where_the_grammar_stops_it() {
     );
 
     // Every other file here is valid llmlint; what the report has to get right
-    // is where each reason ends.
+    // is where each reason ends. `neighbours.*` walks the boundary union one
+    // grammar at a time — ruff, mypy, pyright, ty, shellcheck, eslint, biome and
+    // typescript — because a recognizer missing from it fails nowhere else.
     let report = report_for("refused", 0);
     assert_eq!(
         reasons(&report),
@@ -330,14 +332,57 @@ fn a_reason_stops_where_the_grammar_stops_it() {
                 17,
                 Some("printing here is the point of the helper")
             ),
-            // A live `# noqa` on the line below is another tool's suppression,
-            // and filing it as this one's justification is the inversion this
-            // tool exists to prevent.
+            // Every grammar in the whole-crate boundary union, one directive
+            // each: a live suppression below a justification is never that
+            // justification's next words. `--tool llmlint` scopes the run, so
+            // each neighbour is present in the file and absent from this list.
             (
-                "boundaries.py",
-                24,
-                24,
-                Some("the dump below is what this helper is for")
+                "neighbours.py",
+                2,
+                2,
+                Some("the trace below is this helper's whole job")
+            ),
+            (
+                "neighbours.py",
+                8,
+                8,
+                Some("the caller owns this call's context")
+            ),
+            (
+                "neighbours.py",
+                14,
+                14,
+                Some("the caller owns this one's too")
+            ),
+            (
+                "neighbours.py",
+                20,
+                20,
+                Some("and the context here is the caller's")
+            ),
+            (
+                "neighbours.sh",
+                6,
+                6,
+                Some("the rsync progress below is the operator's only view")
+            ),
+            (
+                "neighbours.ts",
+                1,
+                1,
+                Some("the banner below is this module's own output")
+            ),
+            (
+                "neighbours.ts",
+                5,
+                5,
+                Some("the breakpoint below is left in on purpose")
+            ),
+            (
+                "neighbours.ts",
+                9,
+                9,
+                Some("the vendored global carries no context")
             ),
             // A reason never begins on a continuation line, so this one has
             // none — exactly what llmlint just refused it for.

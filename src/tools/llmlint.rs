@@ -272,6 +272,14 @@ fn continuation<'a>(
 ///
 /// `lines` has already dropped the closing delimiter, so the run can only end
 /// on a line that is blank or opens a directive of its own.
+///
+/// That last check is llmlint's own grammar alone, not the whole-crate union
+/// the line-comment shape walks: every other tool wants its directive to *open*
+/// the comment, so an inner line of one is prose to them however it reads. The
+/// exception is `tsc`, which matches on a block comment's **last** line, where a
+/// `@ts-expect-error` would be live and this run would read it as prose. The
+/// rule scopes the union to the line-comment shape, so widening it is a change
+/// to that rule rather than to this function.
 fn block_continuation<'a>(lines: &[(u32, u32, &'a str)], position: usize) -> Vec<Continued<'a>> {
     let mut out = Vec::new();
     for &(line, _, text) in lines.iter().skip(position.saturating_add(1)) {
@@ -316,7 +324,7 @@ fn line_continuation<'a>(
         if !adjacent
             || candidate.text.trim().is_empty()
             || find_directive(&candidate.raw).is_some()
-            || crate::tools::opens_directive(&candidate.text)
+            || crate::tools::starts_with_directive(&candidate.text)
         {
             break;
         }

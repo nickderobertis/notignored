@@ -110,7 +110,7 @@ fn directive(comment: &Comment) -> Option<(Scope, Option<String>)> {
 ///
 /// A line comment is what the caller has, which is why `@ts-nocheck` counts
 /// here; see [`crate::tools::opens_directive`].
-pub(super) fn opens_directive(after_marker: &str) -> bool {
+pub(super) fn starts_with_directive(after_marker: &str) -> bool {
     nocheck_body(after_marker).is_some()
         || NEXT_LINE
             .iter()

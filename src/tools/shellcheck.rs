@@ -131,7 +131,7 @@ fn first_command_line(file: &SourceFile) -> Option<u32> {
 /// True when the text after a `#` opens a ShellCheck suppression.
 ///
 /// The line-below boundary uses this; see [`crate::tools::opens_directive`].
-pub(super) fn opens_directive(after_hash: &str) -> bool {
+pub(super) fn starts_with_directive(after_hash: &str) -> bool {
     directive_body(after_hash).is_some()
 }
 

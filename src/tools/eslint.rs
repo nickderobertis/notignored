@@ -179,7 +179,7 @@ fn closes(disable_rules: &[String], enable_rules: &[String]) -> bool {
 /// A line comment is what the caller has, so the block-only forms are excluded
 /// exactly as [`Kind::allowed_in`] excludes them; see
 /// [`crate::tools::opens_directive`].
-pub(super) fn opens_directive(after_marker: &str) -> bool {
+pub(super) fn starts_with_directive(after_marker: &str) -> bool {
     directive(after_marker, CommentKind::Line).is_some()
 }
 

@@ -18,9 +18,3 @@ def probe(url):
 
     # after a blank line, so not part of the sentence above
     print(url)
-
-
-def render(rows):
-    # llmlint: ignore[no_debug_prints] the dump below is what this helper is for
-    # noqa: T201
-    print(rows)
