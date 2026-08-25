@@ -195,7 +195,51 @@ function highlight(source, lang) {
     .join("\n");
 }
 
+// `html: true` is not optional — the body carries `<details>`, `<summary>` and
+// `<sub>` as raw HTML, and escaping them would photograph the tags instead of
+// what they do. That makes stdin a trust boundary: everything markdown-it passes
+// through unescaped has to be one of the tags `src/cli/markdown.rs` emits, or
+// this render is no longer a picture of what GitHub would show.
 const md = new MarkdownIt({ html: true, linkify: false, typographer: false });
+
+/** The raw HTML `src/cli/markdown.rs` writes, and the whole of it. */
+const ALLOWED_HTML = new Set([
+  "<!-- notignored-report -->",
+  "<details>",
+  "</details>",
+  "<summary>",
+  "</summary>",
+  "<sub>",
+  "</sub>",
+]);
+
+/**
+ * Refuse a body carrying raw HTML the report renderer never emits.
+ *
+ * Read off markdown-it's own token stream rather than the text, so a `<` inside
+ * a fenced snippet or a code span — `Record<string, any>`, which the fixture has
+ * — is code being quoted rather than markup being passed through.
+ */
+function rejectUnexpectedHtml(source) {
+  const raw = [];
+  const walk = (tokens) => {
+    for (const token of tokens ?? []) {
+      if (token.type === "html_block" || token.type === "html_inline") {
+        raw.push(token.content);
+      }
+      walk(token.children);
+    }
+  };
+  walk(md.parse(source, {}));
+  for (const tag of raw.join("\n").match(/<!--[\s\S]*?-->|<[^>]*>/g) ?? []) {
+    if (!ALLOWED_HTML.has(tag.trim())) {
+      fail(
+        `the comment body carries raw HTML this renderer does not know: ${JSON.stringify(tag)}`,
+        "if src/cli/markdown.rs now emits it, add it to ALLOWED_HTML in this file and style it in comment.css; otherwise the body did not come from `notignored --format markdown`",
+      );
+    }
+  }
+}
 
 // The fence rule, rather than markdown-it's `highlight` option: GitHub wraps a
 // fenced block in its own `.highlight` container with the copy button inside it,
@@ -213,6 +257,7 @@ md.renderer.rules.fence = (tokens, index) => {
 
 // The first snippet open, the rest as the reviewer first meets them. A reader
 // deciding whether to add the Action needs to see what is behind one of these.
+rejectUnexpectedHtml(body);
 const rendered = md.render(body).replace("<details>", "<details open>");
 if (!rendered.includes("<details open>")) {
   fail(

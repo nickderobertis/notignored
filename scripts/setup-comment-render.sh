@@ -34,8 +34,10 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 # The pinned packages are ESM-first and Playwright's CLI needs a modern runtime,
-# so "npm exists" is not the requirement — a specific floor is.
-node_major="$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\).*/\1/p')"
+# so "npm exists" is not the requirement — a specific floor is. `|| true` because
+# `pipefail` would otherwise make a missing or broken `node` abort the script
+# under `set -e`, silently, before the branch below can say which it was.
+node_major="$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\).*/\1/p' || true)"
 if [ -z "$node_major" ] || [ "$node_major" -lt 20 ]; then
   echo "setup-comment-render: Node.js 20+ is required (found ${node_major:-none})" >&2
   echo "ACTION: install or select Node.js 20+ (https://nodejs.org/) and re-run 'just screenshots-comment-tools'" >&2

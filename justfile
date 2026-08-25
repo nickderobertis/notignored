@@ -226,7 +226,7 @@ screenshots-comment-tools:
 screenshots-pr-comment:
     @command -v node >/dev/null || { echo "node not found: the render needs Node.js 20+, see https://nodejs.org" >&2; exit 1; }
     @bash scripts/setup-comment-render.sh
-    @cargo build --release --locked --bin notignored
+    @RUSTFLAGS="-D warnings" cargo build --release --locked --bin notignored
     @bash scripts/pr-comment-body.sh | node scripts/comment-render/render.mjs \
       docs/screenshots/pr-comment-rendered.png docs/screenshots/pr-comment-rendered-dark.png
 

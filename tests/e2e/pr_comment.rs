@@ -38,18 +38,45 @@ fn capture(script: &str) -> Command {
     command
 }
 
-/// A `just` recipe, run through the real command surface with a `PATH` that
-/// carries a shell and nothing else this repository installs — which is what a
-/// contributor who has never run the capture before has.
+/// This host's `PATH`, mirrored into one scratch directory with Node.js taken
+/// out of it — which is what a contributor who has never run the capture has.
 ///
-/// `just` itself is resolved absolutely and left out of that `PATH`, so the
-/// recipe under test is the one this checkout defines.
-fn recipe_without_tools(name: &str) -> Output {
-    let mut command = Command::new(just_binary());
-    command
+/// Mirrored rather than replaced by a short allowlist: `just` evaluates the
+/// justfile's backtick variables before it runs any recipe, and the recipes
+/// themselves are shell, so a hand-picked `PATH` fails on whichever tool the
+/// justfile reaches for next rather than on the one the journey is about. Every
+/// link points at the real program; the only thing invented here is the absence.
+fn path_without_node() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a scratch PATH directory");
+    for entry in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let Ok(listing) = std::fs::read_dir(&entry) else {
+            continue;
+        };
+        for item in listing.flatten() {
+            let name = item.file_name();
+            if ["node", "npm", "npx"].iter().any(|hidden| name == **hidden) {
+                continue;
+            }
+            let link = dir.path().join(&name);
+            // Earlier `PATH` entries win, the way `PATH` itself resolves them.
+            if link.symlink_metadata().is_err() {
+                let _ = std::os::unix::fs::symlink(item.path(), link);
+            }
+        }
+    }
+    dir
+}
+
+/// A `just` recipe, run through the real command surface on that `PATH`.
+///
+/// `just` itself is resolved absolutely and left off it, so the recipe under
+/// test is the one this checkout defines rather than one a mirror link found.
+fn recipe_without_node(name: &str) -> Output {
+    let path = path_without_node();
+    Command::new(just_binary())
         .arg(name)
         .current_dir(repo_root())
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", path.path())
         .output()
         .unwrap_or_else(|error| panic!("run `just {name}`: {error}"))
 }
@@ -161,7 +188,7 @@ fn the_review_case_shows_additions_apart_from_justification_edits() {
 /// in the wrong place.
 #[test]
 fn the_capture_names_what_to_install_when_node_is_missing() {
-    let output = recipe_without_tools("screenshots-pr-comment");
+    let output = recipe_without_node("screenshots-pr-comment");
     assert!(
         !output.status.success(),
         "`just screenshots-pr-comment` claimed to succeed with no node on PATH"
@@ -264,7 +291,7 @@ fn the_body_script_points_at_the_recipe_that_builds_the_binary() {
 /// the toolchain directly is one who already knows they are missing it.
 #[test]
 fn the_installer_names_what_to_install_when_npm_is_missing() {
-    let output = recipe_without_tools("screenshots-comment-tools");
+    let output = recipe_without_node("screenshots-comment-tools");
     assert!(
         !output.status.success(),
         "`just screenshots-comment-tools` claimed to succeed with no npm on PATH"

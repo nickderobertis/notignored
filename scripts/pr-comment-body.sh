@@ -57,6 +57,7 @@ mkdir -p "$diff_repo" && cp -R "$repo_root/screenshots/fixture/." "$diff_repo/" 
   echo "ACTION: check that screenshots/fixture/ is readable and \$TMPDIR is writable, then re-run 'just screenshots-pr-comment'" >&2
   exit 1
 }
+git_log="$tmp_state/git.log"
 (
   cd "$diff_repo"
   # The git config is neutralized and the identity fixed, so a developer's own
@@ -68,9 +69,15 @@ mkdir -p "$diff_repo" && cp -R "$repo_root/screenshots/fixture/." "$diff_repo/" 
   git -c init.defaultBranch=main init -q
   git add -A
   git commit -q -m "the tree as it stood before this change"
-) >/dev/null 2>&1 || {
+) >"$git_log" 2>&1 || {
+  # Captured rather than discarded: git says exactly what went wrong (a missing
+  # binary, a refused hook, an unwritable object store) and the guess this
+  # script could make instead would send a reader somewhere else.
   echo "pr-comment-body: cannot build the throwaway review repository in $diff_repo" >&2
-  echo "ACTION: check that 'git' is on PATH and runs with an empty config, then re-run 'just screenshots-pr-comment'" >&2
+  cat "$git_log" >&2
+  echo "ACTION: fix what git reports above; it runs here with an empty config, so the" >&2
+  echo "        cause is the host rather than your gitconfig. Then re-run" >&2
+  echo "        'just screenshots-pr-comment'." >&2
   exit 1
 }
 cp -R "$repo_root/screenshots/change/." "$diff_repo/" || {
