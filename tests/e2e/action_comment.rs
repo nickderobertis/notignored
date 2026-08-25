@@ -52,16 +52,22 @@ impl LocalGitHub {
     /// Start a server whose comment list either holds the sticky comment or does
     /// not.
     fn start(sticky: Option<u64>) -> LocalGitHub {
-        LocalGitHub::listen(sticky, true)
+        LocalGitHub::listen(sticky.map(|id| id.to_string()), true)
+    }
+
+    /// The same server, whose sticky comment's `id` field is the JSON `id`
+    /// verbatim — including a shape the real API never answers with.
+    fn answering_with_id(id: &str) -> LocalGitHub {
+        LocalGitHub::listen(Some(id.to_string()), true)
     }
 
     /// The same server, but refusing every write the way GitHub refuses a token
     /// without `pull-requests: write`.
     fn refusing_writes(sticky: Option<u64>) -> LocalGitHub {
-        LocalGitHub::listen(sticky, false)
+        LocalGitHub::listen(sticky.map(|id| id.to_string()), false)
     }
 
-    fn listen(sticky: Option<u64>, writable: bool) -> LocalGitHub {
+    fn listen(sticky: Option<String>, writable: bool) -> LocalGitHub {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the local API");
         let address = format!(
             "http://{}",
@@ -72,6 +78,7 @@ impl LocalGitHub {
 
         let (log, alive) = (Arc::clone(&requests), Arc::clone(&running));
         let server = std::thread::spawn(move || {
+            let sticky = sticky.as_deref();
             for stream in listener.incoming() {
                 if !alive.load(Ordering::SeqCst) {
                     break;
@@ -121,7 +128,7 @@ impl Drop for LocalGitHub {
 /// Answer one request and record it.
 fn serve(
     stream: &mut TcpStream,
-    sticky: Option<u64>,
+    sticky: Option<&str>,
     writable: bool,
     log: &Mutex<Vec<Recorded>>,
 ) -> std::io::Result<()> {
@@ -714,4 +721,23 @@ fn a_second_count_that_is_not_a_number_is_refused_when_it_is_set() {
     let api = LocalGitHub::start(None);
     let output = comment_with(&api, &[("JUSTIFICATION_EDITED_COUNT", "several")]);
     assert_failed(&output, &api, "JUSTIFICATION_EDITED_COUNT is not a count");
+}
+
+/// The comment id comes back from the network and is interpolated into the next
+/// request's path, so it is bounded like every other value that is.
+///
+/// A host answering something other than the GitHub API — a proxy, a
+/// misconfigured `GITHUB_API_URL` — is the case this catches: an "id" that is
+/// not digits would aim the PATCH somewhere nobody asked for, and the script
+/// stops with the knob to check instead.
+#[test]
+fn an_id_the_api_answered_with_that_is_not_an_id_is_refused() {
+    let api = LocalGitHub::answering_with_id(r#""77/../../evil""#);
+    let output = comment_with(&api, &[]);
+    assert_failed(&output, &api, "which is not an id");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("GITHUB_API_URL"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

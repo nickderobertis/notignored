@@ -140,10 +140,6 @@ runs:
           echo "report-path=$report"
           echo "body-path=$body"
         } >> "$GITHUB_OUTPUT"
-        # The two counts a workflow gates on, and the line naming both. It reads
-        # the report this step just wrote; what each number means, and why a
-        # `change` word this version does not know still lands in one of them,
-        # is the script's own doc comment.
         echo "notignored: compared against $base"
         REPORT="$report" bash "$GITHUB_ACTION_PATH/scripts/action/counts.sh"
 

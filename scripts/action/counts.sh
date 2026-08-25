@@ -29,19 +29,30 @@ REPORT="${REPORT:-}"
     "check that the scan step ran and wrote its report"
 
 # The report is JSON this run produced a moment ago, but it is still read as
-# data: a truncated write or a build whose envelope moved would otherwise be
-# counted as zero findings, which reads exactly like a clean pull request.
-jq -e '.ignores | type == "array"' "$REPORT" >/dev/null 2>&1 || die \
-    "report $REPORT has no ignores array" \
-    "check that the scan step completed; a truncated report must not count as a clean one"
+# data, and the whole shape the counting rests on is checked before any of it is
+# counted: an array of records, each of them an object, each `change` a string.
+# A truncated write or a build whose envelope moved would otherwise count as
+# zero findings, which reads exactly like a clean pull request.
+jq -e '(.ignores | type == "array")
+       and all(.ignores[];
+               (type == "object")
+               and ((has("change") | not) or (.change | type == "string")))' \
+    "$REPORT" >/dev/null 2>&1 || die \
+    "report $REPORT is not a report of suppression records" \
+    "check that the scan step completed and wrote the whole envelope; a truncated \
+report must not count as a clean one"
 
-edited="$(jq '[.ignores[] | select(.change == "justification-edited")] | length' "$REPORT")"
-count="$(jq '[.ignores[] | select(.change != "justification-edited")] | length' "$REPORT")"
+COUNT_HINT="re-run the scan step; the report it wrote cannot be counted"
+edited="$(jq '[.ignores[] | select(.change == "justification-edited")] | length' "$REPORT")" \
+    || die "cannot count the rewritten justifications in $REPORT" "$COUNT_HINT"
+count="$(jq '[.ignores[] | select(.change != "justification-edited")] | length' "$REPORT")" \
+    || die "cannot count the added suppressions in $REPORT" "$COUNT_HINT"
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
         echo "count=$count"
         echo "justification-edited-count=$edited"
-    } >> "$GITHUB_OUTPUT"
+    } >> "$GITHUB_OUTPUT" || die "cannot write the counts to $GITHUB_OUTPUT" \
+        "run this step inside GitHub Actions, which sets a writable output file"
 fi
 printf 'notignored: %s suppression(s) added, %s justification(s) edited\n' "$count" "$edited"

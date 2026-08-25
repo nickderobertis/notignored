@@ -98,6 +98,14 @@ found="$(gh api --paginate "$API/repos/$GITHUB_REPOSITORY/issues/$NUMBER/comment
     --jq "map(select((.body // \"\") | contains(\"$MARKER\"))) | .[0].id // empty")" \
     || die "cannot list the comments on #$NUMBER" "$TOKEN_HINT"
 existing="${found%%$'\n'*}"
+# Interpolated into the API path below, so it is bounded like every other value
+# that is: an id is digits, and anything else is an answer this script did not
+# ask for rather than a comment to edit.
+case "$existing" in
+    '' | *[!0-9]*)
+        [ -z "$existing" ] || die "the API named comment '$existing', which is not an id" \
+            "check GITHUB_API_URL — the host answering is not the GitHub API" ;;
+esac
 
 tally="$COUNT suppression(s) added, $EDITED justification(s) edited"
 

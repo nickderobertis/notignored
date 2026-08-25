@@ -463,15 +463,32 @@ fn a_truncated_report_fails_the_step_instead_of_counting_zero() {
     let truncated = tempfile::NamedTempFile::new().expect("a report file");
     std::fs::write(truncated.path(), "{\n  \"version\": 1,\n  \"ign").expect("write it");
 
-    let output = Command::new("bash")
-        .arg(repo_root().join("scripts/action/counts.sh"))
-        .env("REPORT", truncated.path())
-        .output()
-        .expect("run counts.sh");
-    assert!(!output.status.success(), "a truncated report was counted");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("ignores array"), "{stderr}");
-    assert!(stderr.contains("ACTION:"), "{stderr}");
+    let counted = |report: &Path| -> Output {
+        Command::new("bash")
+            .arg(repo_root().join("scripts/action/counts.sh"))
+            .env("REPORT", report)
+            .output()
+            .expect("run counts.sh")
+    };
+
+    // A truncated envelope, and one whose records are not records at all —
+    // every shape the counting rests on is checked before any of it is counted.
+    let malformed = tempfile::NamedTempFile::new().expect("a report file");
+    std::fs::write(
+        malformed.path(),
+        r#"{"version": 1, "ignores": ["src/app.py"], "errors": []}"#,
+    )
+    .expect("write it");
+    for report in [truncated.path(), malformed.path()] {
+        let output = counted(report);
+        assert!(!output.status.success(), "{} was counted", report.display());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("not a report of suppression records"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("ACTION:"), "{stderr}");
+    }
 
     // And an unset report is a wiring mistake, named the same way.
     let unset = Command::new("bash")
