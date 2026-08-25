@@ -1,6 +1,6 @@
 <!-- notignored-report -->
 
-### notignored: 3 suppressions
+### notignored: 3 suppressions added
 
 - **ruff ANN001** — _the gateway fixes this signature_ — [api/clean.py:4](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/api/clean.py#L4)
 

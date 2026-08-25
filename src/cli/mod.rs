@@ -21,7 +21,7 @@ mod markdown;
 mod render;
 
 pub use markdown::{render_markdown, MarkdownOptions, DEFAULT_MAX_ENTRIES, MARKER};
-pub use render::{narrate_errors, render_human, render_human_colored, render_json};
+pub use render::{narrate_errors, render_human, render_human_colored, render_json, ChangeCounts};
 
 /// The scan completed and nothing forced a failure.
 pub const EXIT_OK: u8 = 0;

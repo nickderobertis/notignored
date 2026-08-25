@@ -1180,3 +1180,89 @@ fn a_change_with_no_counterpart_to_compare_against_is_all_additions() {
         vec!["created.py:1 added", "was_binary.py:1 added"]
     );
 }
+
+/// The human report a reviewer runs at their own terminal, over a change that
+/// did one of each.
+///
+/// The word is on the record already; this is the half a person can read. The
+/// entry that only gained a new sentence says so on its own line, and the
+/// summary answers both halves of the question at once — including the half
+/// whose answer is none.
+#[test]
+fn the_human_report_says_which_suppressions_were_only_rejustified() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path\n",
+    );
+    commit(root, "baseline");
+
+    git(root, &["checkout", "-q", "-b", "feature"]);
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path, not us\n",
+    );
+    write(
+        root,
+        "added.py",
+        "y = 2  # noqa: F401  # imported for its side effects\n",
+    );
+    commit(root, "reword one, add one");
+
+    let human = |args: &[&str]| -> (String, String) {
+        let output = notignored(root)
+            .args(args)
+            .output()
+            .expect("run notignored");
+        assert_eq!(output.status.code(), Some(0), "{:?}", output.status);
+        (
+            String::from_utf8(output.stdout).expect("UTF-8 findings"),
+            String::from_utf8(output.stderr).expect("UTF-8 summary"),
+        )
+    };
+
+    let (found, summary) = human(&["--diff", "--diff-base", "main"]);
+    assert_eq!(
+        found,
+        "added.py:1:8 ruff F401 (line) -- imported for its side effects\n\
+         kept.py:1:8 ruff E501 (line) (justification edited) -- the SDK builds this path, not us\n"
+    );
+    assert_eq!(
+        summary,
+        "notignored: 1 added, 1 justification edited in 2 files\n"
+    );
+
+    // The same tree without `--diff`: no base, no classification, and every
+    // byte of the report is what it was before there was a word for the
+    // difference.
+    let (inventory, unclassified) = human(&["."]);
+    assert_eq!(
+        inventory,
+        "added.py:1:8 ruff F401 (line) -- imported for its side effects\n\
+         kept.py:1:8 ruff E501 (line) -- the SDK builds this path, not us\n"
+    );
+    assert_eq!(unclassified, "notignored: 2 ignores in 2 files\n");
+
+    // A change that rewrote a justification and added nothing: the summary's
+    // additions side is a zero, and it is printed rather than left out.
+    git(root, &["checkout", "-q", "main"]);
+    git(root, &["checkout", "-q", "-b", "reword-only"]);
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path, we do not\n",
+    );
+    commit(root, "reword only");
+    let (found, summary) = human(&["--diff", "--diff-base", "main"]);
+    assert_eq!(
+        found,
+        "kept.py:1:8 ruff E501 (line) (justification edited) -- the SDK builds this path, we do not\n"
+    );
+    assert_eq!(
+        summary,
+        "notignored: 0 added, 1 justification edited in 1 file\n"
+    );
+}

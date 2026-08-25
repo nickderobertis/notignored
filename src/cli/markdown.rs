@@ -11,7 +11,8 @@
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::model::{IgnoreDirective, Report, Scope};
+use super::render::ChangeCounts;
+use crate::model::{Change, IgnoreDirective, Report, Scope};
 use crate::source::Language;
 
 /// The hidden marker every rendered body starts with.
@@ -127,14 +128,7 @@ fn body(report: &Report, options: &MarkdownOptions, source: &dyn SnippetSource) 
         body.push_str("### notignored\n\nNo lint or type-check suppressions found.\n");
     } else {
         let count = report.ignores.len();
-        body.push_str(&format!(
-            "### notignored: {count} {}\n\n",
-            if count == 1 {
-                "suppression"
-            } else {
-                "suppressions"
-            }
-        ));
+        body.push_str(&format!("### notignored: {}\n\n", heading(report)));
         let listed = usize::try_from(options.max_entries).unwrap_or(usize::MAX);
         for directive in report.ignores.iter().take(listed) {
             body.push_str(&entry(directive, options));
@@ -164,6 +158,41 @@ fn body(report: &Report, options: &MarkdownOptions, source: &dyn SnippetSource) 
         }
     }
     body
+}
+
+/// What the heading counts, in the words the count is true in.
+///
+/// A run without `--diff` cannot say what a change did, so it counts
+/// suppressions and stops — the line it always printed. A classified run names
+/// each kind it has to report and leaves out the kind it does not, because the
+/// first thing a reviewer reads must not tell a pull request that rewrote two
+/// justifications that it added two suppressions.
+fn heading(report: &Report) -> String {
+    let Some(counts) = ChangeCounts::of(report) else {
+        return plural(report.ignores.len(), "suppression", "suppressions");
+    };
+    let added = format!(
+        "{} added",
+        plural(counts.added, "suppression", "suppressions")
+    );
+    let edited = format!(
+        "{} edited",
+        plural(
+            counts.justification_edited,
+            "justification",
+            "justifications"
+        )
+    );
+    match (counts.added, counts.justification_edited) {
+        (0, _) => edited,
+        (_, 0) => added,
+        _ => format!("{added}, {edited}"),
+    }
+}
+
+/// `1 suppression` / `2 suppressions`, and the same for the other noun.
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
 }
 
 /// End `body` with exactly one blank line, so what follows starts its own block.
@@ -198,7 +227,16 @@ fn entry(directive: &IgnoreDirective, options: &MarkdownOptions) -> String {
         Some(url) => format!("[{}]({url})", escape(&location)),
         None => format!("`{location}`"),
     };
-    format!("- **{} {rules}** — {reason} — {location}\n", directive.tool)
+    // The marker sits at the head of the item, where the eye lands, rather than
+    // inside the italic prose the stated reason already owns.
+    let edited = match directive.change {
+        Some(Change::JustificationEdited) => " _(justification edited)_",
+        _ => "",
+    };
+    format!(
+        "- **{} {rules}**{edited} — {reason} — {location}\n",
+        directive.tool
+    )
 }
 
 /// The 1-based source range a directive silences, clamped to a file of `count`
@@ -458,6 +496,100 @@ mod tests {
                 "- **ruff E501** — _long wrapped URL_ — [src/app.py:12](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/src/app.py#L12)\n"
             ),
             "{rendered}"
+        );
+    }
+
+    /// A classified report is rendered as `path`, `line`, `column` order leaves
+    /// it: `added` first, then the requested number of rewritten justifications.
+    fn classified(added: usize, edited: usize) -> Report {
+        let mut report = Report::new();
+        let mut line = 0;
+        for _ in 0..added {
+            line += 1;
+            report.ignores.push(IgnoreDirective {
+                change: Some(Change::Added),
+                ..directive(line, Some("why"))
+            });
+        }
+        for _ in 0..edited {
+            line += 1;
+            report.ignores.push(IgnoreDirective {
+                change: Some(Change::JustificationEdited),
+                ..directive(line, Some("why"))
+            });
+        }
+        report
+    }
+
+    /// The first thing a reviewer reads, in each of the four shapes a report can
+    /// arrive in. The fourth is the one this distinction exists for: a change
+    /// that rewrote justifications and added nothing must not announce additions.
+    #[test]
+    fn the_heading_counts_what_the_report_can_actually_say() {
+        for (report, expected) in [
+            (classified(2, 0), "### notignored: 2 suppressions added\n"),
+            (classified(1, 0), "### notignored: 1 suppression added\n"),
+            (
+                classified(2, 1),
+                "### notignored: 2 suppressions added, 1 justification edited\n",
+            ),
+            (classified(0, 1), "### notignored: 1 justification edited\n"),
+            (
+                classified(0, 3),
+                "### notignored: 3 justifications edited\n",
+            ),
+        ] {
+            let rendered = render(&report, &options());
+            assert!(
+                rendered.contains(expected),
+                "{expected:?} not in:\n{rendered}"
+            );
+        }
+
+        // An unclassified report — no `--diff` — counts suppressions and says
+        // nothing about a change it has no base to compare against.
+        let mut unclassified = Report::new();
+        unclassified.ignores.push(directive(1, Some("why")));
+        unclassified.ignores.push(directive(2, Some("why")));
+        assert!(
+            render(&unclassified, &options()).contains("### notignored: 2 suppressions\n"),
+            "an unclassified heading changed"
+        );
+    }
+
+    /// The entry says which kind it is where the eye lands, and an added entry
+    /// is the line it always was.
+    #[test]
+    fn only_a_rewritten_justification_marks_its_entry() {
+        let mut report = Report::new();
+        report.ignores.push(IgnoreDirective {
+            change: Some(Change::JustificationEdited),
+            ..directive(12, Some("long wrapped URL"))
+        });
+        report.ignores.push(IgnoreDirective {
+            change: Some(Change::Added),
+            ..directive(13, Some("long wrapped URL"))
+        });
+        let rendered = render(&report, &options());
+        assert!(
+            rendered.contains(
+                "- **ruff E501** _(justification edited)_ — _long wrapped URL_ — [src/app.py:12]"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("- **ruff E501** — _long wrapped URL_ — [src/app.py:13]"),
+            "an added entry gained a marker:\n{rendered}"
+        );
+    }
+
+    /// Nothing found is nothing to count by kind, whatever the run was: the
+    /// all-clear body is the one it always was.
+    #[test]
+    fn an_empty_classified_report_still_renders_the_all_clear() {
+        assert_eq!(
+            render(&classified(0, 0), &options()),
+            render(&Report::new(), &options())
         );
     }
 
