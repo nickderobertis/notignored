@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.15](https://github.com/nickderobertis/notignored/compare/v0.1.14...v0.1.15) - 2026-08-25
+
+### Added
+
+- *(markdown)* stamp the comment with the commit it was read from ([#51](https://github.com/nickderobertis/notignored/pull/51))
+
 ## [0.1.14](https://github.com/nickderobertis/notignored/compare/v0.1.13...v0.1.14) - 2026-08-25
 
 ### Added
