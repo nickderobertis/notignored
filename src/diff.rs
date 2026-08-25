@@ -121,9 +121,9 @@ pub struct ChangedFile {
 ///
 /// A newtype rather than a `String` because it crosses back over the boundary
 /// it arrived at: [`Diff::pre_image`] passes it to `git cat-file`, and the only
-/// thing that makes that safe is that [`BlobId::parse`] accepted nothing but hex
-/// digits. A plain `String` would let any text reach that argument from anywhere
-/// in the crate.
+/// thing that makes that safe is that the one constructor accepted nothing but
+/// hex digits, at a length git writes. A plain `String` would let any text reach
+/// that argument from anywhere in the crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobId(String);
 
