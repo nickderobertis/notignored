@@ -137,7 +137,12 @@ whose vocabulary this contract defines — an unknown `tool`, `scope`, or `chang
 `--diff` records carry one field a tree scan does not: `change`, `added` or
 `justification-edited`, set by `src/diff.rs::classify` and omitted (never null)
 on any run without a base. It is what keeps a rewritten justification from being
-counted as a new suppression on a pull request that added none. Classification
+counted as a new suppression on a pull request that added none. Every surface
+reads it and spells it out in full — the human line's `(justification edited)`
+token and its two-count summary, the comment heading's per-kind counts, the
+action's `justification-edited-count` beside a `count` that still means
+additions alone — because "edited" on its own reads as the silenced code having
+changed. Classification
 **labels and never selects**: the directives a `--diff` run reports are exactly
 what `retain_new` left, in the order it left them, so the worst a mis-pairing
 can do is put a wrong word on an entry that is still in front of the reviewer.

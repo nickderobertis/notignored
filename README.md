@@ -1,6 +1,6 @@
 # notignored
 
-![A terminal session: `notignored src/` is typed and the suppressions appear one per line — each with its file and line in cyan, the tool in magenta, the silenced rules in yellow, the scope in blue and the stated reason dimmed — then `notignored --diff --diff-base main` reports only the two the change added](docs/screenshots/demo.gif)
+![A terminal session: `notignored src/` is typed and the suppressions appear one per line — each with its file and line in cyan, the tool in magenta, the silenced rules in yellow, the scope in blue and the stated reason dimmed — then `notignored --diff --diff-base main` reports only what the change touched: the two suppressions it added and, marked "(justification edited)", the one whose reason it merely rewrote](docs/screenshots/demo.gif)
 
 Find every lint and type-check suppression comment in a codebase — natively, and
 fast.
@@ -10,7 +10,7 @@ fast.
 A reviewer cares about the suppressions a change *introduces*, not the inventory
 it inherited, so `--diff` reports only those:
 
-![The same report under --diff: only the two suppressions the change added, a ruff E501 and a biome noExplicitAny, above a summary counting two ignores in two files](docs/screenshots/diff.svg)
+![The same report under --diff: the two suppressions the change added, a ruff E501 and a biome noExplicitAny, and above them a mypy suppression the change only rewrote the justification of, marked "(justification edited)" after its scope, closing with a summary reading "2 added, 1 justification edited in 2 files"](docs/screenshots/diff.svg)
 
 <details>
 <summary>Narrowing to particular tools, the JSON envelope, and the pull-request comment</summary>
@@ -28,7 +28,7 @@ documented [below](#output):
 posts, with each suppression linked to its line and its silenced code one click
 away:
 
-![The pull-request comment body as markdown: a heading counting two suppressions, then one bullet per suppression naming its tool and rule, its reason in italics, a permalink to the line, and a collapsed details block holding the suppressed code](docs/screenshots/pr-comment.svg)
+![The pull-request comment body as markdown: a heading reading "notignored: 2 suppressions added, 1 justification edited", then one bullet per suppression naming its tool and rule — the rewritten one marked "(justification edited)" — with its reason in italics, a permalink to the line, and a collapsed details block holding the suppressed code](docs/screenshots/pr-comment.svg)
 
 </details>
 
@@ -152,10 +152,18 @@ A reviewer cares about the suppressions a change *introduces*, not the
 inventory it inherited. `--diff` reports only those: a directive is new when the
 diff added at least one of the lines it occupies.
 
+Rewriting the justification of a suppression that was already there touches one
+of its lines too, so it is reported — but it is **not** a new suppression, and
+saying so would tell a reviewer a change silenced something it did not. Each
+reported directive therefore says which it is: an entry the change only
+rejustified carries a `(justification edited)` token after its scope, and the
+summary counts both kinds, including the one whose answer is none.
+
 ```console
 $ notignored --diff --diff-base main --fail-if-found
 src/app.py:42:20 ruff E501 (line) -- long wrapped URL
-notignored: 1 ignore in 1 file
+src/store.py:8:14 mypy import-untyped (line) (justification edited) -- the SDK ships no stubs
+notignored: 1 added, 1 justification edited in 2 files
 ```
 
 - Bare `--diff` compares the work tree — staged *and* unstaged — against `HEAD`.
@@ -183,8 +191,11 @@ directives are parsed natively — so it needs `git` on `PATH` and a work tree.
 
 The action posts one sticky comment naming every suppression the pull request
 added, with its stated reason and a link to the line. It edits that same comment
-on each push instead of adding another, and on a pull request that adds none it
-posts nothing at all.
+on each push instead of adding another, and on a pull request that neither adds a
+suppression nor rewrites a justification it posts nothing at all. A pull request
+that *only* rewrites a justification does get one: its heading counts the
+justifications edited and no additions, and each rejustified entry says so
+beside its rule.
 
 ```yaml
 # .github/workflows/notignored.yml
@@ -221,15 +232,24 @@ than picking up fixes; the tag for a specific version never moves.
 | `max-entries` | `20` | How many suppressions the comment lists before it closes with a line counting the rest. At least 1; anything else fails the run. |
 | `version` | `latest` | A release tag such as `v0.1.0`, or `local` to build the action's own source with `cargo`. |
 
-It exposes `count` (how many suppressions the change added) and `report-path`
-(the JSON report), so a later step can fail the build, upload the report, or
-gate on a threshold:
+| Output | Meaning |
+| --- | --- |
+| `count` | How many suppressions the change added. |
+| `justification-edited-count` | How many existing suppressions had their justification rewritten. |
+| `report-path` | Path to the JSON report the scan wrote. |
+
+`count` keeps meaning **additions** and nothing else, so a workflow gating a
+build on it does not start failing the day somebody rewords a reason; the
+rewritten justifications are counted beside it rather than into it. A later step
+can fail the build, upload the report, or gate on a threshold:
 
 ```yaml
       - uses: nickderobertis/notignored@v0
         id: notignored
       - if: steps.notignored.outputs.count != '0'
         run: echo "this change adds ${{ steps.notignored.outputs.count }} suppression(s)"
+      - if: steps.notignored.outputs.justification-edited-count != '0'
+        run: echo "and rewrites ${{ steps.notignored.outputs.justification-edited-count }} justification(s)"
 ```
 
 The steps are `bash`, so the action runs on the Linux and macOS runners; it needs

@@ -1,6 +1,6 @@
 """The billing client, and the suppressions a real one collects."""
 
-import legacy_sdk  # type: ignore[import-untyped]  # the vendored SDK ships no type stubs
+import legacy_sdk  # type: ignore[import-untyped]  # the SDK ships no stubs
 from retries import Retry  # noqa: F401  # re-exported so callers can configure retries
 
 
