@@ -52,14 +52,6 @@
   its inputs name `crateSource` (`src/`, `Cargo.toml`, `Cargo.lock`) alongside
   `default` — the same input the Python SDK names, for the same reason: a cached
   green from before a parser moved would prove nothing.
-- **The three vocabularies are gated against the crate's.** `Tool`, `Scope` and
-  `Change` are restated here, in Rust and in the Python SDK, with nothing
-  generating one from another. `test/vocabulary.test.mjs` drives a refusal
-  through `scan` for each, reads the words the message says it would accept, and
-  compares them with the ones in `src/model.rs` — so a variant added on either
-  side fails until both have it, and the list a consumer is shown cannot drift
-  from the list the reader enforces. `python/notignored-sdk/tests/test_vocabulary.py`
-  is the other half.
 - **`node --test` is given an explicit glob** (`test/*.test.mjs`). Its default
   discovery treats every file under `test/` as a suite, which would run
   `support.mjs` and the fixture as tests.
