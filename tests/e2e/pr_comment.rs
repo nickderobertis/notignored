@@ -133,12 +133,6 @@ fn succeeds(output: &Output, what: &str) -> String {
     String::from_utf8(output.stdout.clone()).expect("the body is UTF-8")
 }
 
-/// The picture's three claims, made by the binary rather than by the capture.
-///
-/// A change overlay that only *added* suppressions would photograph a comment
-/// that cannot show the distinction the README's passage sells, and nothing else
-/// in the repository would notice — the PNGs are not hash-gated.
-/// The comment body the picture is made of, produced by the real script.
 fn real_body() -> String {
     let output = body_script("pr-comment-body.sh")
         .output()
@@ -146,6 +140,11 @@ fn real_body() -> String {
     succeeds(&output, "scripts/pr-comment-body.sh")
 }
 
+/// The picture's three claims, made by the binary rather than by the capture.
+///
+/// A change overlay that only *added* suppressions would photograph a comment
+/// that cannot show the distinction the README's passage sells, and nothing else
+/// in the repository would notice — the PNGs are not hash-gated.
 #[test]
 fn the_review_case_shows_additions_apart_from_justification_edits() {
     let body = real_body();
