@@ -240,10 +240,13 @@ function directive(value: unknown, at: string): IgnoreDirective {
 function change(source: Record<string, unknown>, at: string): Change | null {
   const value = source.change;
   if (value === undefined || value === null) return null;
-  if (!CHANGES.some((known) => known === value)) {
-    reject(`${at}.change`, `one of ${CHANGES.join(", ")}`, value);
-  }
-  return value as Change;
+  if (!isChange(value)) reject(`${at}.change`, `one of ${CHANGES.join(", ")}`, value);
+  return value;
+}
+
+/** Whether a value is one of the change words in the contract. */
+function isChange(value: unknown): value is Change {
+  return CHANGES.some((known) => known === value);
 }
 
 function reportError(value: unknown, at: string): ReportError {

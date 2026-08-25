@@ -25,8 +25,7 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
   `NotignoredContractError` — never a dropped record, because a scan that quietly
   reports fewer suppressions than it found is worse than one that fails. Keys this
   SDK has never seen are carried past, because the record contract's own rule is
-  that new fields are additive; the TypeScript SDK now agrees, having reversed the
-  opposite decision.
+  that new fields are additive.
 - **Every non-zero exit is `NotignoredExitError`, carrying the CLI's stderr.**
   Including the 2 the CLI uses for an unreadable file, which it names on stderr
   as well as in the report's `errors` — so nothing is lost, and a tree that could

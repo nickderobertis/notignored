@@ -20,21 +20,15 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
 - **The record types are the JSON's names** — `start_line`, not `startLine`. A
   camelCase mirror would be a second spelling of a published contract, and the
   first field added upstream would land in only one of them.
-- **Validation at the boundary is strict about what the contract specifies, and
-  tolerant about keys.** An unknown tool, scope or `change`, a missing or
-  mistyped field, an envelope from a newer build — each is a
-  `NotignoredContractError`. A suppression reporter that silently skipped a
-  record it did not recognise would report an unjustified suppression as absent.
-  A field this version has never heard of is **carried past**, at every object in
-  the envelope. That reversed an earlier decision to refuse one: the record
-  contract's own rule is that new fields are optional and additive, so refusing
-  meant every field the crate added within version 1 broke every consumer holding
-  an older SDK, over something none of them reads — and the version check already
-  catches an envelope whose meaning really has moved. The relaxation does not
-  reach a **released** older SDK, which still throws against a newer binary; that
-  is accepted, because the SDKs are versioned from `Cargo.toml` and released with
-  the CLI, so upgrading the SDK is the whole of the fix and the error already
-  names it.
+- **Validation is strict about what the contract specifies, and tolerant about
+  keys.** An unknown tool, scope or `change`, a missing or mistyped field, an
+  envelope from a newer build — each is a `NotignoredContractError`, because a
+  suppression reporter that silently skipped a record it did not recognise would
+  report an unjustified suppression as absent. A field this version has never
+  heard of is **carried past**, at every object in the envelope: the record
+  contract's rule is that new fields are additive, so refusing one would break
+  this SDK against a CLI that had only added something, and the version check
+  already catches an envelope whose meaning has really moved.
 - **Do not confuse this with `npm/notignored/`.** That is the CLI launcher whose
   `PACKAGES` map `tests/packaging_contract.rs` locks against the release
   matrices. This publishes `notignored-sdk`, from `scripts/pack.mjs`.

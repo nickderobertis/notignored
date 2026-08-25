@@ -128,15 +128,11 @@ or the envelope shape unilaterally: bump `REPORT_VERSION` and update
 `tests/golden/` in the same change. `tests/schema.rs` locks the serialized shape.
 New fields must be optional, round-trip, and be omitted when empty.
 
-Both SDK readers are **tolerant of fields they do not know**, and that is the
-decision rather than an oversight. `npm/notignored-sdk/src/contract.ts` used to
-refuse one, at every object in the envelope, rather than drop one whose presence
-changes what a record means; the price was that every additive field broke every
-consumer holding an older SDK, over something none of them reads. The version
-check is where an envelope that really has changed meaning is caught. What each
-reader still refuses is a **word** whose vocabulary the contract defines — an
-unknown `tool`, `scope`, or `change` — because guessing at one would report a
-suppression as something it is not.
+Both SDK readers **carry a field they do not know past**, so an additive field
+does not break a consumer holding an older SDK; the version check is what catches
+an envelope whose meaning has really moved. What they still refuse is a **word**
+whose vocabulary this contract defines — an unknown `tool`, `scope`, or `change`
+— because guessing at one reports a suppression as something it is not.
 
 `--diff` records carry one field a tree scan does not: `change`, `added` or
 `justification-edited`, set by `src/diff.rs::classify` and omitted (never null)

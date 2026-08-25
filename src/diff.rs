@@ -107,14 +107,42 @@ pub struct ChangedFile {
     /// see reads as a whole-file addition — every suppression in a moved file
     /// would then look new.
     pub renamed_from: Option<PathBuf>,
-    /// The object id of the file's contents at the base, or `None` when it had
+    /// The object name of the file's contents at the base, or `None` when it had
     /// none — a file the change created, or a diff with nothing to compare
     /// against.
     ///
     /// This is why the change list is read as `--raw` rather than
     /// `--name-status`: git names the source blob in every base this crate
     /// supports, so [`Diff::pre_image`] needs no revision arithmetic of its own.
-    pub base_blob: Option<String>,
+    pub base_blob: Option<BlobId>,
+}
+
+/// A git object name, as git wrote it and as it is handed back to git.
+///
+/// A newtype rather than a `String` because it crosses back over the boundary
+/// it arrived at: [`Diff::pre_image`] passes it to `git cat-file`, and the only
+/// thing that makes that safe is that [`BlobId::parse`] accepted nothing but hex
+/// digits. A plain `String` would let any text reach that argument from anywhere
+/// in the crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobId(String);
+
+impl BlobId {
+    /// Read an object name git wrote, or `None` when it is not one.
+    ///
+    /// The all-zero id is `None` too: that is not an object, it is git saying
+    /// this side of the record has no contents.
+    fn parse(oid: &str) -> Option<BlobId> {
+        if oid.is_empty() || !oid.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        (!oid.chars().all(|c| c == '0')).then(|| BlobId(oid.to_string()))
+    }
+
+    /// The name, as git spells it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// A changed file's contents at the diff's base.
@@ -123,11 +151,11 @@ pub struct BaseImage {
     /// The path the file had at the base — a rename's *source*, where there is
     /// one, because that is the file whose language and directives these are.
     pub path: PathBuf,
-    /// The contents, as text.
+    /// The file as it read then, which is what the pre-image scan parses.
     pub text: String,
 }
 
-/// Everything one `git diff --name-status` named.
+/// Everything one `git diff --raw` named.
 ///
 /// The files a change touched, and — kept apart from them — the paths this build
 /// cannot name. A file path is bytes to git and a `String` in the report
@@ -353,8 +381,8 @@ impl Diff {
     /// anything to compare. Failing here would turn a reviewable change into no
     /// review at all.
     pub fn pre_image(&self, file: &ChangedFile) -> Option<BaseImage> {
-        let blob = file.base_blob.as_deref()?;
-        let bytes = self.git_bytes(&["cat-file", "blob", blob]).ok()?;
+        let blob = file.base_blob.as_ref()?;
+        let bytes = self.git_bytes(&["cat-file", "blob", blob.as_str()]).ok()?;
         Some(BaseImage {
             // A rename's pre-image is the *source* path's blob, and its language
             // and directives are that file's.
@@ -531,7 +559,6 @@ fn parse_raw(output: &[u8], command: &str) -> Result<Changed, DiffError> {
                 Some(first),
             ),
         };
-        let base_blob = base_blob.map(str::to_string);
         match (path, renamed_from) {
             (Ok(path), None) => changed.files.push(ChangedFile {
                 path,
@@ -556,17 +583,18 @@ fn parse_raw(output: &[u8], command: &str) -> Result<Changed, DiffError> {
 ///
 /// The id is `None` when git wrote the all-zero one, which is how it says the
 /// file had no contents at the base.
-fn parse_raw_info(info: &str) -> Option<(Option<&str>, &str)> {
+fn parse_raw_info(info: &str) -> Option<(Option<BlobId>, &str)> {
     let fields: Vec<&str> = info.strip_prefix(':')?.split_whitespace().collect();
     let [_src_mode, _dst_mode, src_oid, _dst_oid, status] = fields[..] else {
         return None;
     };
-    // An object id is what this crate hands back to git; anything else is a
-    // format it cannot read, not a name to pass along and find out.
-    if src_oid.is_empty() || !src_oid.chars().all(|c| c.is_ascii_hexdigit()) {
+    // The all-zero id is a valid record with no pre-image; anything that is not
+    // an object name at all is a format this build cannot read, rather than a
+    // name to hand back to git and find out.
+    let base_blob = BlobId::parse(src_oid);
+    if base_blob.is_none() && !src_oid.chars().all(|c| c == '0') {
         return None;
     }
-    let base_blob = (!src_oid.chars().all(|c| c == '0')).then_some(src_oid);
     Some((base_blob, status))
 }
 
@@ -578,7 +606,7 @@ fn decode_path(field: &[u8]) -> Result<PathBuf, String> {
         .map_err(|_| String::from_utf8_lossy(field).into_owned())
 }
 
-/// How many paths a `--name-status` record carries after its status field.
+/// How many paths a `--raw` record carries after its info field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StatusKind {
     /// The status applies to the one path that follows it.
@@ -587,8 +615,8 @@ enum StatusKind {
     Paired,
 }
 
-/// How many paths a `--name-status` status field introduces, or `None` when git
-/// named a status this build does not know.
+/// How many paths a `--raw` record's status letter introduces, or `None` when
+/// git named a status this build does not know.
 ///
 /// Only `R`/`C` carry a similarity score and a second path; `X` is git's own
 /// "this is a bug" marker and is not something to report a change from.
@@ -840,7 +868,7 @@ mod tests {
             .collect()
     }
 
-    fn added(diff: &Diff, path: &str) -> FileChange {
+    fn change_for(diff: &Diff, path: &str) -> FileChange {
         diff.file_change(&changed_file(diff, path))
             .expect("the file's hunks")
     }
@@ -856,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn hunk_headers_become_added_line_runs() {
+    fn hunk_headers_become_the_hunks_a_change_made() {
         let patch = concat!(
             "diff --git a/a.py b/a.py\n",
             "--- a/a.py\n",
@@ -919,8 +947,8 @@ mod tests {
 
         let diff = Diff::open(root, None).expect("open diff");
         assert_eq!(changed(&diff), vec![("a.py".to_string(), None)]);
-        assert!(added(&diff, "a.py").intersects(2, 2));
-        assert!(!added(&diff, "a.py").intersects(1, 1));
+        assert!(change_for(&diff, "a.py").intersects(2, 2));
+        assert!(!change_for(&diff, "a.py").intersects(1, 1));
     }
 
     #[test]
@@ -932,7 +960,7 @@ mod tests {
 
         let diff = Diff::open(root, None).expect("open diff");
         assert_eq!(changed(&diff), vec![("a.py".to_string(), None)]);
-        assert!(added(&diff, "a.py").intersects(1, 1));
+        assert!(change_for(&diff, "a.py").intersects(1, 1));
     }
 
     #[test]
@@ -959,7 +987,7 @@ mod tests {
         let two_dot = Diff::open(root, Some("main..HEAD")).expect("open diff");
         let paths: Vec<String> = changed(&two_dot).into_iter().map(|(p, _)| p).collect();
         assert_eq!(paths, vec!["app.py", "base_only.py"]);
-        assert!(added(&two_dot, "base_only.py").intersects(1, 1));
+        assert!(change_for(&two_dot, "base_only.py").intersects(1, 1));
     }
 
     #[test]
@@ -993,7 +1021,7 @@ mod tests {
             changed(&diff),
             vec![("new.py".to_string(), Some("old.py".to_string()))]
         );
-        assert!(added(&diff, "new.py").is_empty());
+        assert!(change_for(&diff, "new.py").is_empty());
     }
 
     #[test]
@@ -1092,7 +1120,7 @@ mod tests {
             vec![ChangedFile {
                 path: PathBuf::from("plain.py"),
                 renamed_from: None,
-                base_blob: Some(OLD.to_string()),
+                base_blob: BlobId::parse(OLD),
             }],
             "the file git *could* name is still part of the change"
         );
@@ -1190,7 +1218,10 @@ mod tests {
 
         let output = format!(":100644 100644 {OLD} {NEW} M\0old.py\0");
         let changed = parse_raw(output.as_bytes(), "git diff --raw").unwrap();
-        assert_eq!(changed.files[0].base_blob.as_deref(), Some(OLD));
+        assert_eq!(
+            changed.files[0].base_blob.as_ref().map(BlobId::as_str),
+            Some(OLD)
+        );
     }
 
     #[test]
@@ -1253,9 +1284,9 @@ mod tests {
             message: "unreadable".into(),
         });
 
-        let mut added = BTreeMap::new();
-        added.insert("a.py".to_string(), hunks_of("@@ -6,0 +7,1 @@\n+x\n"));
-        retain_new(&mut report, &added);
+        let mut changes = BTreeMap::new();
+        changes.insert("a.py".to_string(), hunks_of("@@ -6,0 +7,1 @@\n+x\n"));
+        retain_new(&mut report, &changes);
 
         assert_eq!(
             report
@@ -1276,15 +1307,15 @@ mod tests {
         // A block-comment directive opened before the change and closed inside
         // it: the change is what made it say what it now says.
         report.ignores.push(directive("a.py", 4, 8));
-        let mut added = BTreeMap::new();
-        added.insert("a.py".to_string(), hunks_of("@@ -7,0 +8,1 @@\n+  reason\n"));
-        retain_new(&mut report, &added);
+        let mut changes = BTreeMap::new();
+        changes.insert("a.py".to_string(), hunks_of("@@ -7,0 +8,1 @@\n+  reason\n"));
+        retain_new(&mut report, &changes);
         assert_eq!(report.ignores.len(), 1, "{report:#?}");
 
         // ...and one that ends before the first added line does not.
         let mut report = Report::new();
         report.ignores.push(directive("a.py", 4, 6));
-        retain_new(&mut report, &added);
+        retain_new(&mut report, &changes);
         assert!(report.ignores.is_empty(), "{report:#?}");
     }
 
