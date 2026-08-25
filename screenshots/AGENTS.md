@@ -175,6 +175,11 @@ it costs. Say it here rather than discover it twice:
   README copies). Quiet on success.
 - `just screenshots-gif` — regenerate the animated demo GIF (needs Python 3 +
   Pillow).
+- `just screenshots-comment-tools` — install the pinned markdown/highlighting/
+  browser toolchain into `.dev/comment-render` (needs Node.js 20+ and a network
+  fetch of Chromium). The capture below runs it for you.
+- `just screenshots-pr-comment` — re-photograph the rendered comment, light and
+  dark. Commit both PNGs; nothing gates them.
 - `just screenshots-bless` — after an **intended** output change, recapture and
   refresh `shots/baseline/<arch>.json`. Commit it alongside `docs/screenshots/`.
 
