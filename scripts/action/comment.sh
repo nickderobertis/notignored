@@ -99,7 +99,6 @@ found="$(gh api --paginate "$API/repos/$GITHUB_REPOSITORY/issues/$NUMBER/comment
     || die "cannot list the comments on #$NUMBER" "$TOKEN_HINT"
 existing="${found%%$'\n'*}"
 
-# What the comment is about, in the words the counts are true in.
 tally="$COUNT suppression(s) added, $EDITED justification(s) edited"
 
 if [ -n "$existing" ]; then

@@ -138,11 +138,14 @@ runs:
 
         # `count` keeps its documented meaning — suppressions this change added —
         # so a workflow gating on it does not start failing the day somebody
-        # rewords a justification. A record with no `change` field is one an
-        # older notignored wrote, and it counts as added: the absence must
-        # reproduce the number that build reported, not silently zero it.
-        count="$(jq '[.ignores[] | select((.change // "added") == "added")] | length' "$report")"
+        # rewords a justification. The two counts partition the report between
+        # them: a rewritten justification is one, and everything else is an
+        # addition. That is what keeps a record no build here has a word for —
+        # one an older notignored wrote without the field, one a newer one wrote
+        # with a word this version never heard of — counted rather than dropped
+        # silently out of both numbers.
         edited="$(jq '[.ignores[] | select(.change == "justification-edited")] | length' "$report")"
+        count="$(jq '[.ignores[] | select(.change != "justification-edited")] | length' "$report")"
         {
           echo "count=$count"
           echo "justification-edited-count=$edited"

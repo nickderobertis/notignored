@@ -244,7 +244,6 @@ function change(source: Record<string, unknown>, at: string): Change | null {
   return value;
 }
 
-/** Whether a value is one of the change words in the contract. */
 function isChange(value: unknown): value is Change {
   return CHANGES.some((known) => known === value);
 }

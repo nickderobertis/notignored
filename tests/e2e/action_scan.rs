@@ -355,57 +355,109 @@ fn a_branch_that_only_rewrote_a_justification_adds_nothing() {
     );
 }
 
+/// The two commands the scan step counts a report with, lifted out of
+/// `action.yml` and run over `report` by the real bash and the real jq the
+/// runner uses.
+///
+/// Read out of the step for the same reason the whole step is read out of it
+/// above: a copy here would keep agreeing with itself long after the action
+/// stopped counting this way. Returns `(count, justification-edited-count)`.
+fn counts_of(report: &Path) -> (String, String) {
+    require_jq();
+    let step = step_script("Scan the change");
+    let counting: Vec<&str> = step
+        .lines()
+        .filter(|line| line.starts_with("count=") || line.starts_with("edited="))
+        .collect();
+    assert_eq!(
+        counting.len(),
+        2,
+        "the scan step no longer counts its report in two assignments:\n{step}"
+    );
+
+    let script = format!(
+        "set -euo pipefail\nreport=\"$1\"\n{}\nprintf '%s\\n%s\\n' \"$count\" \"$edited\"\n",
+        counting.join("\n")
+    );
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .arg("count-the-report")
+        .arg(report)
+        .output()
+        .expect("run the step's counting commands");
+    assert!(
+        output.status.success(),
+        "counting failed ({:?}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let printed = String::from_utf8(output.stdout).expect("UTF-8 counts");
+    let mut lines = printed.lines().map(str::to_string);
+    (
+        lines.next().expect("a count"),
+        lines.next().expect("a rewritten-justification count"),
+    )
+}
+
+/// Every record of a report from a `notignored` that never classified counts as
+/// added.
+///
 /// The action installs `latest` by default but can be pinned to any release, so
 /// the step has to stay correct against a build from before the word existed.
-///
-/// The binary here is the real one, aged: a shim strips `change` off every
-/// record on its way out, which is exactly the report an older `notignored`
-/// wrote. Absence must count as added — treating it as "not added" would
-/// silently zero the count those users have been reading all along.
+/// The report here is this repository's own committed golden — a real scan whose
+/// records carry no `change` at all, which is exactly what those builds wrote.
+/// Reading the absence as "not added" would silently zero the number those users
+/// have been reading all along.
 #[test]
 fn a_report_from_a_notignored_that_never_classified_counts_every_record_as_added() {
-    let repo = pull_request();
-    let real = assert_cmd::cargo::cargo_bin("notignored");
-    let shim = repo.path().join(".runner/aged-notignored");
-    std::fs::create_dir_all(shim.parent().expect("a runner directory")).expect("create it");
-    std::fs::write(
-        &shim,
-        format!(
-            "#!/bin/sh\n\
-             set -eu\n\
-             # Only the JSON report is a report; the markdown body is left alone.\n\
-             for arg in \"$@\"; do\n\
-             \x20 if [ \"$arg\" = json ]; then\n\
-             \x20   {real} \"$@\" | jq '.ignores |= map(del(.change))'\n\
-             \x20   exit $?\n\
-             \x20 fi\n\
-             done\n\
-             exec {real} \"$@\"\n",
-            real = real.display()
-        ),
-    )
-    .expect("write the aged shim");
-    std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-        .expect("make the shim executable");
+    let golden = repo_root().join("tests/golden/report.json");
+    let text = std::fs::read_to_string(&golden).expect("read the golden report");
+    assert!(
+        !text.contains("\"change\""),
+        "the golden report is classified; it can no longer stand in for an older build's"
+    );
+    let records = serde_json::from_str::<serde_json::Value>(&text).expect("a JSON report")
+        ["ignores"]
+        .as_array()
+        .expect("an ignores array")
+        .len();
+    assert!(records > 0, "the golden report holds nothing to count");
 
-    let run = scan(
-        repo.path(),
-        &[
-            ("GITHUB_BASE_REF", "main"),
-            ("NOTIGNORED", &shim.to_string_lossy()),
-        ],
+    assert_eq!(counts_of(&golden), (records.to_string(), "0".to_string()));
+}
+
+/// A change word this version has never heard of is counted, not dropped.
+///
+/// The action can also install a *newer* release than the workflow was written
+/// against, so the step has to survive a vocabulary that grew. The two counts
+/// partition the report between them, so such a record is reported as an
+/// addition — the conservative reading — rather than falling out of both
+/// numbers and understating what the pull request did.
+#[test]
+fn a_change_word_this_version_never_heard_of_is_still_counted() {
+    let classified = repo_root().join("tests/golden/diff-report.json");
+    let mut report: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&classified).expect("read the classified golden report"),
+    )
+    .expect("a JSON report");
+    let records = report["ignores"]
+        .as_array()
+        .expect("an ignores array")
+        .len();
+    assert!(records > 0, "the golden diff report holds nothing to count");
+    report["ignores"][0]["change"] = serde_json::Value::String("rules-widened".into());
+
+    let widened = tempfile::NamedTempFile::new().expect("a report file");
+    std::fs::write(
+        widened.path(),
+        serde_json::to_string_pretty(&report).expect("serialize the report"),
+    )
+    .expect("write the report");
+
+    assert_eq!(
+        counts_of(widened.path()),
+        (records.to_string(), "0".to_string()),
+        "a record carrying an unknown change word fell out of both counts"
     );
-    assert!(
-        run.output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&run.output.stderr)
-    );
-    assert!(
-        !run.report.contains("\"change\""),
-        "the shim did not age the report:\n{}",
-        run.report
-    );
-    // The same number this pull request reported before the field existed.
-    assert_eq!(run.count(), "1");
-    assert_eq!(run.justification_edited_count(), "0");
 }

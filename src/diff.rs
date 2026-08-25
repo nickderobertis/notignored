@@ -196,7 +196,6 @@ struct Hunk {
     new: Option<(u32, u32)>,
 }
 
-/// Whether the inclusive span `start..=end` overlaps the inclusive `range`.
 fn overlaps(range: (u32, u32), start: u32, end: u32) -> bool {
     range.0 <= end && start <= range.1
 }
@@ -213,7 +212,10 @@ pub struct FileChange {
 
 impl FileChange {
     /// Whether the change added no line at all to this file.
-    pub fn is_empty(&self) -> bool {
+    ///
+    /// Not "holds no hunks": a change that only deleted lines from a file has
+    /// hunks and adds nothing, and there is no new suppression to find in it.
+    pub fn adds_no_lines(&self) -> bool {
         self.hunks.iter().all(|hunk| hunk.new.is_none())
     }
 
@@ -924,7 +926,7 @@ mod tests {
         assert!(added.intersects(12, 12));
         // A pure deletion adds nothing at the line it removed.
         assert!(!added.intersects(24, 24));
-        assert!(!added.is_empty());
+        assert!(!added.adds_no_lines());
     }
 
     #[test]
@@ -955,7 +957,7 @@ mod tests {
         // patch of a patch still reads as one hunk of added text.
         let added = hunks_of("@@ -1,0 +9,2 @@\n+@@ -1,0 +3,3 @@\n+ @@ -1,0 +3,3 @@\n");
         assert!(added.intersects(9, 10) && !added.intersects(3, 3));
-        assert!(FileChange::default().is_empty());
+        assert!(FileChange::default().adds_no_lines());
     }
 
     #[test]
@@ -1043,7 +1045,7 @@ mod tests {
             changed(&diff),
             vec![("new.py".to_string(), Some("old.py".to_string()))]
         );
-        assert!(change_for(&diff, "new.py").is_empty());
+        assert!(change_for(&diff, "new.py").adds_no_lines());
     }
 
     #[test]

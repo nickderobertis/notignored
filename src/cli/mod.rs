@@ -276,7 +276,7 @@ impl Cli {
             let mut change = diff.file_change(file)?;
             // Nothing added means nothing new to find, so the file is never read
             // — and neither is what it used to say.
-            if change.is_empty() {
+            if change.adds_no_lines() {
                 continue;
             }
             change.set_base(diff.pre_image(file));
