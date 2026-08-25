@@ -1,9 +1,7 @@
 # AGENTS.md — `notignored-sdk` (Python)
 
-Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
-
-- **The surface is fixed and small.** `scan` / `ascan`, the five record types, the
-  two enums, and the error hierarchy — `tests/test_api.py` asserts `__all__` is
+- **The surface is fixed and small.** `scan` / `ascan`, the four record types, the
+  three enums, and the error hierarchy — `tests/test_api.py` asserts `__all__` is
   exactly that set, and asserts both entry points' parameters against the
   approved `(paths, *, diff, diff_base, tools, cwd)` spelled out as a literal.
   **Which binary runs is not an argument.** The approved contract asks for both

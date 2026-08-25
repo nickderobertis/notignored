@@ -127,13 +127,22 @@ pub struct ChangedFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobId(String);
 
+/// The lengths a git object name can have, in hex digits: SHA-1's 40 through
+/// SHA-256's 64.
+///
+/// `--abbrev=40` asks for at least the first bound, and git lengthens rather
+/// than shortens when it must disambiguate, so anything outside this range is
+/// not a name git wrote.
+const OBJECT_NAME_LENGTHS: std::ops::RangeInclusive<usize> = 40..=64;
+
 impl BlobId {
     /// Read an object name git wrote, or `None` when it is not one.
     ///
     /// The all-zero id is `None` too: that is not an object, it is git saying
     /// this side of the record has no contents.
     fn parse(oid: &str) -> Option<BlobId> {
-        if oid.is_empty() || !oid.chars().all(|c| c.is_ascii_hexdigit()) {
+        if !OBJECT_NAME_LENGTHS.contains(&oid.len()) || !oid.chars().all(|c| c.is_ascii_hexdigit())
+        {
             return None;
         }
         (!oid.chars().all(|c| c == '0')).then(|| BlobId(oid.to_string()))
@@ -259,7 +268,14 @@ impl FileChange {
                 };
                 let first: u32 = first.parse().map_err(|_| malformed())?;
                 let count: u32 = count.parse().map_err(|_| malformed())?;
-                Ok((count > 0).then(|| (first, first.saturating_add(count - 1))))
+                if count == 0 {
+                    return Ok(None);
+                }
+                // A run whose last line does not fit is a header this build
+                // cannot act on: clamping it would silently move where the
+                // change ends.
+                let last = first.checked_add(count - 1).ok_or_else(malformed)?;
+                Ok(Some((first, last)))
             };
             hunks.push(Hunk {
                 base: side('-')?,
@@ -588,14 +604,20 @@ fn parse_raw_info(info: &str) -> Option<(Option<BlobId>, &str)> {
     let [_src_mode, _dst_mode, src_oid, _dst_oid, status] = fields[..] else {
         return None;
     };
-    // The all-zero id is a valid record with no pre-image; anything that is not
-    // an object name at all is a format this build cannot read, rather than a
-    // name to hand back to git and find out.
+    // The all-zero id is a valid record saying this file had no pre-image;
+    // anything else that is not an object name is a format this build cannot
+    // read, rather than a name to hand back to git and find out.
     let base_blob = BlobId::parse(src_oid);
-    if base_blob.is_none() && !src_oid.chars().all(|c| c == '0') {
+    if base_blob.is_none() && !is_null_object_name(src_oid) {
         return None;
     }
     Some((base_blob, status))
+}
+
+/// Whether `oid` is the all-zero object name — git's way of saying this side of
+/// a record has no contents.
+fn is_null_object_name(oid: &str) -> bool {
+    OBJECT_NAME_LENGTHS.contains(&oid.len()) && oid.chars().all(|c| c == '0')
 }
 
 /// The path a `-z` record names, or the lossy spelling of one whose bytes this
@@ -1222,6 +1244,65 @@ mod tests {
             changed.files[0].base_blob.as_ref().map(BlobId::as_str),
             Some(OLD)
         );
+    }
+
+    /// An object name is bounded at the boundary, because it goes straight back
+    /// to git as the argument that decides which object is read.
+    #[test]
+    fn an_object_name_is_accepted_only_at_a_length_git_writes() {
+        // SHA-1's 40 and SHA-256's 64, and the all-zero form of each.
+        assert!(BlobId::parse(OLD).is_some());
+        assert!(BlobId::parse(&"a".repeat(64)).is_some());
+        assert!(is_null_object_name(&"0".repeat(40)));
+        assert!(is_null_object_name(&"0".repeat(64)));
+
+        for refused in [
+            "",
+            "de98044",
+            &"a".repeat(39),
+            &"a".repeat(65),
+            "not-an-oid",
+        ] {
+            assert!(BlobId::parse(refused).is_none(), "{refused:?}");
+            assert!(!is_null_object_name(refused), "{refused:?}");
+        }
+        // A short run of zeros is neither an object nor git's "no contents".
+        assert!(!is_null_object_name("0000000"));
+    }
+
+    /// A hunk whose last line does not fit is a header this build cannot act on.
+    #[test]
+    fn a_hunk_range_that_does_not_fit_is_malformed_rather_than_clamped() {
+        let patch = format!("@@ -1 +{},2 @@\n", u32::MAX);
+        let error = FileChange::parse(&patch, "git diff").unwrap_err();
+        assert!(error.to_string().contains("hunk header"), "{error}");
+        // The last line that *does* fit is read, not refused.
+        let change = hunks_of(&format!("@@ -1 +{},1 @@\n", u32::MAX));
+        assert!(change.intersects(u32::MAX, u32::MAX));
+    }
+
+    /// A pre-image git cannot produce is the same answer as one that is not
+    /// text: nothing to compare against, and never a failed review.
+    ///
+    /// Real git, real repository, real failure — the object simply is not there.
+    /// No end-to-end journey can reach this branch, because a repository whose
+    /// base blob git cannot read also cannot produce the patch `--diff` asks for
+    /// one call earlier, so the run would fail before classification.
+    #[test]
+    fn a_pre_image_git_cannot_produce_is_no_pre_image_rather_than_an_error() {
+        let dir = repo();
+        let root = dir.path();
+        write(root, "a.py", "x = 1\n");
+        commit(root, "baseline");
+        write(root, "a.py", "x = 1  # noqa: E501\n");
+
+        let diff = Diff::open(root, None).expect("open diff");
+        let absent = ChangedFile {
+            base_blob: BlobId::parse(&"a".repeat(40)),
+            ..changed_file(&diff, "a.py")
+        };
+        assert!(absent.base_blob.is_some(), "the fixture names an object");
+        assert_eq!(diff.pre_image(&absent), None);
     }
 
     #[test]

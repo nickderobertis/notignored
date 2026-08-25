@@ -1,7 +1,5 @@
 # AGENTS.md — `notignored-sdk` (TypeScript)
 
-Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
-
 - **The public surface is `scan` plus the contract types and the error classes,
   and nothing else** — `test/surface.test.mjs` reads the emitted `.d.ts` and
   fails on any addition. `src/binary.ts` and `src/contract.ts` are internals

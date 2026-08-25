@@ -1016,6 +1016,55 @@ fn a_diff_says_of_each_suppression_whether_it_was_added_or_only_rejustified() {
     assert_eq!(wrapped_record["end_line"], 2);
 }
 
+/// Several suppressions of one tool inside one hunk pair in file order.
+///
+/// The hunk is what bounds the search for a counterpart, so a file whose change
+/// rewrites a whole block of them is where a pairing could slide by one and put
+/// the wrong word on every entry after it. Two directives of the same tool, on
+/// consecutive lines, rewritten together: the first keeps its rules and gains a
+/// new reason, the second gains a rule.
+#[test]
+fn several_suppressions_of_one_tool_in_one_hunk_pair_in_file_order() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(
+        root,
+        "block.py",
+        "a = 1  # noqa: E501  # the first reason\n\
+         b = 2  # noqa: F401  # the second reason\n\
+         c = 3  # noqa: E711  # the third reason\n",
+    );
+    commit(root, "baseline");
+    write(
+        root,
+        "block.py",
+        "a = 1  # noqa: E501  # the first reason, reworded\n\
+         b = 2  # noqa: F401,F811  # the second reason\n\
+         c = 3  # noqa: E711  # the third reason, reworded\n",
+    );
+
+    // One hunk, covering all three lines on both sides.
+    let patch = git_stdout(
+        root,
+        &["diff", "--unified=0", "--no-color", "--", "block.py"],
+    );
+    assert_eq!(
+        patch.matches("@@ -").count(),
+        1,
+        "the journey hinges on one hunk holding all three: {patch}"
+    );
+    assert!(patch.contains("@@ -1,3 +1,3 @@"), "{patch}");
+
+    assert_eq!(
+        classified(&json_report(root, &["--diff"])),
+        vec![
+            "block.py:1 justification-edited",
+            "block.py:2 added",
+            "block.py:3 justification-edited",
+        ]
+    );
+}
+
 /// Classification labels; it never changes what is reported.
 ///
 /// The same change, read by the same binary, with the word stripped back off:
