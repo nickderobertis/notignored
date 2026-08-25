@@ -136,23 +136,16 @@ runs:
           --max-entries "$MAX_ENTRIES" \
           ${scan_paths[@]+"${scan_paths[@]}"} > "$body"
 
-        # `count` keeps its documented meaning — suppressions this change added —
-        # so a workflow gating on it does not start failing the day somebody
-        # rewords a justification. The two counts partition the report between
-        # them: a rewritten justification is one, and everything else is an
-        # addition. That is what keeps a record no build here has a word for —
-        # one an older notignored wrote without the field, one a newer one wrote
-        # with a word this version never heard of — counted rather than dropped
-        # silently out of both numbers.
-        edited="$(jq '[.ignores[] | select(.change == "justification-edited")] | length' "$report")"
-        count="$(jq '[.ignores[] | select(.change != "justification-edited")] | length' "$report")"
         {
-          echo "count=$count"
-          echo "justification-edited-count=$edited"
           echo "report-path=$report"
           echo "body-path=$body"
         } >> "$GITHUB_OUTPUT"
-        echo "notignored: $count suppression(s) added, $edited justification(s) edited since $base"
+        # The two counts a workflow gates on, and the line naming both. It reads
+        # the report this step just wrote; what each number means, and why a
+        # `change` word this version does not know still lands in one of them,
+        # is the script's own doc comment.
+        echo "notignored: compared against $base"
+        REPORT="$report" bash "$GITHUB_ACTION_PATH/scripts/action/counts.sh"
 
     - name: Upsert the sticky pull-request comment
       shell: bash

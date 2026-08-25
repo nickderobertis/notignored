@@ -144,6 +144,10 @@ fn scan(repo: &Path, env: &[(&str, &str)]) -> Run {
         .arg(&script)
         .current_dir(repo)
         .env("NOTIGNORED", assert_cmd::cargo::cargo_bin("notignored"))
+        // What the runner points at the action's own checkout, which here is
+        // this repository — so the step runs the real `scripts/action/` it
+        // ships with rather than a copy.
+        .env("GITHUB_ACTION_PATH", repo_root())
         .env("GITHUB_REPOSITORY", "acme/widgets")
         .env("RUNNER_TEMP", &temp)
         .env("GITHUB_OUTPUT", &outputs)
@@ -355,60 +359,44 @@ fn a_branch_that_only_rewrote_a_justification_adds_nothing() {
     );
 }
 
-/// The two commands the scan step counts a report with, lifted out of
-/// `action.yml` and run over `report` by the real bash and the real jq the
-/// runner uses.
-///
-/// Read out of the step for the same reason the whole step is read out of it
-/// above: a copy here would keep agreeing with itself long after the action
-/// stopped counting this way. Returns `(count, justification-edited-count)`.
+/// Run the composite's real counting script over `report`, the way the scan
+/// step runs it, and return the outputs it set as `(count,
+/// justification-edited-count)`.
 fn counts_of(report: &Path) -> (String, String) {
     require_jq();
-    let step = step_script("Scan the change");
-    let counting: Vec<&str> = step
-        .lines()
-        .filter(|line| line.starts_with("count=") || line.starts_with("edited="))
-        .collect();
-    assert_eq!(
-        counting.len(),
-        2,
-        "the scan step no longer counts its report in two assignments:\n{step}"
-    );
-
-    let script = format!(
-        "set -euo pipefail\nreport=\"$1\"\n{}\nprintf '%s\\n%s\\n' \"$count\" \"$edited\"\n",
-        counting.join("\n")
-    );
+    let outputs = tempfile::NamedTempFile::new().expect("a step output file");
     let output = Command::new("bash")
-        .arg("-c")
-        .arg(&script)
-        .arg("count-the-report")
-        .arg(report)
+        .arg(repo_root().join("scripts/action/counts.sh"))
+        .env("REPORT", report)
+        .env("GITHUB_OUTPUT", outputs.path())
         .output()
-        .expect("run the step's counting commands");
+        .expect("run counts.sh");
     assert!(
         output.status.success(),
-        "counting failed ({:?}): {}",
+        "counts.sh failed ({:?}): {}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    let printed = String::from_utf8(output.stdout).expect("UTF-8 counts");
-    let mut lines = printed.lines().map(str::to_string);
-    (
-        lines.next().expect("a count"),
-        lines.next().expect("a rewritten-justification count"),
-    )
+    let written = std::fs::read_to_string(outputs.path()).expect("read the step outputs");
+    let named = |name: &str| -> String {
+        written
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}=")))
+            .unwrap_or_else(|| panic!("counts.sh sets a {name} output:\n{written}"))
+            .to_string()
+    };
+    (named("count"), named("justification-edited-count"))
 }
 
 /// Every record of a report from a `notignored` that never classified counts as
 /// added.
 ///
 /// The action installs `latest` by default but can be pinned to any release, so
-/// the step has to stay correct against a build from before the word existed.
-/// The report here is this repository's own committed golden — a real scan whose
-/// records carry no `change` at all, which is exactly what those builds wrote.
-/// Reading the absence as "not added" would silently zero the number those users
-/// have been reading all along.
+/// the counting has to stay correct against a build from before the word
+/// existed. The report here is this repository's own committed golden — a real
+/// scan whose records carry no `change` at all, which is exactly what those
+/// builds wrote. Reading the absence as "not added" would silently zero the
+/// number those users have been reading all along.
 #[test]
 fn a_report_from_a_notignored_that_never_classified_counts_every_record_as_added() {
     let golden = repo_root().join("tests/golden/report.json");
@@ -430,10 +418,10 @@ fn a_report_from_a_notignored_that_never_classified_counts_every_record_as_added
 /// A change word this version has never heard of is counted, not dropped.
 ///
 /// The action can also install a *newer* release than the workflow was written
-/// against, so the step has to survive a vocabulary that grew. The two counts
-/// partition the report between them, so such a record is reported as an
-/// addition — the conservative reading — rather than falling out of both
-/// numbers and understating what the pull request did.
+/// against, so the counting has to survive a vocabulary that grew. The two
+/// counts partition the report between them, so such a record is reported as an
+/// addition — the conservative reading — rather than falling out of both numbers
+/// and understating what the pull request did.
 #[test]
 fn a_change_word_this_version_never_heard_of_is_still_counted() {
     let classified = repo_root().join("tests/golden/diff-report.json");
@@ -460,4 +448,39 @@ fn a_change_word_this_version_never_heard_of_is_still_counted() {
         (records.to_string(), "0".to_string()),
         "a record carrying an unknown change word fell out of both counts"
     );
+}
+
+/// A report that never finished being written must not read as a clean pull
+/// request.
+///
+/// The scan step writes the report by redirecting the binary's stdout, so a
+/// run that died mid-write leaves a file that is a truncated envelope rather
+/// than an empty one. Counting it as zero findings would post an all-clear
+/// comment on a change nobody scanned.
+#[test]
+fn a_truncated_report_fails_the_step_instead_of_counting_zero() {
+    require_jq();
+    let truncated = tempfile::NamedTempFile::new().expect("a report file");
+    std::fs::write(truncated.path(), "{\n  \"version\": 1,\n  \"ign").expect("write it");
+
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/action/counts.sh"))
+        .env("REPORT", truncated.path())
+        .output()
+        .expect("run counts.sh");
+    assert!(!output.status.success(), "a truncated report was counted");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("ignores array"), "{stderr}");
+    assert!(stderr.contains("ACTION:"), "{stderr}");
+
+    // And an unset report is a wiring mistake, named the same way.
+    let unset = Command::new("bash")
+        .arg(repo_root().join("scripts/action/counts.sh"))
+        .env_remove("REPORT")
+        .output()
+        .expect("run counts.sh");
+    assert!(!unset.status.success(), "a run with no report was accepted");
+    let stderr = String::from_utf8_lossy(&unset.stderr);
+    assert!(stderr.contains("REPORT is not set"), "{stderr}");
+    assert!(stderr.contains("ACTION:"), "{stderr}");
 }

@@ -38,6 +38,7 @@ include = [
   "/action.yml",
   "/scripts/install.sh",
   "/scripts/action/comment.sh",
+  "/scripts/action/counts.sh",
 ]
 # `examples/` is documentation for the CLI — sample sources carrying the
 # suppressions the README shows it reporting — not cargo examples. Left on,

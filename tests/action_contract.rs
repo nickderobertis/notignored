@@ -174,10 +174,9 @@ fn action_scripts() -> Vec<(String, String)> {
             step.find("run").map(|run| (name, run.scalar().to_string()))
         })
         .collect();
-    scripts.push((
-        "scripts/action/comment.sh".to_string(),
-        read("scripts/action/comment.sh"),
-    ));
+    for script in ["scripts/action/comment.sh", "scripts/action/counts.sh"] {
+        scripts.push((script.to_string(), read(script)));
+    }
     scripts
 }
 

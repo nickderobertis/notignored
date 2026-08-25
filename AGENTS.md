@@ -194,10 +194,15 @@ product's review surface. Keep the judgment in Rust: `--format markdown` renders
 the whole comment body, golden-tested over the fixture counts
 (`tests/golden/markdown/`), so the composite's shell only moves bytes. The
 `--max-entries` cap needs more findings than those fixtures hold, so it is proven
-either side of its boundary in the renderer's own unit tests instead. Its two
-scripts are proven by *lifting them out of `action.yml`* and running them
+either side of its boundary in the renderer's own unit tests instead. Its scripts
+are proven by running the real thing — the inline steps *lifted out of
+`action.yml`*, `comment.sh` and `counts.sh` through their own env interfaces
 (`tests/e2e/action_scan.rs`, `tests/e2e/action_comment.rs`); a copy in a test
-would keep passing after the action stopped doing what it says. Nothing is
+would keep passing after the action stopped doing what it says. Counting the
+report belongs to `counts.sh` because the reports that matter most to it — one
+from a build with no `change` field, one carrying a word this version never heard
+of — are reports no binary here can produce, so they are handed to it directly
+rather than faked behind the binary. Nothing is
 mocked: github.com is the one host those journeys cannot own, so `gh` talks HTTP
 to a real server they run on loopback, and everything else is a real repository,
 the real binary, and the real `gh`.
