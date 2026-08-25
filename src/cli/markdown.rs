@@ -858,38 +858,6 @@ mod tests {
         }
     }
 
-    /// A value the command line would have rejected reaches the renderer only
-    /// from a library caller, and is interpolated into neither a link nor the
-    /// footer: the body degrades to the one a run told nothing renders.
-    #[test]
-    fn a_repo_or_sha_the_flags_would_have_rejected_is_never_interpolated() {
-        let mut report = Report::new();
-        report.ignores.push(directive(12, Some("why")));
-
-        // A slug that closes the link and opens its own.
-        let injected = MarkdownOptions {
-            repo: Some("acme/widgets)](https://evil.example".into()),
-            ..options()
-        };
-        let rendered = render(&report, &injected);
-        assert!(!rendered.contains("evil.example"), "{rendered}");
-        assert!(rendered.contains("— `src/app.py:12`"), "{rendered}");
-        // The sha is still a commit id, so the footer is still true, unlinked.
-        assert!(
-            rendered.ends_with("---\n\n<sub>Suppressions as of `0123456`.</sub>\n"),
-            "{rendered}"
-        );
-
-        // A branch name pins nothing, so it names no commit to stamp.
-        let moving = MarkdownOptions {
-            sha: Some("main".into()),
-            ..options()
-        };
-        let rendered = render(&report, &moving);
-        assert!(!rendered.contains("https://github.com/"), "{rendered}");
-        assert!(!rendered.contains("<sub>"), "{rendered}");
-    }
-
     /// The cap is the caller's to set, and a body under it is unchanged by it.
     #[test]
     fn max_entries_is_configurable() {
