@@ -212,6 +212,27 @@ screenshots-gif:
     @cargo build --release --locked --bin notignored
     @python3 scripts/demo-gif.py
 
+# llmlint: ignore-block[changed_behavior_has_e2e] these two produce a committed
+# artifact rather than product behaviour, and their success paths cannot run in
+# the gate by design: the toolchain is a browser download this repository
+# deliberately keeps out of `bootstrap` and CI (screenshots/AGENTS.md), so a test
+# that installed it would move the very cost that decision exists to avoid. What
+# they produce IS covered — `tests/e2e/pr_comment.rs` drives the real body the
+# picture shows and both recipes' missing-tool paths through `just`, and
+# `tests/screenshots_contract.rs` holds the committed PNGs and the README embeds.
+# Also run on demand by `screenshots-pr-comment`; this is the manual entry point.
+# Install the pinned markdown/highlighting/browser toolchain (needs Node.js 20+).
+screenshots-comment-tools:
+    @bash scripts/setup-comment-render.sh
+
+# NOT hash-gated, so nothing notices when it goes stale — screenshots/AGENTS.md
+# says when to re-run it.
+# Re-photograph the README's comment: the real binary's body, light and dark.
+screenshots-pr-comment:
+    @bash scripts/pr-comment-png.sh
+
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
 # Refresh the committed baseline manifest from a fresh capture (after an
 # INTENDED output change). Commit shots/baseline/ + docs/screenshots/ alongside.
 screenshots-bless: screenshots

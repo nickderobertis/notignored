@@ -256,6 +256,220 @@ fn the_capture_drops_the_git_environment_a_hook_hands_it() {
     );
 }
 
+/// The one value the rendered-comment capture cannot take from the tree.
+///
+/// Both capture scripts pin their permalinks to the same literal sha, because
+/// neither can know the sha of the commit that adds a screenshot. Two scenes of
+/// the same review case that disagreed about it would show a reader two
+/// different commits for one change.
+#[test]
+fn both_captures_pin_their_permalinks_to_the_same_commit() {
+    let literal = |script: &str| {
+        let sha = read(script)
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("permalink_sha=").map(str::trim))
+            .map(|value| value.trim_matches('"').to_string())
+            .unwrap_or_else(|| panic!("{script} no longer pins a permalink_sha"));
+        // A permalink is only a permalink if it names a commit: `--github-sha`
+        // rejects anything but a 40-hex id, so a script that drifted to a short
+        // sha or an empty string would fail the capture rather than this test.
+        assert!(
+            sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+            "{script} pins a permalink_sha that is not a commit id: {sha:?}"
+        );
+        sha
+    };
+    assert_eq!(
+        literal("scripts/screenshots.sh"),
+        literal("scripts/pr-comment-body.sh"),
+        "the `pr-comment` scene and the rendered-comment PNGs pin their \
+         permalinks to different commits — they photograph one review case"
+    );
+}
+
+/// The renderer that lays GitHub's markup over a body has to know every language
+/// a fence can name, or a snippet loses its colour without anything failing.
+#[test]
+fn the_comment_renderer_knows_every_language_a_fence_can_name() {
+    let tags: Vec<String> = read("src/cli/markdown.rs")
+        .lines()
+        .skip_while(|line| !line.contains("match Language::from_path"))
+        .take_while(|line| !line.contains("Language::Unknown"))
+        .filter_map(|line| {
+            let (_, tag) = line.trim().split_once("=> ")?;
+            Some(
+                tag.trim()
+                    .trim_end_matches(',')
+                    .trim_matches('"')
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        tags.len() >= 5,
+        "could not read the fence languages out of src/cli/markdown.rs: {tags:?}"
+    );
+    let renderer = read("scripts/comment-render/render.mjs");
+    for tag in &tags {
+        assert!(
+            renderer.contains(&format!("\"{tag}\"")),
+            "scripts/comment-render/render.mjs does not know the `{tag}` fence \
+             src/cli/markdown.rs emits — its snippets would render uncoloured"
+        );
+    }
+}
+
+/// The rendered-comment capture, its installer, and the two PNGs it writes.
+///
+/// A raster is not byte-reproducible, so screencomp cannot gate these the way it
+/// gates the SVGs — which leaves the README free to point at an image nobody
+/// committed, or the recipe that makes one free to disappear. These read the
+/// real files instead.
+#[test]
+fn the_rendered_comment_capture_and_the_images_it_writes_are_all_present() {
+    for image in [
+        "docs/screenshots/pr-comment-rendered.png",
+        "docs/screenshots/pr-comment-rendered-dark.png",
+    ] {
+        assert!(
+            repo_root().join(image).is_file(),
+            "{image} is not committed — run `just screenshots-pr-comment`"
+        );
+    }
+    for script in [
+        "scripts/pr-comment-body.sh",
+        "scripts/pr-comment-png.sh",
+        "scripts/setup-comment-render.sh",
+        "scripts/comment-render/render.mjs",
+        "scripts/comment-render/comment.css",
+        "scripts/comment-render/package-lock.json",
+    ] {
+        assert!(
+            repo_root().join(script).is_file(),
+            "{script} is gone — the rendered comment could no longer be regenerated"
+        );
+    }
+    let justfile = read("justfile");
+    for recipe in ["screenshots-pr-comment:", "screenshots-comment-tools:"] {
+        assert!(
+            justfile.contains(recipe),
+            "the justfile no longer defines `{}`",
+            recipe.trim_end_matches(':')
+        );
+    }
+    assert!(
+        read("scripts/pr-comment-png.sh").contains("scripts/setup-comment-render.sh"),
+        "the capture no longer installs its toolchain on demand"
+    );
+    assert!(
+        read("screenshots/AGENTS.md").contains("pr-comment-rendered"),
+        "screenshots/AGENTS.md no longer records what the rendered-comment capture is"
+    );
+}
+
+/// A picture nobody can see sells nothing, and a `<picture>` missing its dark
+/// source reads harshly under the README's dark-themed hero.
+#[test]
+fn the_readme_leads_the_action_with_the_rendered_comment() {
+    let readme = read("README.md");
+    let dark = readme
+        .find("srcset=\"docs/screenshots/pr-comment-rendered-dark.png\"")
+        .expect("the README's <picture> offers a dark rendered-comment source");
+    let light = readme
+        .find("src=\"docs/screenshots/pr-comment-rendered.png\"")
+        .expect("the README embeds the light rendered comment");
+    let opened = readme[..dark]
+        .rfind("<picture>")
+        .expect("the dark source sits inside a <picture>");
+    let closed = readme[opened..]
+        .find("</picture>")
+        .map(|offset| opened + offset)
+        .expect("the <picture> is closed");
+    assert!(
+        light < closed,
+        "the light rendered comment is outside the <picture> its dark source opens"
+    );
+
+    let img = readme[..light]
+        .rfind("<img ")
+        .expect("the light rendered comment is embedded as an <img>");
+    let alt = readme[img..light]
+        .split_once("alt=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(alt, _)| alt)
+        .unwrap_or_default();
+    assert!(
+        alt.len() > 30,
+        "docs/screenshots/pr-comment-rendered.png is embedded with no descriptive alt text: {alt:?}"
+    );
+
+    // Where it sits is the point: in the main text under the `--diff` scene, not
+    // behind the fold the markdown *source* still lives in.
+    let diff_scene = readme
+        .find("](docs/screenshots/diff.svg)")
+        .expect("the README embeds the --diff scene");
+    let fold = readme
+        .find("<details>")
+        .expect("the README still folds the remaining scenes away");
+    assert!(
+        diff_scene < opened && closed < fold,
+        "the rendered comment is no longer in the README's main text between the \
+         --diff scene and the collapsed fold"
+    );
+}
+
+/// The render toolchain is a browser download. It must never become something an
+/// ordinary contributor has to get through to run `just check`.
+#[test]
+fn the_rendered_comment_toolchain_is_out_of_bootstrap_and_ci() {
+    let root_manifest = read("package.json");
+    for dependency in ["markdown-it", "shiki", "playwright"] {
+        assert!(
+            !root_manifest.contains(dependency),
+            "{dependency} has leaked into the workspace package.json"
+        );
+    }
+    let justfile = read("justfile");
+    for recipe in ["bootstrap:", "_crate-bootstrap:", "check:"] {
+        let body = justfile
+            .lines()
+            .skip_while(|line| !line.starts_with(recipe))
+            .take_while(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !body.is_empty(),
+            "the justfile no longer defines `{recipe}`"
+        );
+        assert!(
+            !body.contains("comment-render") && !body.contains("pr-comment"),
+            "`just {}` now needs the rendered-comment toolchain:\n{body}",
+            recipe.trim_end_matches(':')
+        );
+    }
+    assert!(
+        !read("screencomp.toml").contains("comment-render"),
+        "screencomp.toml's guard now watches the rendered-comment toolchain, whose \
+         capture nothing gates"
+    );
+    let workflows = repo_root().join(".github/workflows");
+    let listing = std::fs::read_dir(&workflows)
+        .unwrap_or_else(|error| panic!("read {}: {error}", workflows.display()));
+    for entry in listing {
+        let path = entry
+            .unwrap_or_else(|error| panic!("read an entry of {}: {error}", workflows.display()))
+            .path();
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            !text.contains("comment-render") && !text.contains("screenshots-pr-comment"),
+            "{} runs the rendered-comment capture — it is informational and \
+             downloads a browser",
+            path.display()
+        );
+    }
+}
+
 /// Screenshots are informational: a capture in the gate would make `just check`
 /// need `freeze`, a network fetch, and a release build.
 #[test]

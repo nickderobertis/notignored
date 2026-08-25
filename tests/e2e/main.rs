@@ -25,6 +25,7 @@ mod nx_workspace;
 mod nx_wrapper;
 mod packaging;
 mod polyglot;
+mod pr_comment;
 mod publish_npm;
 mod python_tools_setup;
 mod python_types_parity;

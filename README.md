@@ -12,6 +12,26 @@ it inherited, so `--diff` reports only those:
 
 ![The same report under --diff: the two suppressions the change added, a ruff E501 and a biome noExplicitAny, and above them a mypy suppression the change only rewrote the justification of, marked "(justification edited)" after its scope, closing with a summary reading "2 added, 1 justification edited in 2 files"](docs/screenshots/diff.svg)
 
+On a pull request that report is one comment, not a wall of annotations: the
+[GitHub Action](#on-a-pull-request-the-github-action) posts a single sticky
+comment and edits that same comment in place on every push, so a reviewer always
+has one current list instead of one per commit. Every entry names the tool and
+the rules it silences, quotes the reason the author gave for silencing them,
+links straight to the line, and keeps the suppressed code one click away. The
+heading counts the suppressions the change *added* apart from the existing ones
+whose justification it merely rewrote — so the number a reviewer reads is the
+number of new bypasses, and a reworded explanation never inflates it.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/pr-comment-rendered-dark.png">
+  <img alt="The pull-request comment as GitHub renders it: a heading reading &quot;notignored: 2 suppressions added, 1 justification edited&quot;, then a bullet per suppression naming its tool and rule in bold — the first marked &quot;(justification edited)&quot; — with the stated reason in italics and a permalink to the line, the first entry's &quot;suppressed code&quot; block expanded to show the silenced Python with the suppressed line marked, the other two collapsed, and a footer noting the commit the suppressions were read from" src="docs/screenshots/pr-comment-rendered.png">
+</picture>
+
+> Every character of that comment is real output — what `--format markdown`
+> prints for this change, captured by `just screenshots-pr-comment`. Only the
+> surrounding styling is a local mimic of GitHub's, not a screenshot of
+> github.com, which is why no comment author, avatar or timestamp frames it.
+
 <details>
 <summary>Narrowing to particular tools, the JSON envelope, and the pull-request comment</summary>
 
@@ -24,16 +44,15 @@ documented [below](#output):
 
 ![The JSON report envelope for one file: a version, an ignores array whose two records carry tool, scope, rules, reason, path, line, end_line, column, the raw directive text and the suppressed range, and an empty errors array](docs/screenshots/json.svg)
 
-`--format markdown` renders the body the [GitHub Action](#on-a-pull-request-the-github-action)
-posts, with each suppression linked to its line and its silenced code one click
-away:
+`--format markdown` emits the markdown **source** behind the comment above —
+this is what the action hands GitHub to render, permalinks and all:
 
 ![The pull-request comment body as markdown: a heading reading "notignored: 2 suppressions added, 1 justification edited", then one bullet per suppression naming its tool and rule — the rewritten one marked "(justification edited)" — with its reason in italics, a permalink to the line, and a collapsed details block holding the suppressed code](docs/screenshots/pr-comment.svg)
 
 </details>
 
-> These are real captures of the CLI, rendered from its actual colorized output
-> by [`just screenshots`](screenshots/AGENTS.md) and gated by
+> The terminal shots are real captures of the CLI, rendered from its actual
+> colorized output by [`just screenshots`](screenshots/AGENTS.md) and gated by
 > [screencomp](https://github.com/nickderobertis/screencomp) — so they change
 > only when the output does.
 

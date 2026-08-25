@@ -1,0 +1,263 @@
+/*
+ * A local mimic of the way GitHub renders a pull-request comment body.
+ *
+ * The markup this styles is GitHub's own — `markdown-body`, the
+ * `highlight highlight-source-<lang>` code container, the zeroclipboard copy
+ * button — read off a real rendered comment. GitHub publishes no stylesheet with
+ * it, so the rules below are authored from Primer's tokens and checked against
+ * real captures of a real comment.
+ *
+ * One document serves both themes: `data-theme` on <html> swaps the custom
+ * properties, so the light and dark PNGs are two screenshots of one render
+ * rather than two renders that could drift apart.
+ */
+
+:root {
+  /* Primer `light`. */
+  --canvas-default: #ffffff;
+  --canvas-muted: #f6f8fa;
+  --fg-default: #1f2328;
+  --fg-muted: #59636e;
+  --border-default: #d1d9e0;
+  --accent-fg: #0969da;
+  --button-bg: #f6f8fa;
+  --button-border: rgba(31, 35, 40, 0.15);
+  --neutral-muted: rgba(129, 139, 152, 0.12);
+}
+
+[data-theme="dark"] {
+  /* Primer `dark`. */
+  --canvas-default: #0d1117;
+  --canvas-muted: #151b23;
+  --fg-default: #f0f6fc;
+  --fg-muted: #9198a1;
+  --border-default: #3d444d;
+  --accent-fg: #4493f8;
+  --button-bg: #212830;
+  --button-border: #3d444d;
+  --neutral-muted: rgba(101, 108, 118, 0.2);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--canvas-default);
+}
+
+/*
+ * The comment container, and nothing around it: a real timeline comment also
+ * carries an author, an avatar and a timestamp, none of which this capture can
+ * obtain honestly, so it shows the body alone (see screenshots/AGENTS.md).
+ */
+.timeline-comment {
+  width: 816px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background-color: var(--canvas-default);
+}
+
+.comment-body {
+  padding: 16px;
+}
+
+.markdown-body {
+  color: var(--fg-default);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
+    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  /* A comment body renders at 14px, not the 16px a standalone README page uses. */
+  font-size: 14px;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0 !important;
+}
+
+.markdown-body > *:last-child {
+  margin-bottom: 0 !important;
+}
+
+.markdown-body h3 {
+  margin-top: 24px;
+  margin-bottom: 16px;
+  font-weight: 600;
+  font-size: 1.25em;
+  line-height: 1.25;
+}
+
+.markdown-body p {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+.markdown-body ul {
+  margin-top: 0;
+  margin-bottom: 16px;
+  padding-left: 2em;
+}
+
+.markdown-body li + li {
+  margin-top: 0.25em;
+}
+
+.markdown-body li > p {
+  margin-top: 16px;
+}
+
+.markdown-body a {
+  color: var(--accent-fg);
+  /* GitHub underlines links in comment bodies by default. */
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.markdown-body strong {
+  font-weight: 600;
+}
+
+.markdown-body hr {
+  height: 0.25em;
+  margin: 24px 0;
+  padding: 0;
+  background-color: var(--border-default);
+  border: 0;
+}
+
+.markdown-body summary {
+  display: list-item;
+  cursor: pointer;
+}
+
+.markdown-body details {
+  margin-bottom: 16px;
+}
+
+/* Inline code — the abbreviated commit id the provenance footer links. */
+.markdown-body code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  background-color: var(--neutral-muted);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 85%;
+  white-space: break-spaces;
+}
+
+/*
+ * The fenced block. GitHub puts the background and the scroll container on the
+ * `.highlight` div and leaves <pre> transparent, which is what makes the copy
+ * button sit inside the tinted box rather than beside it.
+ */
+.markdown-body .highlight {
+  position: relative;
+  margin-bottom: 16px;
+  padding: 16px;
+  overflow: auto;
+  background-color: var(--canvas-muted);
+  border-radius: 6px;
+}
+
+.markdown-body .highlight pre {
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  background-color: transparent;
+  color: var(--fg-default);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 85%;
+  line-height: 1.45;
+  word-break: normal;
+  white-space: pre;
+}
+
+/*
+ * GitHub's syntax classes, which render.mjs maps Shiki's tokens onto. Both
+ * themes' values live here, so the dark screenshot is the same DOM with
+ * `data-theme` flipped rather than a second render that could drift.
+ */
+.pl-c {
+  color: #59636e;
+}
+.pl-c1 {
+  color: #0550ae;
+}
+.pl-ent {
+  color: #116329;
+}
+.pl-en {
+  color: #6639ba;
+}
+.pl-smi {
+  color: #1f2328;
+}
+.pl-k {
+  color: #cf222e;
+}
+.pl-s {
+  color: #0a3069;
+}
+.pl-v {
+  color: #953800;
+}
+.pl-bu {
+  color: #82071e;
+}
+
+[data-theme="dark"] .pl-c {
+  color: #9198a1;
+}
+[data-theme="dark"] .pl-c1 {
+  color: #79c0ff;
+}
+[data-theme="dark"] .pl-ent {
+  color: #7ee787;
+}
+[data-theme="dark"] .pl-en {
+  color: #d2a8ff;
+}
+[data-theme="dark"] .pl-smi {
+  color: #f0f6fc;
+}
+[data-theme="dark"] .pl-k {
+  color: #ff7b72;
+}
+[data-theme="dark"] .pl-s {
+  color: #a5d6ff;
+}
+[data-theme="dark"] .pl-v {
+  color: #ffa657;
+}
+[data-theme="dark"] .pl-bu {
+  color: #ffa198;
+}
+
+.zeroclipboard-container {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.ClipboardButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--fg-muted);
+  background-color: var(--button-bg);
+  border: 1px solid var(--button-border);
+  border-radius: 6px;
+}
+
+.ClipboardButton svg {
+  display: block;
+  fill: currentColor;
+}
