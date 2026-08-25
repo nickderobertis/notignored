@@ -48,8 +48,9 @@ if [ ! -x "$bin" ]; then
   exit 1
 fi
 
-tmp_state="$(mktemp -d)" || {
-  echo "pr-comment-body: cannot create a scratch directory for the review repository" >&2
+tmp_parent="${TMPDIR:-/tmp}"
+tmp_state="$(mktemp -d "$tmp_parent/notignored-pr-comment.XXXXXX")" || {
+  echo "pr-comment-body: cannot create a scratch directory beneath TMPDIR=$tmp_parent" >&2
   echo "ACTION: check \$TMPDIR exists and has space (df -h), then re-run 'just screenshots-pr-comment'" >&2
   exit 1
 }
