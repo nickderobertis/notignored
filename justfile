@@ -213,7 +213,8 @@ screenshots-gif:
     @python3 scripts/demo-gif.py
 
 # llmlint: ignore-block[changed_behavior_has_e2e] a test of either success path
-# would have to install the browser these deliberately keep out of the gate.
+# would have to install the browser these deliberately keep out of the gate
+# (screenshots/AGENTS.md); their failure paths are driven by tests/e2e/pr_comment.rs.
 # Also run on demand by `screenshots-pr-comment`; this is the manual entry point.
 # Install the pinned markdown/highlighting/browser toolchain (needs Node.js 20+).
 screenshots-comment-tools:

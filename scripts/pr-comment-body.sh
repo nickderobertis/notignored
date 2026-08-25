@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Print the comment body the rendered-comment capture photographs.
 #
-# Separate from scripts/pr-comment-png.sh so this half — the review case, and
-# therefore every character the picture shows — can be driven directly by
+# Separate from the render half so this one — the review case, and therefore
+# every character the picture shows — can be driven directly by
 # `tests/e2e/pr_comment.rs`, the way scripts/action/counts.sh is. The half it
-# leaves out needs a browser, which the gate must never.
+# leaves out (scripts/comment-render/render.mjs, which `just
+# screenshots-pr-comment` pipes this into) needs a browser, which the gate must
+# never.
 #
 # It builds the same throwaway review repository scripts/screenshots.sh builds
 # for its `diff` and `pr-comment` scenes: the committed screenshots/fixture/ tree

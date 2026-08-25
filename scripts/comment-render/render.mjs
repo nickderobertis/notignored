@@ -1,7 +1,7 @@
 // Render a `--format markdown` comment body to the two PNGs the README embeds.
 //
 // Input is the body on stdin — the real binary's real output, produced by
-// scripts/pr-comment-png.sh — and output is a light/dark pair of screenshots of
+// scripts/pr-comment-body.sh — and output is a light/dark pair of screenshots of
 // that body laid out the way GitHub lays a comment out: markdown-it for the
 // HTML, Shiki for the syntax colours inside the fenced blocks, comment.css for
 // the Primer styling, and a headless Chromium for the raster.

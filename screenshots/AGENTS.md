@@ -139,6 +139,34 @@ ordinary contributor runs: pinned in `scripts/comment-render/package-lock.json`,
 installed into `.dev/comment-render` on demand the way `scripts/setup-js.sh`
 installs the pinned linters.
 
+### Open follow-up: the render half has no automated proof
+
+Keeping the browser out of the gate costs coverage, and this is the whole of what
+it costs. Say it here rather than discover it twice:
+
+- **What is proven.** The body — every character the picture shows — by
+  `tests/e2e/pr_comment.rs`, which runs the real `scripts/pr-comment-body.sh`
+  over the real fixtures with the real binary. The recovery advice of both
+  recipes and of the installer, driven through `just` with the tool they need
+  taken off `PATH`. That the pieces exist and agree, by
+  `tests/screenshots_contract.rs` reading them as text.
+- **What is not.** Every *success* path from the body onwards:
+  `scripts/setup-comment-render.sh`'s install, `scripts/comment-render/render.mjs`
+  in full, and whether the two PNGs still look like a GitHub comment. Reaching
+  any of it needs the pinned Chromium, so the `changed_behavior_has_e2e`
+  suppressions on those three files point here rather than restate this. A test
+  that reached them through a stand-in `node`, browser or binary would prove less
+  than nothing, so there is none.
+- **The bargain.** A maintainer runs `just screenshots-pr-comment` and looks at
+  what it wrote. That is the proof, and it is why the recipe has to keep working
+  from a clean clone.
+- **What would make it provable.** A hermetic, pre-fetched browser that CI and a
+  clean clone both already have — a container image the visual-docs lane already
+  pulls, say — would let a journey drive the render half without making `check`
+  download anything. Until that exists, widening the gate to cover this would
+  mean every contributor downloading Chromium to run `just check`, which is the
+  trade this repository has refused.
+
 ## Commands
 
 - `just screenshots-tools` — install the pinned `freeze` (needs Go). screencomp
