@@ -378,8 +378,12 @@ fn the_renderer_reads_the_gutter_grammar_the_report_writes() {
 /// accept. That vocabulary is `src/cli/markdown.rs`'s, restated — reconcile it
 /// against a real body, or a tag the report starts emitting fails the capture
 /// instead of rendering.
+///
+/// One-directional on purpose: a tag the review case does not happen to reach —
+/// `<sub>` before the commit stamp existed — is still one the report emits, so
+/// an allowlist entry with no match here is not evidence of anything.
 #[test]
-fn the_renderer_allows_exactly_the_raw_html_the_report_emits() {
+fn the_renderer_allows_every_raw_html_tag_the_report_emits() {
     let renderer = std::fs::read_to_string(repo_root().join("scripts/comment-render/render.mjs"))
         .expect("read scripts/comment-render/render.mjs");
     let allowed: Vec<String> = renderer
