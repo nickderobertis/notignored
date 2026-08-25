@@ -42,6 +42,12 @@ if (added.ignores.some((directive) => directive.reason === null)) {
 }
 ```
 
+Each of those records carries a `change`: `"added"` when the branch wrote the
+suppression (or altered which rules, or how far, an existing one silences), and
+`"justification-edited"` when it was already there and what moved is its stated
+reason. It is `null` on any scan that is not a diff, which has no base to have
+changed anything against.
+
 ### `scan(paths?, options?)`
 
 | | |
@@ -90,7 +96,7 @@ Every rejection is a `NotignoredError`:
 | `NotignoredBinaryNotFoundError` | No `notignored` could be resolved. |
 | `NotignoredSpawnError` | One was resolved and could not be started; `cause` is the operating system's error. |
 | `NotignoredExitError` | It exited non-zero, for any reason; `exitCode`, `signal`, and verbatim `stderr` say which. |
-| `NotignoredContractError` | A clean run's output is not a report this SDK can read — a missing field, an unknown one, or an envelope from a newer build. |
+| `NotignoredContractError` | A clean run's output is not a report this SDK can read — a missing or mistyped field, an unknown `tool`, `scope` or `change`, or an envelope from a newer build. A field this SDK has never heard of is carried past, not refused. |
 
 ## Working on it
 

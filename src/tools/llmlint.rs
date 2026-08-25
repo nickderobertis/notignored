@@ -139,6 +139,7 @@ impl LlmlintParser {
                     column,
                     raw: wrapped_raw(found.raw, &continued),
                     suppressed: suppressed_range(scope, comment, line, &continued),
+                    change: None,
                 });
             }
         }

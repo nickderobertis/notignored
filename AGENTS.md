@@ -128,11 +128,23 @@ or the envelope shape unilaterally: bump `REPORT_VERSION` and update
 `tests/golden/` in the same change. `tests/schema.rs` locks the serialized shape.
 New fields must be optional, round-trip, and be omitted when empty.
 
-A **third** place moves with them: `npm/notignored-sdk/src/contract.ts` refuses
-a field it does not know, at every object in the envelope, rather than drop one
-whose presence changes what a record means. That is the SDK's decision and its
-`AGENTS.md` records the trade — but it means a field added here and not there
-makes the TypeScript SDK reject this build's reports.
+Both SDK readers are **tolerant of fields they do not know**, and that is the
+decision rather than an oversight. `npm/notignored-sdk/src/contract.ts` used to
+refuse one, at every object in the envelope, rather than drop one whose presence
+changes what a record means; the price was that every additive field broke every
+consumer holding an older SDK, over something none of them reads. The version
+check is where an envelope that really has changed meaning is caught. What each
+reader still refuses is a **word** whose vocabulary the contract defines — an
+unknown `tool`, `scope`, or `change` — because guessing at one would report a
+suppression as something it is not.
+
+`--diff` records carry one field a tree scan does not: `change`, `added` or
+`justification-edited`, set by `src/diff.rs::classify` and omitted (never null)
+on any run without a base. It is what keeps a rewritten justification from being
+counted as a new suppression on a pull request that added none. Classification
+**labels and never selects**: the directives a `--diff` run reports are exactly
+what `retain_new` left, in the order it left them, so the worst a mis-pairing
+can do is put a wrong word on an entry that is still in front of the reviewer.
 
 The 1-based coordinates stay plain `u32` with public fields rather than newtypes:
 the record is what every parser dispatch builds against, and the extractor's

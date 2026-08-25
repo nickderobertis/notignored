@@ -57,7 +57,7 @@ fn the_tool_parser_trait_declares_exactly_its_three_methods() {
 fn the_scan_layer_is_where_llmlints_extra_errors_are_folded_in() {
     let scan_source = source("src/scan.rs");
     assert!(
-        scan_source.contains("LlmlintParser.scan(&file)"),
+        scan_source.contains("LlmlintParser.scan(file)"),
         "src/scan.rs no longer collects llmlint's unclosed-block errors"
     );
 }

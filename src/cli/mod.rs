@@ -2,9 +2,9 @@
 //!
 //! Kept free of parsing logic: this layer selects files, calls
 //! [`crate::scan`], and renders. `--diff` is one branch in `Cli::select` —
-//! asking git for the changed files instead of walking the tree, and narrowing
-//! the finished report to the directives the change added — and touches nothing
-//! below it.
+//! asking git for the changed files instead of walking the tree, then narrowing
+//! the finished report to the directives the change added and saying of each
+//! whether the change wrote it — and touches nothing below it.
 
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Write};
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, ValueEnum};
 
-use crate::diff::{self, AddedLines, Diff, DiffError};
+use crate::diff::{self, Diff, DiffError, FileChange};
 use crate::model::{Report, ReportError, Tool};
 use crate::scan::{self, ScanError, ScanOptions};
 use crate::source::{display_path, Language};
@@ -197,9 +197,10 @@ pub struct Cli {
 struct Selection {
     /// The files to parse, in report order.
     files: Vec<PathBuf>,
-    /// In `--diff` mode, the lines the change added to each selected file, keyed
-    /// by the path the report uses. `None` when every directive is reported.
-    added: Option<BTreeMap<String, AddedLines>>,
+    /// In `--diff` mode, what the change did to each selected file, keyed by
+    /// the path the report uses. `None` when every directive is reported and
+    /// there is no base to have changed anything against.
+    changes: Option<BTreeMap<String, FileChange>>,
     /// What selection itself could not do: a file the change touched under a
     /// name this build cannot represent. Carried into the report's `errors` so a
     /// file that cannot be scanned is never counted as clean.
@@ -239,7 +240,7 @@ impl Cli {
         if !self.diff {
             return Ok(Selection {
                 files: scan::discover(&self.paths)?,
-                added: None,
+                changes: None,
                 errors: Vec::new(),
             });
         }
@@ -260,7 +261,7 @@ impl Cli {
             .collect();
 
         let mut files = Vec::new();
-        let mut added = BTreeMap::new();
+        let mut changes = BTreeMap::new();
         for file in self.narrow_to_paths(&changed.files)? {
             // A file the change deleted is part of the diff but has no source
             // left to read; skipping it is the answer, not an error.
@@ -272,17 +273,19 @@ impl Cli {
             if !Language::from_path(&file.path).is_scannable() {
                 continue;
             }
-            let lines = diff.added_lines(file)?;
-            // Nothing added means nothing new to find, so the file is never read.
-            if lines.is_empty() {
+            let mut change = diff.file_change(file)?;
+            // Nothing added means nothing new to find, so the file is never read
+            // — and neither is what it used to say.
+            if change.is_empty() {
                 continue;
             }
-            added.insert(display_path(&file.path), lines);
+            change.set_base(diff.pre_image(file));
+            changes.insert(display_path(&file.path), change);
             files.push(file.path.clone());
         }
         Ok(Selection {
             files,
-            added: Some(added),
+            changes: Some(changes),
             errors,
         })
     }
@@ -358,8 +361,9 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     };
 
     let mut report = scan::scan_files(&selection.files, &cli.scan_options());
-    if let Some(added) = &selection.added {
-        diff::retain_new(&mut report, added);
+    if let Some(changes) = &selection.changes {
+        diff::retain_new(&mut report, changes);
+        diff::classify(&mut report, changes, &cli.tools);
     }
     if !selection.errors.is_empty() {
         report.errors.extend(selection.errors);
@@ -727,6 +731,7 @@ mod tests {
                 start_line: 1,
                 end_line: Some(1),
             },
+            change: None,
         });
         assert_eq!(exit_code(&report, true), EXIT_ERROR);
         assert_eq!(exit_code(&report, false), EXIT_ERROR);

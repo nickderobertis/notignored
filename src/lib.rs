@@ -33,4 +33,6 @@ pub mod scan;
 pub mod source;
 pub mod tools;
 
-pub use model::{IgnoreDirective, Report, ReportError, Scope, Suppressed, Tool, REPORT_VERSION};
+pub use model::{
+    Change, IgnoreDirective, Report, ReportError, Scope, Suppressed, Tool, REPORT_VERSION,
+};

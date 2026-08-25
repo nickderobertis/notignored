@@ -20,11 +20,13 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
 - **`scan` and `ascan` take the identical arguments.** They are one call in two
   forms, so a caller can swap either for the other; a flag added to one is a bug
   until it is on both, and `tests/test_api.py` compares the signatures.
-- **Parsing is strict, except about keys.** An unknown tool, an unknown scope, a
-  missing field, or a wrong type is a `NotignoredContractError` — never a
-  dropped record, because a scan that quietly reports fewer suppressions than it
-  found is worse than one that fails. Keys this SDK has never seen are carried
-  past, because the record contract's own rule is that new fields are additive.
+- **Parsing is strict, except about keys.** An unknown tool, an unknown scope, an
+  unknown `change`, a missing field, or a wrong type is a
+  `NotignoredContractError` — never a dropped record, because a scan that quietly
+  reports fewer suppressions than it found is worse than one that fails. Keys this
+  SDK has never seen are carried past, because the record contract's own rule is
+  that new fields are additive; the TypeScript SDK now agrees, having reversed the
+  opposite decision.
 - **Every non-zero exit is `NotignoredExitError`, carrying the CLI's stderr.**
   Including the 2 the CLI uses for an unreadable file, which it names on stderr
   as well as in the report's `errors` — so nothing is lost, and a tree that could

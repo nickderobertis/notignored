@@ -61,6 +61,8 @@ test("a folder scan returns every suppression in the tree", async (t) => {
     column: 12,
     raw: "# noqa: F401  # re-exported",
     suppressed: { start_line: 1, end_line: 1 },
+    // A tree scan has no base, so it says nothing about what changed.
+    change: null,
   });
 });
 

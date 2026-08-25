@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from conftest import report_payload
 
-from notignored_sdk import NotignoredContractError, Scope, Suppressed, Tool
+from notignored_sdk import Change, NotignoredContractError, Scope, Suppressed, Tool
 from notignored_sdk._model import report_from_payload
 
 
@@ -123,3 +123,21 @@ def test_a_field_this_sdk_has_never_heard_of_is_carried_past() -> None:
     )
 
     assert report.ignores[0].tool is Tool.RUFF
+
+
+def test_a_change_word_this_sdk_does_not_know_is_an_error_not_a_guess() -> None:
+    """The same rule an unknown tool gets: a word we cannot read is not one to guess."""
+    with pytest.raises(NotignoredContractError, match="which this SDK does not know"):
+        report_from_payload(report_payload(directive={"change": "rewritten"}))
+
+    with pytest.raises(NotignoredContractError, match="not a string or null"):
+        report_from_payload(report_payload(directive={"change": 3}))
+
+
+def test_an_absent_change_is_none_rather_than_a_third_value() -> None:
+    """A payload without it is what every scan that is not `--diff` produces."""
+    assert report_from_payload(report_payload()).ignores[0].change is None
+    assert (
+        report_from_payload(report_payload(directive={"change": "added"})).ignores[0].change
+        is Change.ADDED
+    )

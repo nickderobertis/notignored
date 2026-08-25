@@ -305,6 +305,11 @@ The `json` format emits the full report envelope:
 - `line` / `end_line` / `column` — 1-based.
 - `suppressed` — the best-effort range the directive silences. `end_line` is
   `null` when it runs to end-of-file or is unterminated.
+- `change` — on a `--diff` run only: `added` when the change wrote this
+  suppression (or altered which rules, or how far, an existing one silences),
+  `justification-edited` when it was already there and what moved is its stated
+  reason. Omitted entirely by a whole-tree scan, which has no base to have
+  changed anything against.
 - `errors` — files that could not be read. Never a panic.
 
 `version` is the envelope version; it changes only when the shape does.

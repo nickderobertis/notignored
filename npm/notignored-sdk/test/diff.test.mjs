@@ -115,3 +115,43 @@ test("diffBase without diff is refused before anything is spawned", async () => 
 test("an empty diffBase is refused too", async () => {
   await assert.rejects(scan(["."], { diff: true, diffBase: "" }), NotignoredUsageError);
 });
+
+/**
+ * The word a reviewer reads, off a real `--diff` run of the real binary.
+ *
+ * The base commit's suppression keeps its rules and its scope and gains a
+ * different justification, so it is an edit rather than an addition; the line
+ * below it is the addition. A justification edit counted as a new suppression
+ * is the number that lies on the pull request.
+ */
+test("a diff says whether each suppression was added or only rejustified", async (t) => {
+  const dir = gitRepo(t, "diff-change");
+  file(dir, "app.py", BASE);
+  commit(dir, "base");
+  file(dir, "app.py", "import os  # noqa: F401  # reworded on review\n" + ADDED);
+
+  const report = await scan(["."], { cwd: dir, diff: true });
+
+  assert.deepEqual(
+    report.ignores.map((directive) => [directive.line, directive.change]),
+    [
+      [1, "justification-edited"],
+      [2, "added"],
+    ],
+  );
+});
+
+/** No base, nothing to have been added or edited against. */
+test("a scan without diff classifies nothing", async (t) => {
+  const dir = gitRepo(t, "diff-unclassified");
+  file(dir, "app.py", BASE);
+  commit(dir, "base");
+  file(dir, "app.py", BASE + ADDED);
+
+  const report = await scan(["."], { cwd: dir });
+
+  assert.deepEqual(
+    report.ignores.map((directive) => directive.change),
+    [null, null],
+  );
+});

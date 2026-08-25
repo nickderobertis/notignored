@@ -29,6 +29,7 @@ const RUNTIME_EXPORTS = [
 
 /** The types a consumer may import. */
 const TYPE_EXPORTS = [
+  "Change",
   "IgnoreDirective",
   "Report",
   "ReportError",

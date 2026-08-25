@@ -6,19 +6,20 @@
  * camelCase mirror would be a second spelling of a published contract, and the
  * first field added upstream would land in only one of them.
  *
- * Validation is strict in both directions: a missing or mistyped field is
- * refused, and so is a field this version does not define. `notignored`
- * promises these records, so an envelope that does not hold the shape is a
- * broken promise somewhere upstream — a resolved binary that is not
+ * Validation is strict about what the contract *specifies*: a missing or
+ * mistyped field, an unknown tool or scope, an envelope from a newer build.
+ * `notignored` promises these records, so an envelope that does not hold the
+ * shape is a broken promise somewhere upstream — a resolved binary that is not
  * `notignored`, or one newer than this SDK — and a silently-skipped directive
  * is the one outcome a suppression reporter must never produce.
  *
- * The cost of rejecting unknown fields is deliberate and worth writing down:
- * the crate may add an *optional* field within version 1, and until it is added
- * to the field lists below this reader will refuse that build's reports. That
- * is the trade the strictness buys — the alternative is dropping a field whose
- * presence changes what a record means — so adding a field to
- * `src/model.rs::IgnoreDirective` means adding it here in the same change.
+ * It is **tolerant of keys it has never heard of**, because the record
+ * contract's own rule is that new fields are optional and additive. This reader
+ * used to refuse them, on the reasoning that a field it dropped might change
+ * what a record means; the price turned out to be higher than the protection —
+ * every additive field the crate adds within version 1 would break every
+ * consumer holding an older SDK, over something none of them reads. The version
+ * check is where an envelope that really has changed meaning is caught.
  */
 
 import { NotignoredContractError } from "./errors.js";
@@ -49,11 +50,23 @@ const TOOLS = [
 /** How far a directive's suppression reaches. */
 const SCOPES = ["line", "next-line", "file", "block"] as const;
 
+/** What a `--diff` scan's change did to a suppression. */
+const CHANGES = ["added", "justification-edited"] as const;
+
 /** A lint or type-check tool whose suppression comments are reported. */
 export type Tool = (typeof TOOLS)[number];
 
 /** How far a directive's suppression reaches. */
 export type Scope = (typeof SCOPES)[number];
+
+/**
+ * What a `--diff` scan's change did to a suppression.
+ *
+ * `justification-edited` says the *justification* moved and nothing else did; a
+ * directive whose rules or scope the change altered is `added`, because it now
+ * silences something its base version did not.
+ */
+export type Change = (typeof CHANGES)[number];
 
 /** The best-effort range of source lines a directive silences. */
 export interface Suppressed {
@@ -85,6 +98,14 @@ export interface IgnoreDirective {
   raw: string;
   /** The range of lines this directive silences. */
   suppressed: Suppressed;
+  /**
+   * Whether the change introduced this suppression or rewrote the justification
+   * of one that already existed, on a `--diff` scan.
+   *
+   * `null` on any scan that is not a `--diff` one: a tree scan has no base, so
+   * there is nothing to have been added or edited against.
+   */
+  change: Change | null;
 }
 
 /** A file that could not be read, or a directive that could not be parsed. */
@@ -137,29 +158,6 @@ function record(value: unknown, at: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-/**
- * Reject an object carrying a field this version of the contract does not
- * define.
- *
- * The other half of strict: a reader that checked only the fields it knew
- * would accept a record whose *meaning* had changed — a `superseded_by`, a
- * `severity` — and hand the caller a report that quietly says less than the
- * one it was given. Refusing is the same decision the version check makes, one
- * level down, and it is why a field added to the crate's record has to be
- * added here in the same change.
- */
-function only(node: Record<string, unknown>, at: string, known: readonly string[]): void {
-  for (const field of Object.keys(node)) {
-    if (!known.includes(field)) {
-      throw new NotignoredContractError(
-        `notignored returned a report this SDK cannot read: ${at} carries an unknown field ` +
-          `${JSON.stringify(field)} (version ${REPORT_VERSION} defines ${known.join(", ")}); ` +
-          "upgrade notignored-sdk",
-      );
-    }
-  }
-}
-
 function text(source: Record<string, unknown>, key: string, at: string): string {
   const value = source[key];
   if (typeof value !== "string") reject(`${at}.${key}`, "a string", value);
@@ -199,7 +197,6 @@ function list(source: Record<string, unknown>, key: string, at: string): unknown
 
 function suppressed(value: unknown, at: string): Suppressed {
   const node = record(value, at);
-  only(node, at, ["start_line", "end_line"]);
   return {
     start_line: coordinate(node, "start_line", at),
     end_line: optionalCoordinate(node, "end_line", at),
@@ -208,18 +205,6 @@ function suppressed(value: unknown, at: string): Suppressed {
 
 function directive(value: unknown, at: string): IgnoreDirective {
   const node = record(value, at);
-  only(node, at, [
-    "tool",
-    "scope",
-    "rules",
-    "reason",
-    "path",
-    "line",
-    "end_line",
-    "column",
-    "raw",
-    "suppressed",
-  ]);
   const tool = node.tool;
   if (!isTool(tool)) reject(`${at}.tool`, `one of ${toolNames()}`, tool);
   const scope = node.scope;
@@ -240,12 +225,29 @@ function directive(value: unknown, at: string): IgnoreDirective {
     column: coordinate(node, "column", at),
     raw: text(node, "raw", at),
     suppressed: suppressed(node.suppressed, `${at}.suppressed`),
+    change: change(node, at),
   };
+}
+
+/**
+ * The `change` a `--diff` scan wrote, or `null`.
+ *
+ * Absent is not a third value — it says the scan had no base to classify
+ * against — so it reads as `null` here, exactly the way an unstated `reason`
+ * does. A value the contract does not define is refused, for the same reason an
+ * unknown tool is: a word this SDK cannot read is one it must not guess at.
+ */
+function change(source: Record<string, unknown>, at: string): Change | null {
+  const value = source.change;
+  if (value === undefined || value === null) return null;
+  if (!CHANGES.some((known) => known === value)) {
+    reject(`${at}.change`, `one of ${CHANGES.join(", ")}`, value);
+  }
+  return value as Change;
 }
 
 function reportError(value: unknown, at: string): ReportError {
   const node = record(value, at);
-  only(node, at, ["path", "message"]);
   return { path: text(node, "path", at), message: text(node, "message", at) };
 }
 
@@ -278,7 +280,6 @@ export function parseReport(stdout: string): Report {
       `report version ${version} is newer than this SDK understands (${REPORT_VERSION}); upgrade notignored-sdk`,
     );
   }
-  only(node, "the report", ["version", "ignores", "errors"]);
   return {
     version,
     ignores: list(node, "ignores", "the report").map((entry, index) =>

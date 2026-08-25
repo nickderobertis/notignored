@@ -54,6 +54,18 @@ class Scope(StrEnum):
     BLOCK = "block"
 
 
+class Change(StrEnum):
+    """What a ``--diff`` scan's change did to a suppression.
+
+    ``JUSTIFICATION_EDITED`` says the *justification* moved and nothing else
+    did; a directive whose rules or scope the change altered is ``ADDED``,
+    because it now silences something its base version did not.
+    """
+
+    ADDED = "added"
+    JUSTIFICATION_EDITED = "justification-edited"
+
+
 @dataclass(frozen=True)
 class Suppressed:
     """The range of source lines a directive silences."""
@@ -100,6 +112,13 @@ class IgnoreDirective:
 
     suppressed: Suppressed
     """The range of lines this directive silences."""
+
+    change: Change | None
+    """Whether the change introduced this suppression or rewrote the
+    justification of one that already existed, on a ``--diff`` scan.
+
+    ``None`` on any scan that is not a ``--diff`` one: a tree scan has no base,
+    so there is nothing to have been added or edited against."""
 
 
 @dataclass(frozen=True)
@@ -214,6 +233,30 @@ def _scope(obj: dict[str, Any], where: str) -> Scope:
         ) from None
 
 
+def _change(obj: dict[str, Any], where: str) -> Change | None:
+    """The ``change`` a ``--diff`` scan wrote, or ``None``.
+
+    Absent is not a third value — it says the scan had no base to classify
+    against — so a missing key reads as ``None``, exactly the way an unstated
+    ``reason`` does. A word this SDK does not know is rejected for the same
+    reason an unknown tool is: guessing at it would be reporting a suppression
+    as something it is not.
+    """
+    name = obj.get("change")
+    if name is None:
+        return None
+    if not isinstance(name, str):
+        raise NotignoredContractError(f"{where}.change is {_kind(name)}, not a string or null")
+    try:
+        return Change(name)
+    except ValueError:
+        known = ", ".join(change.value for change in Change)
+        raise NotignoredContractError(
+            f"{where}.change is {name!r}, which this SDK does not know (known: {known}); "
+            "upgrade notignored-sdk"
+        ) from None
+
+
 def _suppressed(obj: dict[str, Any], where: str) -> Suppressed:
     nested = _object(_field(obj, "suppressed", where), f"{where}.suppressed")
     return Suppressed(
@@ -234,6 +277,7 @@ def _directive(obj: dict[str, Any], where: str) -> IgnoreDirective:
         column=_number(obj, "column", where),
         raw=_text(obj, "raw", where),
         suppressed=_suppressed(obj, where),
+        change=_change(obj, where),
     )
 
 

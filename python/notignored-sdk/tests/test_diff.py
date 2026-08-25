@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from notignored_sdk import Tool, ascan, scan
+from notignored_sdk import Change, Tool, ascan, scan
 
 ADDED = "y = 2  # noqa: E501  # added by this change\n"
 
@@ -71,3 +71,38 @@ def test_a_base_with_nothing_to_compare_is_rejected_before_a_process_starts(git_
 
     with pytest.raises(ValueError, match="diff=True"):
         asyncio.run(ascan(diff_base="main", cwd=git_repo))
+
+
+def test_a_diff_says_whether_each_suppression_was_added_or_only_rejustified(
+    git_repo: Path,
+) -> None:
+    """The word a reviewer reads, off a real `--diff` run of the real binary.
+
+    The base commit's `# type: ignore` keeps its rules and its scope and gains a
+    different justification, so it is an edit; the line below it is an addition.
+    A justification edit counted as a new suppression is the number that lies.
+    """
+    (git_repo / "app.py").write_text(
+        "x = 1  # type: ignore[assignment]  # reworded on review\n" + ADDED,
+        encoding="utf-8",
+    )
+
+    changed = scan(diff=True, cwd=git_repo)
+
+    assert [(directive.tool, directive.change) for directive in changed.ignores] == [
+        (Tool.MYPY, Change.JUSTIFICATION_EDITED),
+        (Tool.RUFF, Change.ADDED),
+    ]
+    # A `StrEnum`, so the wire word is what a report or an f-string carries.
+    assert changed.ignores[0].change == "justification-edited"
+
+
+def test_a_scan_without_diff_classifies_nothing(git_repo: Path) -> None:
+    """No base, nothing to have been added or edited against."""
+    (git_repo / "app.py").write_text(
+        (git_repo / "app.py").read_text(encoding="utf-8") + ADDED, encoding="utf-8"
+    )
+
+    whole_tree = scan(cwd=git_repo)
+
+    assert [directive.change for directive in whole_tree.ignores] == [None, None]

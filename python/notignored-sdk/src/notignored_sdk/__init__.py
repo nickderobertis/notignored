@@ -22,9 +22,10 @@ from ._errors import (
     NotignoredNotFoundError,
     NotignoredSpawnError,
 )
-from ._model import IgnoreDirective, Report, ReportError, Scope, Suppressed, Tool
+from ._model import Change, IgnoreDirective, Report, ReportError, Scope, Suppressed, Tool
 
 __all__ = [
+    "Change",
     "IgnoreDirective",
     "NotignoredContractError",
     "NotignoredError",

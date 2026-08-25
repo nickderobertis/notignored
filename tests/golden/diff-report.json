@@ -16,7 +16,8 @@
       "suppressed": {
         "start_line": 3,
         "end_line": 3
-      }
+      },
+      "change": "added"
     },
     {
       "tool": "ruff",
@@ -31,7 +32,8 @@
       "suppressed": {
         "start_line": 1,
         "end_line": null
-      }
+      },
+      "change": "added"
     }
   ],
   "errors": []

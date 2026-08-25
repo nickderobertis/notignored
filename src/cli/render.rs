@@ -175,6 +175,7 @@ mod tests {
                     end_line: Some(12),
                 },
             },
+            change: None,
         }
     }
 

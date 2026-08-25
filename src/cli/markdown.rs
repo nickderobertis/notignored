@@ -405,6 +405,7 @@ mod tests {
                 start_line: line,
                 end_line: Some(line),
             },
+            change: None,
         }
     }
 

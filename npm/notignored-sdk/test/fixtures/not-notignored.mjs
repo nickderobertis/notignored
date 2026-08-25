@@ -19,13 +19,16 @@
 //   future       an envelope from a version this SDK cannot read
 //   angry        nothing on stdout, a reason on stderr, exit 3
 //
-// One pair per object boundary — a field the contract does not define, and a
-// field it requires:
+// One pair per object boundary — a field this SDK has never heard of, which is
+// carried past because the contract's fields are additive, and a field the
+// contract requires, which is not:
 //
 //   extra-report      missing-errors
 //   extra-directive   missing-column
 //   extra-suppressed  missing-start-line
 //   extra-error       missing-message
+//
+//   bad-change   a `change` word the contract does not define
 
 const REPORT = {
   version: 1,
@@ -69,6 +72,10 @@ const MODES = {
   "bad-scope": () =>
     altered(REPORT, (report) => {
       report.ignores[0].scope = "paragraph";
+    }),
+  "bad-change": () =>
+    altered(REPORT, (report) => {
+      report.ignores[0].change = "rewritten";
     }),
   "bad-version": () => ({ ...REPORT, version: "1" }),
   future: () => ({ ...REPORT, version: 2 }),

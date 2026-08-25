@@ -81,6 +81,7 @@ impl ToolParser for ShellcheckParser {
                 column: comment.column,
                 raw: comment.raw.clone(),
                 suppressed: suppressed_range(scope, comment.line),
+                change: None,
             });
         }
         out

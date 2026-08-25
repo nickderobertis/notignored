@@ -5,6 +5,13 @@
 //! happens here so [`scan`](crate::scan) is only ever handed the files a change
 //! actually touched, which is what keeps a diff run cheap on a large repository.
 //!
+//! Selection alone cannot tell an author who *wrote* a suppression from one who
+//! rewrote an existing one's justification: both touch a line the directive
+//! occupies. [`classify`] answers that, by reading each changed file's contents
+//! at the base out of git and pairing what it finds there with what the head
+//! scan reported. It only ever labels — the set of reported directives is
+//! exactly what [`retain_new`] left, in the order it left it.
+//!
 //! Git is shelled out to. The rule this crate lives by — never invoke the tool
 //! whose rule is being silenced — is about *linters*; git is infrastructure, and
 //! re-implementing its rename detection and merge-base arithmetic would be a
@@ -20,8 +27,9 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use crate::model::Report;
-use crate::source::display_path;
+use crate::model::{Change, Report, Tool};
+use crate::scan::{scan_source, ScanOptions};
+use crate::source::{display_path, SourceFile};
 
 /// A `--diff` run that could not be decided.
 ///
@@ -99,6 +107,24 @@ pub struct ChangedFile {
     /// see reads as a whole-file addition — every suppression in a moved file
     /// would then look new.
     pub renamed_from: Option<PathBuf>,
+    /// The object id of the file's contents at the base, or `None` when it had
+    /// none — a file the change created, or a diff with nothing to compare
+    /// against.
+    ///
+    /// This is why the change list is read as `--raw` rather than
+    /// `--name-status`: git names the source blob in every base this crate
+    /// supports, so [`Diff::pre_image`] needs no revision arithmetic of its own.
+    pub base_blob: Option<String>,
+}
+
+/// A changed file's contents at the diff's base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseImage {
+    /// The path the file had at the base — a rename's *source*, where there is
+    /// one, because that is the file whose language and directives these are.
+    pub path: PathBuf,
+    /// The contents, as text.
+    pub text: String,
 }
 
 /// Everything one `git diff --name-status` named.
@@ -117,17 +143,41 @@ pub struct Changed {
     pub undecodable: Vec<String>,
 }
 
-/// The 1-based lines a change added to one file.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AddedLines {
-    /// Inclusive `(first, last)` runs, in file order.
-    runs: Vec<(u32, u32)>,
+/// One hunk of a unified diff: the base lines it replaced, and the new lines it
+/// wrote in their place.
+///
+/// Both sides are kept because both are needed. The new side decides which
+/// directives a change *touched*, and the base side is where their counterparts
+/// lived — the pairing [`classify`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Hunk {
+    /// Inclusive 1-based `(first, last)` on the base side, or `None` for a pure
+    /// insertion, which replaced nothing.
+    base: Option<(u32, u32)>,
+    /// The same on the new side, or `None` for a pure deletion, which wrote
+    /// nothing.
+    new: Option<(u32, u32)>,
 }
 
-impl AddedLines {
+/// Whether the inclusive span `start..=end` overlaps the inclusive `range`.
+fn overlaps(range: (u32, u32), start: u32, end: u32) -> bool {
+    range.0 <= end && start <= range.1
+}
+
+/// What a change did to one file: the hunks of its patch, and — once the caller
+/// has asked git for it — the file as it was before them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileChange {
+    /// The hunks, in file order.
+    hunks: Vec<Hunk>,
+    /// The file's contents at the base, when this build could read them.
+    base: Option<BaseImage>,
+}
+
+impl FileChange {
     /// Whether the change added no line at all to this file.
     pub fn is_empty(&self) -> bool {
-        self.runs.is_empty()
+        self.hunks.iter().all(|hunk| hunk.new.is_none())
     }
 
     /// Whether any line of the inclusive span `start..=end` was added.
@@ -135,22 +185,30 @@ impl AddedLines {
     /// A span, not a single line, so a directive written across several lines
     /// counts as new when the change added *any* of them.
     pub fn intersects(&self, start: u32, end: u32) -> bool {
-        self.runs
+        self.hunks
             .iter()
-            .any(|(first, last)| *first <= end && start <= *last)
+            .filter_map(|hunk| hunk.new)
+            .any(|new| overlaps(new, start, end))
     }
 
-    /// Read the added-line runs out of a unified diff.
+    /// Record the file's contents at the base, as [`Diff::pre_image`] read them.
+    pub fn set_base(&mut self, base: Option<BaseImage>) {
+        self.base = base;
+    }
+
+    /// Read the hunks out of a unified diff.
     ///
-    /// Only hunk headers (`@@ -12,0 +13,4 @@`) are parsed, and only their `+`
-    /// side: those counts are in the *new* file, which is what a report's line
-    /// numbers refer to. Body lines are ignored, so a source line that itself
-    /// looks like a header (it arrives prefixed with `+`, `-`, or a space) can
-    /// never be mistaken for one.
+    /// Only hunk headers (`@@ -12,0 +13,4 @@`) are parsed — both of their sides,
+    /// which is the whole of what a `--unified=0` patch has to say. The `+`
+    /// counts are in the *new* file, which is what a report's line numbers refer
+    /// to; the `-` counts are in the base, which is where a counterpart is
+    /// looked for. Body lines are ignored, so a source line that itself looks
+    /// like a header (it arrives prefixed with `+`, `-`, or a space) can never
+    /// be mistaken for one.
     /// A header that *is* one and cannot be read is an error, not a skip: the
     /// lines it covers would otherwise be silently treated as unchanged.
     fn parse(patch: &str, command: &str) -> Result<Self, DiffError> {
-        let mut runs = Vec::new();
+        let mut hunks = Vec::new();
         for line in patch.lines() {
             let Some(header) = line.strip_prefix("@@ ") else {
                 continue;
@@ -159,23 +217,28 @@ impl AddedLines {
                 command: command.to_string(),
                 detail: format!("unreadable hunk header {line:?}"),
             };
-            let new_side = header
-                .split_whitespace()
-                .find_map(|field| field.strip_prefix('+'))
-                .ok_or_else(malformed)?;
-            // A missing count means one line; a zero count is a pure deletion,
-            // which adds nothing.
-            let (first, count) = match new_side.split_once(',') {
-                Some((first, count)) => (first, count),
-                None => (new_side, "1"),
+            let side = |sign: char| -> Result<Option<(u32, u32)>, DiffError> {
+                let field = header
+                    .split_whitespace()
+                    .find_map(|field| field.strip_prefix(sign))
+                    .ok_or_else(malformed)?;
+                // A missing count means one line; a zero count means this side
+                // holds nothing — a pure insertion has no base, a pure deletion
+                // no new text.
+                let (first, count) = match field.split_once(',') {
+                    Some((first, count)) => (first, count),
+                    None => (field, "1"),
+                };
+                let first: u32 = first.parse().map_err(|_| malformed())?;
+                let count: u32 = count.parse().map_err(|_| malformed())?;
+                Ok((count > 0).then(|| (first, first.saturating_add(count - 1))))
             };
-            let first: u32 = first.parse().map_err(|_| malformed())?;
-            let count: u32 = count.parse().map_err(|_| malformed())?;
-            if count > 0 {
-                runs.push((first, first.saturating_add(count - 1)));
-            }
+            hunks.push(Hunk {
+                base: side('-')?,
+                new: side('+')?,
+            });
         }
-        Ok(AddedLines { runs })
+        Ok(FileChange { hunks, base: None })
     }
 }
 
@@ -263,13 +326,48 @@ impl Diff {
         // report does — relative to the directory it was invoked from. The output
         // is read as bytes because a path *is* bytes: decoding it lossily here
         // would invent a name for a file and then fail to find it.
-        let args = ["diff", "--name-status", "-z", "--relative", self.base.arg()];
+        //
+        // `--raw` carries the status letter `--name-status` would have, and the
+        // source object id besides; `--abbrev=40` asks for the object name
+        // unabbreviated rather than the handful of characters `--raw` prints by
+        // default.
+        let args = [
+            "diff",
+            "--raw",
+            "-z",
+            "--abbrev=40",
+            "--relative",
+            self.base.arg(),
+        ];
         let output = self.git_bytes(&args)?;
-        parse_name_status(&output, &format!("git {}", args.join(" ")))
+        parse_raw(&output, &format!("git {}", args.join(" ")))
     }
 
-    /// The lines this change added to `file`.
-    pub fn added_lines(&self, file: &ChangedFile) -> Result<AddedLines, DiffError> {
+    /// The file's contents at the base, when this build can read them as text.
+    ///
+    /// `None` is the answer for every file with no comparable previous content —
+    /// one the change created, a diff with nothing to compare against — and for
+    /// one whose previous bytes are not text. It is never an error: a pre-image
+    /// this build cannot read is a file it knows nothing about, and "nothing to
+    /// compare against" is the same answer `--diff` gave before there was
+    /// anything to compare. Failing here would turn a reviewable change into no
+    /// review at all.
+    pub fn pre_image(&self, file: &ChangedFile) -> Option<BaseImage> {
+        let blob = file.base_blob.as_deref()?;
+        let bytes = self.git_bytes(&["cat-file", "blob", blob]).ok()?;
+        Some(BaseImage {
+            // A rename's pre-image is the *source* path's blob, and its language
+            // and directives are that file's.
+            path: file
+                .renamed_from
+                .clone()
+                .unwrap_or_else(|| file.path.clone()),
+            text: String::from_utf8(bytes).ok()?,
+        })
+    }
+
+    /// The hunks this change made to `file`.
+    pub fn file_change(&self, file: &ChangedFile) -> Result<FileChange, DiffError> {
         let path = display_path(&file.path);
         let renamed_from = file.renamed_from.as_deref().map(display_path);
         // `--unified=0` keeps the patch to its hunk headers and changed lines:
@@ -287,7 +385,7 @@ impl Diff {
             args.push(source);
         }
         let patch = self.git(&args)?;
-        AddedLines::parse(&patch, &format!("git {}", args.join(" ")))
+        FileChange::parse(&patch, &format!("git {}", args.join(" ")))
     }
 
     /// What `base` means as something to compare against.
@@ -387,32 +485,44 @@ fn git_command(program: &str, dir: &Path) -> Command {
     command
 }
 
-/// Read `git diff --name-status -z` output.
+/// Read `git diff --raw -z` output.
 ///
-/// Records are NUL-separated: a status field, then the path it applies to — or
-/// two paths, source then destination, when the status is a rename or a copy.
+/// Records are NUL-separated: an info field —
+/// `:<src-mode> <dst-mode> <src-oid> <dst-oid> <status>` — then the path it
+/// applies to, or two paths, source then destination, when the status is a
+/// rename or a copy.
+///
+/// The source object id is why this is `--raw` and not `--name-status`: it names
+/// the file's contents at the base for *every* base [`Diff`] supports — the work
+/// tree against `HEAD`, the index against the empty tree, a resolved revision, a
+/// caller's own `A..B` range — so nothing here has to parse a range or recompute
+/// a merge base to read what a file used to say. An all-zero id means the file
+/// had no previous contents.
 ///
 /// A path whose bytes are not valid UTF-8 is set aside rather than decoded
 /// lossily: the replacement characters would name a file that does not exist, so
 /// the scan would look for nothing and the report would call the change clean.
 /// It is reported instead — see [`Changed::undecodable`].
-fn parse_name_status(output: &[u8], command: &str) -> Result<Changed, DiffError> {
+fn parse_raw(output: &[u8], command: &str) -> Result<Changed, DiffError> {
     let mut fields = output.split(|byte| *byte == 0).filter(|f| !f.is_empty());
     let mut changed = Changed::default();
-    while let Some(status) = fields.next() {
-        // A record cut short, or one whose status this build does not know,
-        // means git described a change in terms we cannot act on. Answering from
-        // the records that did arrive would report on a change we only partly
-        // know, so either is a failure instead.
+    while let Some(info) = fields.next() {
+        // A record cut short, one this build cannot read, or one whose status it
+        // does not know means git described a change in terms we cannot act on.
+        // Answering from the records that did arrive would report on a change we
+        // only partly know, so each is a failure instead.
         let malformed = |detail: String| DiffError::Malformed {
             command: command.to_string(),
             detail,
         };
-        let status = String::from_utf8_lossy(status);
-        let Some(kind) = status_kind(&status) else {
+        let info = String::from_utf8_lossy(info);
+        let Some((base_blob, status)) = parse_raw_info(&info) else {
+            return Err(malformed(format!("unreadable record {info:?}")));
+        };
+        let Some(kind) = status_kind(status) else {
             return Err(malformed(format!("unknown status {status:?}")));
         };
-        let truncated = || malformed(format!("record {status:?} names no path"));
+        let truncated = || malformed(format!("record {info:?} names no path"));
         let first = decode_path(fields.next().ok_or_else(truncated)?);
         let (path, renamed_from) = match kind {
             StatusKind::OnePath => (first, None),
@@ -421,14 +531,17 @@ fn parse_name_status(output: &[u8], command: &str) -> Result<Changed, DiffError>
                 Some(first),
             ),
         };
+        let base_blob = base_blob.map(str::to_string);
         match (path, renamed_from) {
             (Ok(path), None) => changed.files.push(ChangedFile {
                 path,
                 renamed_from: None,
+                base_blob,
             }),
             (Ok(path), Some(Ok(source))) => changed.files.push(ChangedFile {
                 path,
                 renamed_from: Some(source),
+                base_blob,
             }),
             // Either end of a rename is enough to lose it: git only detects one
             // when the pathspec admits the source too.
@@ -436,6 +549,25 @@ fn parse_name_status(output: &[u8], command: &str) -> Result<Changed, DiffError>
         }
     }
     Ok(changed)
+}
+
+/// The source object id and the status letter of one `--raw` info field, or
+/// `None` when it is not one.
+///
+/// The id is `None` when git wrote the all-zero one, which is how it says the
+/// file had no contents at the base.
+fn parse_raw_info(info: &str) -> Option<(Option<&str>, &str)> {
+    let fields: Vec<&str> = info.strip_prefix(':')?.split_whitespace().collect();
+    let [_src_mode, _dst_mode, src_oid, _dst_oid, status] = fields[..] else {
+        return None;
+    };
+    // An object id is what this crate hands back to git; anything else is a
+    // format it cannot read, not a name to pass along and find out.
+    if src_oid.is_empty() || !src_oid.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let base_blob = (!src_oid.chars().all(|c| c == '0')).then_some(src_oid);
+    Some((base_blob, status))
 }
 
 /// The path a `-z` record names, or the lossy spelling of one whose bytes this
@@ -526,12 +658,111 @@ fn relative_prefix(path: &Path) -> Option<String> {
 /// suppresses: a pre-existing `# ruff: noqa` at the top of a file does not become
 /// new because lines below it were edited. Report errors are left alone — a file
 /// that could not be read still has to be reported.
-pub fn retain_new(report: &mut Report, added: &BTreeMap<String, AddedLines>) {
+pub fn retain_new(report: &mut Report, changes: &BTreeMap<String, FileChange>) {
     report.ignores.retain(|directive| {
-        added
+        changes
             .get(&directive.path)
-            .is_some_and(|lines| lines.intersects(directive.line, directive.end_line))
+            .is_some_and(|change| change.intersects(directive.line, directive.end_line))
     });
+}
+
+/// Say of every reported directive whether the change wrote it or rewrote the
+/// justification of one that was already there.
+///
+/// Only a `--diff` run has a base to answer that against, so this is the only
+/// place [`crate::IgnoreDirective::change`] is ever set — a whole-tree scan
+/// leaves it `None`, which is the honest answer for an inventory.
+///
+/// It **labels, and nothing else**: no directive is added, removed, or
+/// reordered here. That is a safety property rather than a convenience — the
+/// worst a mis-pairing can produce is a wrong word on an entry that is still in
+/// front of the reviewer, never a suppression missing from the review.
+///
+/// A directive is [`Change::JustificationEdited`] when the file's pre-image held
+/// a directive of the same tool, in the same hunk, silencing the same rules over
+/// the same scope, whose stated reason differs — a reason reworded, one written
+/// where there was none, one removed entirely. Everything else is
+/// [`Change::Added`], including a directive that was already there whose rules
+/// or scope the change altered: that one silences something its base version did
+/// not, and calling it a justification edit would assert something untrue.
+///
+/// Where there is no pre-image to compare against there is no edit, and every
+/// directive in that file is [`Change::Added`].
+pub fn classify(report: &mut Report, changes: &BTreeMap<String, FileChange>, tools: &[Tool]) {
+    // The pairing is per file, and each pre-image is parsed once for all of it.
+    let mut by_path: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, directive) in report.ignores.iter().enumerate() {
+        by_path
+            .entry(directive.path.as_str())
+            .or_default()
+            .push(index);
+    }
+    let mut verdicts = vec![Change::Added; report.ignores.len()];
+    for (path, reported) in by_path {
+        let Some(base) = changes.get(path).and_then(|change| change.base.as_ref()) else {
+            continue;
+        };
+        let previous = scan_source(
+            &SourceFile::new(base.path.clone(), base.text.clone()),
+            &ScanOptions {
+                tools: tools.to_vec(),
+            },
+        );
+        let hunks = changes.get(path).map_or(&[][..], |change| &change.hunks);
+        pair(report, &reported, &previous.ignores, hunks, &mut verdicts);
+    }
+    for (directive, verdict) in report.ignores.iter_mut().zip(verdicts) {
+        directive.change = Some(verdict);
+    }
+}
+
+/// Pair one file's reported directives with the ones its pre-image held, hunk by
+/// hunk, writing a verdict for each.
+///
+/// Both sides are in file order, so where several directives of one tool sit in
+/// one hunk on each side they pair in that order. A directive is "in" a hunk
+/// when the hunk touches any line it occupies — the same relation on the base
+/// side as on the new one, which is what lets a wrapped justification pair when
+/// only its continuation line moved.
+fn pair(
+    report: &Report,
+    reported: &[usize],
+    previous: &[crate::model::IgnoreDirective],
+    hunks: &[Hunk],
+    verdicts: &mut [Change],
+) {
+    let mut head_paired = vec![false; reported.len()];
+    let mut base_used = vec![false; previous.len()];
+    for hunk in hunks {
+        let (Some(base_range), Some(new_range)) = (hunk.base, hunk.new) else {
+            continue;
+        };
+        for (slot, &index) in reported.iter().enumerate() {
+            if head_paired[slot] {
+                continue;
+            }
+            let head = &report.ignores[index];
+            if !overlaps(new_range, head.line, head.end_line) {
+                continue;
+            }
+            let counterpart = previous.iter().enumerate().find(|(other, candidate)| {
+                !base_used[*other]
+                    && candidate.tool == head.tool
+                    && overlaps(base_range, candidate.line, candidate.end_line)
+            });
+            let Some((other, candidate)) = counterpart else {
+                continue;
+            };
+            base_used[other] = true;
+            head_paired[slot] = true;
+            if candidate.rules == head.rules
+                && candidate.scope == head.scope
+                && candidate.reason != head.reason
+            {
+                verdicts[index] = Change::JustificationEdited;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -580,9 +811,9 @@ mod tests {
         git(dir, &["commit", "-q", "-m", message]);
     }
 
-    /// The added lines of a patch git is standing in for.
-    fn added_lines(patch: &str) -> AddedLines {
-        AddedLines::parse(patch, "git diff").expect("a readable patch")
+    /// The hunks of a patch git is standing in for.
+    fn hunks_of(patch: &str) -> FileChange {
+        FileChange::parse(patch, "git diff").expect("a readable patch")
     }
 
     fn changed(diff: &Diff) -> Vec<(String, Option<String>)> {
@@ -599,15 +830,19 @@ mod tests {
             .collect()
     }
 
-    fn added(diff: &Diff, path: &str) -> AddedLines {
-        let file = diff
-            .changed_files()
+    fn added(diff: &Diff, path: &str) -> FileChange {
+        diff.file_change(&changed_file(diff, path))
+            .expect("the file's hunks")
+    }
+
+    /// The record `git diff --raw` produced for `path`.
+    fn changed_file(diff: &Diff, path: &str) -> ChangedFile {
+        diff.changed_files()
             .expect("changed files")
             .files
             .into_iter()
             .find(|file| display_path(&file.path) == path)
-            .unwrap_or_else(|| panic!("{path} is not in the diff"));
-        diff.added_lines(&file).expect("added lines")
+            .unwrap_or_else(|| panic!("{path} is not in the diff"))
     }
 
     #[test]
@@ -623,7 +858,7 @@ mod tests {
             "@@ -20,2 +24,0 @@\n",
             "-gone\n-gone\n",
         );
-        let added = added_lines(patch);
+        let added = hunks_of(patch);
         assert!(added.intersects(2, 2) && added.intersects(4, 4));
         assert!(!added.intersects(1, 1) && !added.intersects(5, 11));
         assert!(added.intersects(12, 12));
@@ -634,7 +869,7 @@ mod tests {
 
     #[test]
     fn a_span_counts_when_any_of_its_lines_was_added() {
-        let added = added_lines("@@ -1,0 +5,2 @@\n+a\n+b\n");
+        let added = hunks_of("@@ -1,0 +5,2 @@\n+a\n+b\n");
         // Straddling the run from either side, and containing it whole.
         assert!(added.intersects(3, 5));
         assert!(added.intersects(6, 9));
@@ -650,7 +885,7 @@ mod tests {
             "@@ -1,0 +not-a-number,2 @@\n",
             "@@ -1,0 +5,not-a-number @@\n",
         ] {
-            let error = AddedLines::parse(patch, "git diff").unwrap_err();
+            let error = FileChange::parse(patch, "git diff").unwrap_err();
             assert!(matches!(error, DiffError::Malformed { .. }), "{error:?}");
             assert!(error.to_string().contains("hunk header"), "{error}");
             assert!(error.hint().contains("--diff"), "{}", error.hint());
@@ -658,9 +893,9 @@ mod tests {
 
         // A body line that merely looks like a header is body, not a header: a
         // patch of a patch still reads as one hunk of added text.
-        let added = added_lines("@@ -1,0 +9,2 @@\n+@@ -1,0 +3,3 @@\n+ @@ -1,0 +3,3 @@\n");
+        let added = hunks_of("@@ -1,0 +9,2 @@\n+@@ -1,0 +3,3 @@\n+ @@ -1,0 +3,3 @@\n");
         assert!(added.intersects(9, 10) && !added.intersects(3, 3));
-        assert!(AddedLines::default().is_empty());
+        assert!(FileChange::default().is_empty());
     }
 
     #[test]
@@ -812,17 +1047,42 @@ mod tests {
         assert!(error.hint().contains("executable"), "{}", error.hint());
     }
 
+    /// A `--raw` record's info field, as git writes it.
+    ///
+    /// The mode pair and the destination id are real values this parser does not
+    /// read, spelled the way git spells them so a record here is one git could
+    /// have produced.
+    const OLD: &str = "de980441c3ab03a8c07dda1ad27b8a11f39deb1e";
+    const NEW: &str = "3e757656cf36eca53338e520d134963a44f793f8";
+
+    fn info(status: &str) -> String {
+        format!(":100644 100644 {OLD} {NEW} {status}\0")
+    }
+
+    /// A record: an info field carrying `status`, then its path(s).
+    fn record(status: &str, paths: &[&[u8]]) -> Vec<u8> {
+        let mut out = info(status).into_bytes();
+        for path in paths {
+            out.extend_from_slice(path);
+            out.push(0);
+        }
+        out
+    }
+
     /// A path git named in bytes this build cannot spell is set aside rather
     /// than decoded into a name that points at nothing.
     #[test]
     fn a_path_that_is_not_utf8_is_set_aside_rather_than_guessed_at() {
-        let command = "git diff --name-status";
-        let changed = parse_name_status(b"M\0caf\xe9.py\0A\0plain.py\0", command).unwrap();
+        let command = "git diff --raw";
+        let mut output = record("M", &[b"caf\xe9.py"]);
+        output.extend(record("A", &[b"plain.py"]));
+        let changed = parse_raw(&output, command).unwrap();
         assert_eq!(
             changed.files,
             vec![ChangedFile {
                 path: PathBuf::from("plain.py"),
-                renamed_from: None
+                renamed_from: None,
+                base_blob: Some(OLD.to_string()),
             }],
             "the file git *could* name is still part of the change"
         );
@@ -830,66 +1090,97 @@ mod tests {
 
         // Either end of a rename losing its name loses the pairing, so the whole
         // record is one this build cannot act on.
-        for record in [
-            &b"R100\0caf\xe9.py\0new.py\0"[..],
-            b"R100\0old.py\0caf\xe9.py\0",
+        for paths in [
+            &[&b"caf\xe9.py"[..], b"new.py"],
+            &[&b"old.py"[..], b"caf\xe9.py"],
         ] {
-            let changed = parse_name_status(record, command).unwrap();
-            assert!(changed.files.is_empty(), "{record:?}");
-            assert_eq!(changed.undecodable, vec!["caf\u{fffd}.py"], "{record:?}");
+            let output = record("R100", paths);
+            let changed = parse_raw(&output, command).unwrap();
+            assert!(changed.files.is_empty(), "{paths:?}");
+            assert_eq!(changed.undecodable, vec!["caf\u{fffd}.py"], "{paths:?}");
         }
     }
 
     #[test]
-    fn truncated_name_status_output_is_an_error_not_a_shorter_answer() {
-        let command = "git diff --name-status";
-        assert_eq!(parse_name_status(b"", command).unwrap(), Changed::default());
-        for truncated in [&b"M\0"[..], b"R100\0old.py\0"] {
-            let error = parse_name_status(truncated, command).unwrap_err();
+    fn truncated_raw_output_is_an_error_not_a_shorter_answer() {
+        let command = "git diff --raw";
+        assert_eq!(parse_raw(b"", command).unwrap(), Changed::default());
+        for truncated in [record("M", &[]), record("R100", &[b"old.py"])] {
+            let error = parse_raw(&truncated, command).unwrap_err();
             assert!(matches!(error, DiffError::Malformed { .. }), "{error:?}");
             assert!(error.to_string().contains("names no path"), "{error}");
         }
 
         // A status this build does not know — git's own "unknown" marker, or a
         // field that is not a status at all — is not read as a plain change.
-        for unknown in [&b"X\0a.py\0"[..], b"M100\0a.py\0", b"a.py\0M\0"] {
-            let error = parse_name_status(unknown, command).unwrap_err();
+        for unknown in ["X", "M100", "a.py"] {
+            let output = record(unknown, &[b"a.py"]);
+            let error = parse_raw(&output, command).unwrap_err();
             assert!(error.to_string().contains("unknown status"), "{error}");
         }
-        // Every status git does define is understood.
-        for (record, renamed_from) in [
-            (&b"A\0a.py\0"[..], None),
-            (b"D\0a.py\0", None),
-            (b"T\0a.py\0", None),
-            (b"U\0a.py\0", None),
-            (b"C75\0old.py\0a.py\0", Some("old.py")),
-            (b"R\0old.py\0a.py\0", Some("old.py")),
+
+        // An info field this build cannot read at all — one git never wrote, or
+        // one whose source id is not an object name to hand back to it — is a
+        // failure rather than a record answered from its remaining fields.
+        for unreadable in [
+            &b"M\0a.py\0"[..],
+            b":100644 100644 M\0a.py\0",
+            b":100644 100644 not-an-oid 3e75765 M\0a.py\0",
+            b":100644 100644  3e75765 M\0a.py\0",
         ] {
-            let changed = parse_name_status(record, command).unwrap();
-            assert_eq!(changed.files.len(), 1, "{record:?}");
-            assert_eq!(changed.files[0].path, PathBuf::from("a.py"), "{record:?}");
+            let error = parse_raw(unreadable, command).unwrap_err();
+            assert!(
+                error.to_string().contains("unreadable record"),
+                "{unreadable:?}: {error}"
+            );
+        }
+
+        // Every status git does define is understood.
+        for (status, paths, renamed_from) in [
+            ("A", &[&b"a.py"[..]][..], None),
+            ("D", &[b"a.py"], None),
+            ("T", &[b"a.py"], None),
+            ("U", &[b"a.py"], None),
+            ("C75", &[b"old.py", b"a.py"], Some("old.py")),
+            ("R", &[b"old.py", b"a.py"], Some("old.py")),
+        ] {
+            let output = record(status, paths);
+            let changed = parse_raw(&output, command).unwrap();
+            assert_eq!(changed.files.len(), 1, "{status}");
+            assert_eq!(changed.files[0].path, PathBuf::from("a.py"), "{status}");
             assert_eq!(
                 changed.files[0].renamed_from,
                 renamed_from.map(PathBuf::from),
-                "{record:?}"
+                "{status}"
             );
-            assert!(changed.undecodable.is_empty(), "{record:?}");
+            assert!(changed.undecodable.is_empty(), "{status}");
         }
+
+        let mut output = record("M", &[b"a.py"]);
+        output.extend(record("A", &[b"b.py"]));
         assert_eq!(
-            parse_name_status(b"M\0a.py\0A\0b.py\0", command)
+            parse_raw(&output, command)
                 .unwrap()
-                .files,
-            vec![
-                ChangedFile {
-                    path: PathBuf::from("a.py"),
-                    renamed_from: None
-                },
-                ChangedFile {
-                    path: PathBuf::from("b.py"),
-                    renamed_from: None
-                },
-            ]
+                .files
+                .iter()
+                .map(|file| display_path(&file.path))
+                .collect::<Vec<_>>(),
+            vec!["a.py", "b.py"]
         );
+    }
+
+    /// A file with no contents at the base carries no source blob: git writes
+    /// the all-zero object id, and that is "there is nothing to compare".
+    #[test]
+    fn an_all_zero_source_id_means_the_file_had_no_pre_image() {
+        let zeros = "0".repeat(40);
+        let output = format!(":000000 100644 {zeros} {NEW} A\0new.py\0");
+        let changed = parse_raw(output.as_bytes(), "git diff --raw").unwrap();
+        assert_eq!(changed.files[0].base_blob, None);
+
+        let output = format!(":100644 100644 {OLD} {NEW} M\0old.py\0");
+        let changed = parse_raw(output.as_bytes(), "git diff --raw").unwrap();
+        assert_eq!(changed.files[0].base_blob.as_deref(), Some(OLD));
     }
 
     #[test]
@@ -937,6 +1228,7 @@ mod tests {
                 start_line: line,
                 end_line: Some(end_line),
             },
+            change: None,
         }
     }
 
@@ -952,7 +1244,7 @@ mod tests {
         });
 
         let mut added = BTreeMap::new();
-        added.insert("a.py".to_string(), added_lines("@@ -6,0 +7,1 @@\n+x\n"));
+        added.insert("a.py".to_string(), hunks_of("@@ -6,0 +7,1 @@\n+x\n"));
         retain_new(&mut report, &added);
 
         assert_eq!(
@@ -975,10 +1267,7 @@ mod tests {
         // it: the change is what made it say what it now says.
         report.ignores.push(directive("a.py", 4, 8));
         let mut added = BTreeMap::new();
-        added.insert(
-            "a.py".to_string(),
-            added_lines("@@ -7,0 +8,1 @@\n+  reason\n"),
-        );
+        added.insert("a.py".to_string(), hunks_of("@@ -7,0 +8,1 @@\n+  reason\n"));
         retain_new(&mut report, &added);
         assert_eq!(report.ignores.len(), 1, "{report:#?}");
 
@@ -987,5 +1276,273 @@ mod tests {
         report.ignores.push(directive("a.py", 4, 6));
         retain_new(&mut report, &added);
         assert!(report.ignores.is_empty(), "{report:#?}");
+    }
+
+    /// The base side of every hunk header is read too, and a side with no lines
+    /// on it is `None` rather than a range nothing can be inside.
+    #[test]
+    fn hunk_headers_carry_the_base_side_as_well_as_the_new_one() {
+        let change = hunks_of(concat!(
+            "@@ -2 +2 @@\n",
+            "-old\n+new\n",
+            "@@ -9,0 +10,2 @@\n",
+            "+a\n+b\n",
+            "@@ -20,2 +21,0 @@\n",
+            "-gone\n-gone\n",
+        ));
+        assert_eq!(
+            change.hunks,
+            vec![
+                Hunk {
+                    base: Some((2, 2)),
+                    new: Some((2, 2)),
+                },
+                // A pure insertion replaced nothing, so no base directive can be
+                // inside it.
+                Hunk {
+                    base: None,
+                    new: Some((10, 11)),
+                },
+                Hunk {
+                    base: Some((20, 21)),
+                    new: None,
+                },
+            ]
+        );
+        // Selection is unchanged by any of it: only the new side decides.
+        assert!(change.intersects(2, 2) && change.intersects(10, 11));
+        assert!(!change.intersects(21, 21));
+    }
+
+    /// A base side this build cannot read is an error for the same reason the
+    /// new side is: the lines it covers would silently read as unchanged.
+    #[test]
+    fn an_unreadable_base_side_is_an_error_rather_than_a_guess() {
+        for patch in [
+            "@@ +1,2 @@\n",
+            "@@ -not-a-number +1 @@\n",
+            "@@ -1,x +1 @@\n",
+        ] {
+            let error = FileChange::parse(patch, "git diff").unwrap_err();
+            assert!(matches!(error, DiffError::Malformed { .. }), "{error:?}");
+            assert!(error.to_string().contains("hunk header"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_pre_image_is_the_files_contents_at_the_base() {
+        let dir = repo();
+        let root = dir.path();
+        write(root, "a.py", "x = 1  # noqa: E501  # the old reason\n");
+        commit(root, "baseline");
+        write(root, "a.py", "x = 1  # noqa: E501  # the new reason\n");
+
+        let diff = Diff::open(root, None).expect("open diff");
+        let base = diff
+            .pre_image(&changed_file(&diff, "a.py"))
+            .expect("a pre-image");
+        assert_eq!(base.path, PathBuf::from("a.py"));
+        assert_eq!(base.text, "x = 1  # noqa: E501  # the old reason\n");
+    }
+
+    /// A rename's pre-image is the *source* path's blob, under the source's own
+    /// name: that is the file whose language and directives these are.
+    #[test]
+    fn a_renamed_files_pre_image_is_read_under_its_old_name() {
+        let dir = repo();
+        let root = dir.path();
+        // Long enough that git still sees a rename once the one line moves:
+        // a rename it cannot see reads as a whole-file addition instead.
+        let body = "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n";
+        write(
+            root,
+            "old.py",
+            &format!("{body}x = 1  # noqa: E501  # before\n"),
+        );
+        commit(root, "baseline");
+        git(root, &["mv", "old.py", "new.py"]);
+        write(
+            root,
+            "new.py",
+            &format!("{body}x = 1  # noqa: E501  # after\n"),
+        );
+
+        let diff = Diff::open(root, None).expect("open diff");
+        let file = changed_file(&diff, "new.py");
+        assert_eq!(file.renamed_from, Some(PathBuf::from("old.py")));
+        let base = diff.pre_image(&file).expect("a pre-image");
+        assert_eq!(base.path, PathBuf::from("old.py"));
+        assert_eq!(base.text, format!("{body}x = 1  # noqa: E501  # before\n"));
+    }
+
+    /// No previous contents, and previous contents that are not text, are both
+    /// "nothing to compare against" — never a failure.
+    #[test]
+    fn a_file_with_no_readable_pre_image_answers_none_rather_than_failing() {
+        let dir = repo();
+        let root = dir.path();
+        write(root, "kept.py", "x = 1\n");
+        fs::write(root.join("binary.py"), [b'x', b' ', 0xff, 0xfe, b'\n']).unwrap();
+        commit(root, "baseline");
+        write(root, "created.py", "y = 2\n");
+        write(root, "binary.py", "y = 2  # noqa: E501\n");
+        git(root, &["add", "-A"]);
+
+        let diff = Diff::open(root, None).expect("open diff");
+        assert_eq!(diff.pre_image(&changed_file(&diff, "created.py")), None);
+        assert_eq!(diff.pre_image(&changed_file(&diff, "binary.py")), None);
+    }
+
+    /// One file's change: the hunks of its patch, and what it used to say.
+    fn change_of(patch: &str, base: Option<&str>) -> FileChange {
+        let mut change = hunks_of(patch);
+        change.set_base(base.map(|text| BaseImage {
+            path: PathBuf::from("a.py"),
+            text: text.to_string(),
+        }));
+        change
+    }
+
+    /// Classify a one-file report and read back the word on each record.
+    fn verdicts(source: &str, patch: &str, base: Option<&str>) -> Vec<(u32, Change)> {
+        let mut report = crate::scan::scan_source(
+            &SourceFile::new("a.py", source.to_string()),
+            &ScanOptions::default(),
+        );
+        let mut changes = BTreeMap::new();
+        changes.insert("a.py".to_string(), change_of(patch, base));
+        retain_new(&mut report, &changes);
+        classify(&mut report, &changes, &[]);
+        report
+            .ignores
+            .iter()
+            .map(|directive| {
+                (
+                    directive.line,
+                    directive.change.expect("a --diff run classifies"),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rewritten_reason_is_a_justification_edit_and_a_rewritten_rule_set_is_not() {
+        // The same directive, the same rules, a different reason.
+        assert_eq!(
+            verdicts(
+                "x = 1  # noqa: E501  # the new reason\n",
+                "@@ -1 +1 @@\n",
+                Some("x = 1  # noqa: E501  # the old reason\n"),
+            ),
+            vec![(1, Change::JustificationEdited)]
+        );
+        // A reason written where there was none, and one taken away.
+        assert_eq!(
+            verdicts(
+                "x = 1  # noqa: E501  # now justified\n",
+                "@@ -1 +1 @@\n",
+                Some("x = 1  # noqa: E501\n"),
+            ),
+            vec![(1, Change::JustificationEdited)]
+        );
+        assert_eq!(
+            verdicts(
+                "x = 1  # noqa: E501\n",
+                "@@ -1 +1 @@\n",
+                Some("x = 1  # noqa: E501  # was justified\n"),
+            ),
+            vec![(1, Change::JustificationEdited)]
+        );
+        // The rule set moved: this now silences something its base version did
+        // not, whatever happened to the words next to it.
+        assert_eq!(
+            verdicts(
+                "x = 1  # noqa: E501,F401  # the new reason\n",
+                "@@ -1 +1 @@\n",
+                Some("x = 1  # noqa: E501  # the old reason\n"),
+            ),
+            vec![(1, Change::Added)]
+        );
+        // So did the scope.
+        assert_eq!(
+            verdicts(
+                "# ruff: noqa: E501  # a file-wide reason\n",
+                "@@ -1 +1 @@\n",
+                Some("x = 1  # noqa: E501  # a line-wide reason\n"),
+            ),
+            vec![(1, Change::Added)]
+        );
+    }
+
+    #[test]
+    fn a_directive_with_no_counterpart_is_added() {
+        // Nothing was there: the change wrote it.
+        assert_eq!(
+            verdicts(
+                "x = 1\ny = 2  # noqa: E501  # brand new\n",
+                "@@ -1,0 +2 @@\n",
+                Some("x = 1\n"),
+            ),
+            vec![(2, Change::Added)]
+        );
+        // A file with no pre-image at all — one the change created, or one this
+        // build cannot read as text.
+        assert_eq!(
+            verdicts("x = 1  # noqa: E501  # why\n", "@@ -0,0 +1 @@\n", None),
+            vec![(1, Change::Added)]
+        );
+        // A counterpart of another tool is not a counterpart.
+        assert_eq!(
+            verdicts(
+                "x = 1  # noqa: E501  # a ruff reason\n",
+                "@@ -1 +1 @@\n",
+                Some("x = 1  # type: ignore  # a mypy reason\n"),
+            ),
+            vec![(1, Change::Added)]
+        );
+    }
+
+    /// Several directives of one tool in one hunk pair in file order.
+    #[test]
+    fn directives_in_one_hunk_pair_in_file_order() {
+        assert_eq!(
+            verdicts(
+                "a = 1  # noqa: E501  # first, reworded\nb = 2  # noqa: E501  # second\n",
+                "@@ -1,2 +1,2 @@\n",
+                Some("a = 1  # noqa: E501  # first\nb = 2  # noqa: E501  # second\n"),
+            ),
+            vec![(1, Change::JustificationEdited), (2, Change::Added)]
+        );
+    }
+
+    /// Classification labels and nothing else: the same records, in the same
+    /// order, whatever the pre-image says.
+    #[test]
+    fn classification_never_moves_a_record() {
+        let source = "a = 1  # noqa: E501  # reworded\nb = 2  # noqa: F401  # new\n";
+        let mut changes = BTreeMap::new();
+        changes.insert(
+            "a.py".to_string(),
+            change_of("@@ -1,2 +1,2 @@\n", Some("a = 1  # noqa: E501  # was\n")),
+        );
+        let mut report = crate::scan::scan_source(
+            &SourceFile::new("a.py", source.to_string()),
+            &ScanOptions::default(),
+        );
+        retain_new(&mut report, &changes);
+        let before = report.clone();
+        classify(&mut report, &changes, &[]);
+
+        assert_eq!(report.ignores.len(), before.ignores.len());
+        for (after, before) in report.ignores.iter().zip(&before.ignores) {
+            assert_eq!(
+                IgnoreDirective {
+                    change: None,
+                    ..after.clone()
+                },
+                *before
+            );
+        }
+        assert_eq!(report.errors, before.errors);
     }
 }
