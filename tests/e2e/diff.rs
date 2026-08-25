@@ -890,9 +890,9 @@ fn json_report(dir: &std::path::Path, args: &[&str]) -> Vec<u8> {
 
 /// llmlint's directive keyword, assembled rather than spelled out.
 ///
-/// This file is itself scanned by llmlint, and a literal `llmlint: ignore[…]`
-/// in a string here would be read as a real suppression in this repository — of
-/// a rule it does not have, which fails its own gate.
+/// This file is itself scanned by llmlint, and spelling its directive out here
+/// — keyword, colon, and all — would be read as a real suppression in this
+/// repository, of a rule it does not have, which fails its own gate.
 const LLMLINT: &str = "llmlint";
 
 /// A wrapped llmlint justification: the directive on one line, the rest of the
