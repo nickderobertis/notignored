@@ -106,6 +106,17 @@ fn directive(comment: &Comment) -> Option<(Scope, Option<String>)> {
     Some((Scope::NextLine, normalize_reason(trim_decoration(rest))))
 }
 
+/// True when the text after a `//` opens a `@ts-` directive.
+///
+/// A line comment is what the caller has, which is why `@ts-nocheck` counts
+/// here; see [`crate::tools::opens_directive`].
+pub(super) fn starts_with_directive(after_marker: &str) -> bool {
+    nocheck_body(after_marker).is_some()
+        || NEXT_LINE
+            .iter()
+            .any(|keyword| decorated(after_marker).starts_with(keyword))
+}
+
 /// The `@ts-nocheck` tail, when this comment is one.
 ///
 /// The compiler accepts it after `//` or `///` only — a fourth slash, or a block
@@ -114,12 +125,13 @@ fn nocheck(comment: &Comment) -> Option<&str> {
     if comment.kind != CommentKind::Line {
         return None;
     }
+    nocheck_body(&comment.text)
+}
+
+/// The `@ts-nocheck` tail of a line comment whose body is `text`.
+fn nocheck_body(text: &str) -> Option<&str> {
     // `text` is what follows the `//` marker, so at most one more slash may lead.
-    let body = comment
-        .text
-        .strip_prefix('/')
-        .unwrap_or(&comment.text)
-        .trim_start();
+    let body = text.strip_prefix('/').unwrap_or(text).trim_start();
     if !body.get(..NOCHECK.len())?.eq_ignore_ascii_case(NOCHECK) {
         return None;
     }

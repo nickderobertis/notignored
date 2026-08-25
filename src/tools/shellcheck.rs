@@ -63,13 +63,7 @@ impl ToolParser for ShellcheckParser {
             let Some(body) = comment.raw.strip_prefix('#') else {
                 continue;
             };
-            let Some(rest) = body.trim_start().strip_prefix("shellcheck") else {
-                continue;
-            };
-            if !rest.starts_with(char::is_whitespace) {
-                continue;
-            }
-            let Some((rules, reason)) = disabled_rules(rest) else {
+            let Some((rules, reason)) = directive_body(body) else {
                 continue;
             };
             let scope = match first_command {
@@ -132,6 +126,24 @@ fn first_command_line(file: &SourceFile) -> Option<u32> {
         })
         .find(|(line, text)| !text.trim().is_empty() && !comment_lines.contains(line))
         .map(|(line, _)| line)
+}
+
+/// True when the text after a `#` opens a ShellCheck suppression.
+///
+/// The line-below boundary uses this; see [`crate::tools::opens_directive`].
+pub(super) fn starts_with_directive(after_hash: &str) -> bool {
+    directive_body(after_hash).is_some()
+}
+
+/// The rules and reason of a `shellcheck disable=` comment, or `None` when the
+/// comment is something else.
+fn directive_body(after_hash: &str) -> Option<(Vec<String>, Option<String>)> {
+    let rest = after_hash.trim_start().strip_prefix("shellcheck")?;
+    // A word boundary: `# shellcheckish` is prose.
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    disabled_rules(rest)
 }
 
 /// The rules a `shellcheck` directive disables and its trailing reason, or
