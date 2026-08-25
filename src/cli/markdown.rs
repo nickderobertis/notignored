@@ -43,6 +43,13 @@ const SNIPPET_LINES: u32 = 10;
 /// context, so it gets none added and stays capped by [`SNIPPET_LINES`].
 const SNIPPET_CONTEXT: u32 = 2;
 
+/// Characters of the commit id the provenance footer shows.
+///
+/// The abbreviation every GitHub surface uses, and the one a reviewer compares
+/// against the checks list without reading 40 hex digits. The link behind it
+/// carries the sha in full.
+const SHORT_SHA: usize = 7;
+
 /// The gutter each snippet line opens with: the suppressed line is marked, the
 /// context around it is aligned with spaces so the two cannot be confused.
 const SUPPRESSED_GUTTER: &str = "> ";
@@ -157,7 +164,34 @@ fn body(report: &Report, options: &MarkdownOptions, source: &dyn SnippetSource) 
             ));
         }
     }
+    if let Some(stamp) = stamp(options) {
+        separate(&mut body);
+        body.push_str(&stamp);
+    }
     body
+}
+
+/// The provenance footer: the commit the suppressions above were read from.
+///
+/// The action upserts one comment and edits it in place across pushes, so
+/// without this nothing in the body says which tree it describes and a reviewer
+/// reading it after a push cannot tell a current comment from a stale one.
+///
+/// `None` when the run was not told a sha: a local `notignored --format
+/// markdown` is a preview, and there is nothing truthful to stamp. Without a
+/// repository the id renders unlinked, exactly as a permalink cannot be built.
+fn stamp(options: &MarkdownOptions) -> Option<String> {
+    let sha = options.sha.as_ref()?;
+    // `--github-sha`'s value parser bounds the flag to 7–64 hex digits, so this
+    // is a whole abbreviation and neither form has anything to escape.
+    let short: String = sha.chars().take(SHORT_SHA).collect();
+    let commit = match &options.repo {
+        Some(repo) => format!("[`{short}`](https://github.com/{repo}/commit/{sha})"),
+        None => format!("`{short}`"),
+    };
+    // `<sub>` rather than italics: GitHub renders it small and grey, which is
+    // what keeps a provenance footer out of the reader's way.
+    Some(format!("---\n\n<sub>Suppressions as of {commit}.</sub>\n"))
 }
 
 /// What the heading counts, in the words the count is true in.
@@ -460,6 +494,12 @@ mod tests {
         }
     }
 
+    /// The provenance footer [`options`] renders, which every body below closes
+    /// with. The rules that decide its form are driven end to end in
+    /// `tests/e2e/markdown.rs`; here it is only the tail every other assertion
+    /// has to reach past.
+    const STAMP: &str = "---\n\n<sub>Suppressions as of [`0123456`](https://github.com/acme/widgets/commit/0123456789abcdef0123456789abcdef01234567).</sub>\n";
+
     fn options() -> MarkdownOptions {
         MarkdownOptions {
             repo: Some("acme/widgets".into()),
@@ -477,7 +517,9 @@ mod tests {
         let rendered = render(&Report::new(), &options());
         assert_eq!(
             rendered,
-            format!("{MARKER}\n\n### notignored\n\nNo lint or type-check suppressions found.\n")
+            format!(
+                "{MARKER}\n\n### notignored\n\nNo lint or type-check suppressions found.\n\n{STAMP}"
+            )
         );
     }
 
@@ -675,20 +717,23 @@ mod tests {
         report.ignores.push(directive(4, Some("why")));
         let rendered = body(&report, &options(), &source);
         assert!(
-            rendered.ends_with(concat!(
-                "  <details>\n",
-                "  <summary>suppressed code</summary>\n",
-                "\n",
-                "  ```python\n",
-                "    2 | two\n",
-                "    3 | three\n",
-                "  > 4 | four\n",
-                "    5 | five\n",
-                "    6 | six\n",
-                "  ```\n",
-                "\n",
-                "  </details>\n",
-                "\n",
+            rendered.ends_with(&format!(
+                "{}{STAMP}",
+                concat!(
+                    "  <details>\n",
+                    "  <summary>suppressed code</summary>\n",
+                    "\n",
+                    "  ```python\n",
+                    "    2 | two\n",
+                    "    3 | three\n",
+                    "  > 4 | four\n",
+                    "    5 | five\n",
+                    "    6 | six\n",
+                    "  ```\n",
+                    "\n",
+                    "  </details>\n",
+                    "\n",
+                )
             )),
             "{rendered}"
         );
@@ -782,7 +827,10 @@ mod tests {
                 "the heading must still name the total:\n{rendered}"
             );
             match overflow {
-                Some(line) => assert!(rendered.ends_with(line), "{rendered}"),
+                Some(line) => assert!(
+                    rendered.ends_with(&format!("{line}\n{STAMP}")),
+                    "{rendered}"
+                ),
                 None => assert!(!rendered.contains("not shown"), "{rendered}"),
             }
         }
@@ -802,7 +850,7 @@ mod tests {
         let rendered = body(&report, &capped, &Stub::default());
         assert_eq!(rendered.matches("- **ruff E501**").count(), 2, "{rendered}");
         assert!(
-            rendered.ends_with("_… and 1 more not shown (3 total)._\n"),
+            rendered.ends_with(&format!("_… and 1 more not shown (3 total)._\n\n{STAMP}")),
             "{rendered}"
         );
 
