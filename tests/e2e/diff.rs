@@ -888,10 +888,19 @@ fn json_report(dir: &std::path::Path, args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
+/// llmlint's directive keyword, assembled rather than spelled out.
+///
+/// This file is itself scanned by llmlint, and a literal `llmlint: ignore[…]`
+/// in a string here would be read as a real suppression in this repository — of
+/// a rule it does not have, which fails its own gate.
+const LLMLINT: &str = "llmlint";
+
 /// A wrapped llmlint justification: the directive on one line, the rest of the
 /// sentence on the next. Only the continuation moves in the journey below.
 fn wrapped(tail: &str) -> String {
-    format!("# llmlint: ignore[dead_code] the first half of the justification,\n# {tail}\nx = 1\n")
+    format!(
+        "# {LLMLINT}: ignore[dead_code] the first half of the justification,\n# {tail}\nx = 1\n"
+    )
 }
 
 /// The word `--diff` puts on each suppression, over a change carrying one of

@@ -27,7 +27,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use crate::model::{Change, Report, Tool};
+use crate::model::{Change, IgnoreDirective, Report, Tool};
 use crate::scan::{scan_source, ScanOptions};
 use crate::source::{display_path, SourceFile};
 
@@ -699,7 +699,12 @@ pub fn classify(report: &mut Report, changes: &BTreeMap<String, FileChange>, too
     }
     let mut verdicts = vec![Change::Added; report.ignores.len()];
     for (path, reported) in by_path {
-        let Some(base) = changes.get(path).and_then(|change| change.base.as_ref()) else {
+        // No pre-image is no counterpart, and every directive in the file keeps
+        // the `added` it started with.
+        let Some((change, base)) = changes
+            .get(path)
+            .and_then(|change| Some((change, change.base.as_ref()?)))
+        else {
             continue;
         };
         let previous = scan_source(
@@ -708,8 +713,13 @@ pub fn classify(report: &mut Report, changes: &BTreeMap<String, FileChange>, too
                 tools: tools.to_vec(),
             },
         );
-        let hunks = changes.get(path).map_or(&[][..], |change| &change.hunks);
-        pair(report, &reported, &previous.ignores, hunks, &mut verdicts);
+        pair(
+            report,
+            &reported,
+            &previous.ignores,
+            &change.hunks,
+            &mut verdicts,
+        );
     }
     for (directive, verdict) in report.ignores.iter_mut().zip(verdicts) {
         directive.change = Some(verdict);
@@ -727,7 +737,7 @@ pub fn classify(report: &mut Report, changes: &BTreeMap<String, FileChange>, too
 fn pair(
     report: &Report,
     reported: &[usize],
-    previous: &[crate::model::IgnoreDirective],
+    previous: &[IgnoreDirective],
     hunks: &[Hunk],
     verdicts: &mut [Change],
 ) {
