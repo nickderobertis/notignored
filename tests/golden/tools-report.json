@@ -58,12 +58,12 @@
         "tool_output_is_signal",
         "suppressions_justified"
       ],
-      "reason": "fixture",
+      "reason": "fixture input, not a script this project runs: ShellCheck reads it and nothing executes it, so the noisy expansions are the violations the parity test needs, and the reason-less directives are the form it asserts comes back with a null `reason`.",
       "path": "scripts/deploy.sh",
       "line": 10,
-      "end_line": 10,
+      "end_line": 14,
       "column": 3,
-      "raw": "llmlint: ignore-file[tool_output_is_signal, suppressions_justified] fixture",
+      "raw": "llmlint: ignore-file[tool_output_is_signal, suppressions_justified] fixture\n# input, not a script this project runs: ShellCheck reads it and nothing\n# executes it, so the noisy expansions are the violations the parity test needs,\n# and the reason-less directives are the form it asserts comes back with a null\n# `reason`.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -127,12 +127,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "the missing reason is the",
+      "reason": "the missing reason is the point: this fixture is the input that proves notignored reports an unjustified suppression, and the parity test asserts its `reason` comes back null.",
       "path": "src/lints.rs",
       "line": 21,
-      "end_line": 21,
+      "end_line": 24,
       "column": 4,
-      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the",
+      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the\n// point: this fixture is the input that proves notignored reports an\n// unjustified suppression, and the parity test asserts its `reason` comes back\n// null.",
       "suppressed": {
         "start_line": 1,
         "end_line": null

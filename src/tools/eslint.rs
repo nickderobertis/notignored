@@ -83,7 +83,7 @@ impl ToolParser for EslintParser {
         let mut open: Vec<usize> = Vec::new();
 
         for comment in file.comments() {
-            let Some((kind, rules, reason)) = directive(comment) else {
+            let Some((kind, rules, reason)) = directive(&comment.text, comment.kind) else {
                 continue;
             };
             if kind == Kind::Enable {
@@ -174,17 +174,26 @@ fn closes(disable_rules: &[String], enable_rules: &[String]) -> bool {
     disable_rules.iter().all(|rule| enable_rules.contains(rule))
 }
 
-/// Recognize a directive that opens `comment`, returning its kind, rules and
-/// reason.
-fn directive(comment: &Comment) -> Option<(Kind, Vec<String>, Option<String>)> {
-    let (head, description) = split_description(&comment.text);
+/// True when the text after a `//` opens an ESLint directive.
+///
+/// A line comment is what the caller has, so the block-only forms are excluded
+/// exactly as [`Kind::allowed_in`] excludes them; see
+/// [`crate::tools::opens_directive`].
+pub(super) fn opens_directive(after_marker: &str) -> bool {
+    directive(after_marker, CommentKind::Line).is_some()
+}
+
+/// Recognize a directive that opens a comment whose body is `text`, returning
+/// its kind, rules and reason.
+fn directive(text: &str, comment_kind: CommentKind) -> Option<(Kind, Vec<String>, Option<String>)> {
+    let (head, description) = split_description(text);
     let head = head.trim();
     let (kind, rest) = KEYWORDS.iter().find_map(|&(keyword, kind)| {
         let rest = head.strip_prefix(keyword)?;
         // A word boundary, so `eslint-disabled` is not a directive.
         (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some((kind, rest))
     })?;
-    if !kind.allowed_in(comment.kind) {
+    if !kind.allowed_in(comment_kind) {
         return None;
     }
     let rules = rest

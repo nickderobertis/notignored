@@ -39,6 +39,18 @@
 //! it rides on the inherent [`LlmlintParser::scan`] and
 //! [`crate::scan::scan_files`] folds it into the report.
 //!
+//! A reason begins on the directive's own line, in the text after the closing
+//! `]`, and **only** there: the real `check-ignores` refuses a directive whose
+//! reason starts on the line below. Once it has begun it wraps, because a
+//! justification worth writing is usually longer than a line — so it continues
+//! onto the next physical line of the same block comment, or onto the next
+//! leading line comment at the same column, for as long as those lines carry
+//! text, open no directive of their own, and are not separated by a blank line
+//! or a line of code. The kept lines join with a single space, and `end_line`,
+//! `raw`, and a `next-line` scope's `suppressed` describe the whole run: a
+//! reason a reviewer reads cut in half is worse than none, because they cannot
+//! tell whether the author or the tool wrote the half-sentence.
+//!
 //! Reasons are required (except on `ignore-end`, which carries none), so a
 //! directive with valid rules and no reason is still reported, with a null
 //! reason: llmlint will reject it, and that is precisely what a reviewer wants
@@ -52,7 +64,7 @@
 //! [`KEYWORD`] instead, which is what keeps this file under llmlint's gate
 //! rather than exempt from it.
 
-use crate::comments::Comment;
+use crate::comments::{Comment, CommentKind};
 use crate::model::{normalize_reason, IgnoreDirective, ReportError, Scope, Suppressed, Tool};
 use crate::source::SourceFile;
 use crate::tools::ToolParser;
@@ -86,9 +98,12 @@ impl LlmlintParser {
         // One open block per rule, in the order they were opened, so an
         // unclosed-block error lands in source order too.
         let mut open: Vec<(String, usize)> = Vec::new();
+        let source_lines = physical_lines(file.source());
+        let comments = file.comments();
 
-        for comment in file.comments() {
-            for (line, column, text) in comment_lines(comment) {
+        for (index, comment) in comments.iter().enumerate() {
+            let lines = comment_lines(comment);
+            for (position, &(line, column, text)) in lines.iter().enumerate() {
                 let Some(found) = find_directive(text) else {
                     continue;
                 };
@@ -105,17 +120,25 @@ impl LlmlintParser {
                         }
                     }
                 }
+                let continued = continuation(
+                    comment,
+                    &lines,
+                    position,
+                    &comments[index.saturating_add(1)..],
+                    &source_lines,
+                    found.reason_text,
+                );
                 scanned.directives.push(IgnoreDirective {
                     tool: Tool::Llmlint,
                     scope,
                     rules: found.rules,
-                    reason: found.reason,
+                    reason: wrapped_reason(found.reason_text, &continued),
                     path: file.display_path().to_string(),
                     line,
-                    end_line: line,
+                    end_line: continued.last().map_or(line, |last| last.line),
                     column,
-                    raw: found.raw.to_string(),
-                    suppressed: suppressed_range(scope, comment, line),
+                    raw: wrapped_raw(found.raw, &continued),
+                    suppressed: suppressed_range(scope, comment, line, &continued),
                 });
             }
         }
@@ -176,7 +199,12 @@ fn alone_on_its_line(comment: &Comment, line: u32) -> bool {
     comment.leading || line > comment.line
 }
 
-fn suppressed_range(scope: Scope, comment: &Comment, line: u32) -> Suppressed {
+fn suppressed_range(
+    scope: Scope,
+    comment: &Comment,
+    line: u32,
+    continued: &[Continued<'_>],
+) -> Suppressed {
     match scope {
         Scope::File => Suppressed {
             start_line: 1,
@@ -187,10 +215,14 @@ fn suppressed_range(scope: Scope, comment: &Comment, line: u32) -> Suppressed {
             start_line: line,
             end_line: None,
         },
-        // The first line that can hold code: past the whole comment, not just
-        // past the directive's own line.
+        // The first line that can hold code: past the whole comment and past
+        // every line the reason wrapped onto, not just past the directive's own
+        // line.
         Scope::NextLine => {
-            let next = comment.end_line.saturating_add(1);
+            let last = continued
+                .last()
+                .map_or(comment.end_line, |line| line.line.max(comment.end_line));
+            let next = last.saturating_add(1);
             Suppressed {
                 start_line: next,
                 end_line: Some(next),
@@ -201,6 +233,156 @@ fn suppressed_range(scope: Scope, comment: &Comment, line: u32) -> Suppressed {
             end_line: Some(line),
         },
     }
+}
+
+/// One physical line a wrapped reason continues onto.
+struct Continued<'a> {
+    /// 1-based line of the continuation.
+    line: u32,
+    /// The line with its comment marker or block decoration stripped — what
+    /// joins the reason.
+    text: &'a str,
+    /// The line exactly as the source spells it, for `raw`.
+    raw: &'a str,
+}
+
+/// The lines the reason begun on the directive's own line runs on to, in order.
+///
+/// Empty when no reason began there: the real `check-ignores` rejects a
+/// directive whose reason starts below its brackets, so reading one out of a
+/// continuation line would invent a justification the tool itself refuses.
+fn continuation<'a>(
+    comment: &'a Comment,
+    lines: &[(u32, u32, &'a str)],
+    position: usize,
+    later: &'a [Comment],
+    source_lines: &[&'a str],
+    reason_text: &str,
+) -> Vec<Continued<'a>> {
+    if normalize_reason(reason_text).is_none() {
+        return Vec::new();
+    }
+    match comment.kind {
+        CommentKind::Block => block_continuation(lines, position),
+        CommentKind::Line => line_continuation(comment, later, source_lines),
+    }
+}
+
+/// The rest of one block comment, from the line after the directive's.
+///
+/// `lines` has already dropped the closing delimiter, so the run can only end
+/// on a line that is blank or opens a directive of its own.
+fn block_continuation<'a>(lines: &[(u32, u32, &'a str)], position: usize) -> Vec<Continued<'a>> {
+    let mut out = Vec::new();
+    for &(line, _, text) in lines.iter().skip(position.saturating_add(1)) {
+        let body = undecorated(text);
+        if body.trim().is_empty() || find_directive(text).is_some() {
+            break;
+        }
+        out.push(Continued {
+            line,
+            text: body,
+            raw: text,
+        });
+    }
+    out
+}
+
+/// The run of line comments below the one holding the directive.
+///
+/// Each one must open on the very next line, at the same column, with nothing
+/// but comment on it — a blank line, a line of code, a differently indented
+/// comment, or any tool's directive ends the run, because none of those is a
+/// continuation of the sentence above.
+fn line_continuation<'a>(
+    comment: &'a Comment,
+    later: &'a [Comment],
+    source_lines: &[&'a str],
+) -> Vec<Continued<'a>> {
+    // A directive sharing its line with code is a trailing one, and what sits
+    // below it is that code's successor, not its justification.
+    if !comment.leading {
+        return Vec::new();
+    }
+    let mut out: Vec<Continued<'a>> = Vec::new();
+    let mut previous = comment.line;
+    for candidate in later {
+        let adjacent = candidate.kind == CommentKind::Line
+            && candidate.leading
+            && candidate.line == previous.saturating_add(1)
+            && candidate.column == comment.column;
+        // A bare `//` is a paragraph break: what follows it is separate
+        // commentary, not the rest of this sentence.
+        if !adjacent
+            || candidate.text.trim().is_empty()
+            || find_directive(&candidate.raw).is_some()
+            || crate::tools::opens_directive(&candidate.text)
+        {
+            break;
+        }
+        out.push(Continued {
+            line: candidate.line,
+            text: &candidate.text,
+            raw: source_line(source_lines, candidate),
+        });
+        previous = candidate.line;
+    }
+    out
+}
+
+/// `comment`'s whole source line, indentation included, for `raw`.
+fn source_line<'a>(source_lines: &[&'a str], comment: &'a Comment) -> &'a str {
+    usize::try_from(comment.line)
+        .ok()
+        .and_then(|number| source_lines.get(number.checked_sub(1)?))
+        .copied()
+        // A comment always sits on a line of the source it came from; falling
+        // back to the comment itself keeps `raw` truthful if that ever changes.
+        .unwrap_or(comment.raw.as_str())
+}
+
+/// Every physical line of `source`, without its line terminator.
+fn physical_lines(source: &str) -> Vec<&str> {
+    source
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect()
+}
+
+/// A block comment's inner line with the `*` margin a `/** … */` comment draws
+/// removed, so decoration never lands in a reason.
+fn undecorated(text: &str) -> &str {
+    let trimmed = text.trim_start();
+    let body = trimmed.trim_start_matches('*');
+    // Only a margin is decoration: `*emphasis*` is prose the author wrote.
+    if body.is_empty() || body.starts_with(char::is_whitespace) {
+        body
+    } else {
+        trimmed
+    }
+}
+
+/// The whole reason: the directive's own line, then every line it wrapped onto,
+/// joined by a space and collapsed exactly as an unwrapped reason is.
+fn wrapped_reason(reason_text: &str, continued: &[Continued<'_>]) -> Option<String> {
+    let mut joined = reason_text.to_string();
+    for line in continued {
+        joined.push(' ');
+        joined.push_str(line.text);
+    }
+    normalize_reason(&joined)
+}
+
+/// The directive as written, from the keyword through the end of the last line
+/// its reason ran on to — newlines and continuation markers included.
+fn wrapped_raw(first_line: &str, continued: &[Continued<'_>]) -> String {
+    let mut out = first_line.to_string();
+    for line in continued {
+        out.push('\n');
+        out.push_str(line.raw);
+    }
+    out.truncate(out.trim_end().len());
+    out
 }
 
 /// Each physical line of a comment, as `(line, column of the line's first
@@ -274,7 +456,9 @@ impl Verb {
 struct Found<'a> {
     verb: Verb,
     rules: Vec<String>,
-    reason: Option<String>,
+    /// The text after the closing `]`, to the end of the directive's own line:
+    /// the only place a reason may begin.
+    reason_text: &'a str,
     /// Byte offset of the keyword within the line.
     offset: usize,
     /// The directive as written, from the keyword to the end of the line.
@@ -287,11 +471,11 @@ fn find_directive(text: &str) -> Option<Found<'_>> {
     while let Some(at) = text[searched..].find(KEYWORD) {
         let start = searched + at;
         let after = &text[start + KEYWORD.len()..];
-        if let Some((verb, rules, reason)) = directive_body(after) {
+        if let Some((verb, rules, reason_text)) = directive_body(after) {
             return Some(Found {
                 verb,
                 rules,
-                reason,
+                reason_text,
                 offset: start,
                 raw: text[start..].trim_end(),
             });
@@ -301,8 +485,9 @@ fn find_directive(text: &str) -> Option<Found<'_>> {
     None
 }
 
-/// Parse `: <verb>[<rules>] <reason>` from the text just after the keyword.
-fn directive_body(after_keyword: &str) -> Option<(Verb, Vec<String>, Option<String>)> {
+/// Parse `: <verb>[<rules>] <reason>` from the text just after the keyword,
+/// handing back the reason as written so a wrapped one can be joined first.
+fn directive_body(after_keyword: &str) -> Option<(Verb, Vec<String>, &str)> {
     let rest = after_keyword.strip_prefix(':')?.trim_start();
     let (verb, after_verb) = Verb::ALL.iter().find_map(|(name, verb)| {
         let tail = rest.strip_prefix(name)?;
@@ -324,7 +509,7 @@ fn directive_body(after_keyword: &str) -> Option<(Verb, Vec<String>, Option<Stri
     if rules.is_empty() {
         return None;
     }
-    Some((verb, rules, normalize_reason(after_rules)))
+    Some((verb, rules, after_rules))
 }
 
 #[cfg(test)]
@@ -503,6 +688,214 @@ mod tests {
                 end_line: Some(3)
             }
         );
+    }
+
+    /// A justification worth writing usually outruns one line, and half a
+    /// sentence in a review comment reads as the tool having eaten the rest.
+    #[test]
+    fn a_reason_wrapped_across_line_comments_reads_as_one_sentence() {
+        let directive = only(&script(&[
+            &hash("ignore[no_print] the trace is the feature here,"),
+            "#   and the caller has no other way to see it",
+            "print(1)",
+        ]));
+        assert_eq!(
+            directive.reason.as_deref(),
+            Some("the trace is the feature here, and the caller has no other way to see it")
+        );
+        assert_eq!((directive.line, directive.end_line), (1, 2));
+        assert_eq!(
+            directive.raw,
+            format!(
+                "{KEYWORD}: ignore[no_print] the trace is the feature here,\n\
+                 #   and the caller has no other way to see it"
+            )
+        );
+        // The first line that can hold code is past the whole run, not past the
+        // directive's own comment.
+        assert_eq!(
+            directive.suppressed,
+            Suppressed {
+                start_line: 3,
+                end_line: Some(3)
+            }
+        );
+    }
+
+    #[test]
+    fn a_reason_wrapped_inside_one_block_comment_reads_as_one_sentence() {
+        let directive = LlmlintParser
+            .parse(&SourceFile::new(
+                "a.rs",
+                script(&[
+                    "/*",
+                    &format!("  {KEYWORD}: ignore[dead_code] the table is generated in full,"),
+                    "  and the parser reaches half of it until error recovery lands",
+                    "*/",
+                    "struct Tables;",
+                ]),
+            ))
+            .remove(0);
+        assert_eq!(
+            directive.reason.as_deref(),
+            Some(
+                "the table is generated in full, and the parser reaches half of it \
+                 until error recovery lands"
+            )
+        );
+        assert_eq!((directive.line, directive.end_line), (2, 3));
+        assert_eq!(
+            directive.raw,
+            format!(
+                "{KEYWORD}: ignore[dead_code] the table is generated in full,\n\
+                 \x20 and the parser reaches half of it until error recovery lands"
+            )
+        );
+        // The closing delimiter is not a line of prose, and the code is below it.
+        assert_eq!(
+            directive.suppressed,
+            Suppressed {
+                start_line: 5,
+                end_line: Some(5)
+            }
+        );
+    }
+
+    /// The `*` margin of a doc comment is decoration, not the author's words.
+    #[test]
+    fn a_block_comments_star_margin_stays_out_of_the_reason() {
+        let directive = LlmlintParser
+            .parse(&SourceFile::new(
+                "a.ts",
+                script(&[
+                    "/**",
+                    &format!(" * {KEYWORD}: ignore[a] the vendored table is upstream's,"),
+                    " * and every name in it is theirs to choose",
+                    " */",
+                    "const table = 1;",
+                ]),
+            ))
+            .remove(0);
+        assert_eq!(
+            directive.reason.as_deref(),
+            Some("the vendored table is upstream's, and every name in it is theirs to choose")
+        );
+    }
+
+    /// The real `check-ignores` refuses a directive whose reason starts on the
+    /// line below, so reading one out of that line would invent a justification
+    /// the tool itself rejects.
+    #[test]
+    fn a_reason_that_never_began_is_not_taken_from_the_line_below() {
+        let directive = only(&script(&[
+            &hash("ignore[a]"),
+            "# prose that llmlint would not read as a reason either",
+            "x = 1",
+        ]));
+        assert_eq!(directive.reason, None);
+        assert_eq!((directive.line, directive.end_line), (1, 1));
+    }
+
+    #[test]
+    fn a_blank_comment_line_ends_the_reason() {
+        let directive = only(&script(&[
+            &hash("ignore[a] the whole of the justification"),
+            "#",
+            "# a separate paragraph, about something else entirely",
+            "x = 1",
+        ]));
+        assert_eq!(
+            directive.reason.as_deref(),
+            Some("the whole of the justification")
+        );
+        assert_eq!(directive.end_line, 1);
+    }
+
+    #[test]
+    fn a_comment_that_is_not_the_next_line_at_the_same_column_is_not_a_continuation() {
+        let first = "the whole of the justification";
+        let indented = only(&script(&[
+            &hash(&format!("ignore[a] {first}")),
+            "    # indented differently, so a different thought",
+            "x = 1",
+        ]));
+        assert_eq!(indented.reason.as_deref(), Some(first));
+
+        let after_blank = only(&script(&[
+            &hash(&format!("ignore[a] {first}")),
+            "",
+            "# after a blank line",
+            "x = 1",
+        ]));
+        assert_eq!(after_blank.reason.as_deref(), Some(first));
+
+        let after_code = only(&script(&[
+            &hash(&format!("ignore[a] {first}")),
+            "x = 1",
+            "# a note under the code it covers",
+            "y = 2",
+        ]));
+        assert_eq!(after_code.reason.as_deref(), Some(first));
+    }
+
+    /// The inversion `python::segments` prevents along one line, one line down:
+    /// a live suppression must never be filed as its neighbour's justification.
+    #[test]
+    fn a_line_opening_any_tools_directive_ends_the_reason() {
+        let first = "the whole of the justification";
+        let ruff = only(&script(&[
+            &hash(&format!("ignore[a] {first}")),
+            "# noqa: E501",
+            "x = 1",
+        ]));
+        assert_eq!(ruff.reason.as_deref(), Some(first));
+
+        let eslint = LlmlintParser
+            .parse(&SourceFile::new(
+                "a.ts",
+                script(&[
+                    &format!("// {KEYWORD}: ignore[a] {first}"),
+                    "// eslint-disable-next-line no-console",
+                    "console.log(1);",
+                ]),
+            ))
+            .remove(0);
+        assert_eq!(eslint.reason.as_deref(), Some(first));
+
+        let neighbour = parse(&script(&[
+            &hash(&format!("ignore[a] {first}")),
+            &hash("ignore[b] its neighbour's own"),
+            "x = 1",
+        ]));
+        assert_eq!(neighbour.len(), 2, "{neighbour:#?}");
+        assert_eq!(neighbour[0].reason.as_deref(), Some(first));
+        assert_eq!(neighbour[1].reason.as_deref(), Some("its neighbour's own"));
+
+        let inside_a_block = LlmlintParser.parse(&SourceFile::new(
+            "a.rs",
+            script(&[
+                &format!("/* {KEYWORD}: ignore[a] {first}"),
+                &format!("   {KEYWORD}: ignore[b] its neighbour's own */"),
+                "fn f() {}",
+            ]),
+        ));
+        assert_eq!(inside_a_block.len(), 2, "{inside_a_block:#?}");
+        assert_eq!(inside_a_block[0].reason.as_deref(), Some(first));
+        assert_eq!(inside_a_block[0].end_line, 1);
+    }
+
+    /// What sits below a trailing directive is the next statement's business,
+    /// even when a comment there lines up with the directive's own.
+    #[test]
+    fn a_trailing_code_directives_reason_ends_with_its_own_line() {
+        let directive = only(&script(&[
+            &format!("x = 1  # {KEYWORD}: ignore[a] the line right here"),
+            "       # and a note under it",
+            "y = 2",
+        ]));
+        assert_eq!(directive.scope, Scope::Line);
+        assert_eq!(directive.reason.as_deref(), Some("the line right here"));
+        assert_eq!(directive.end_line, 1);
     }
 
     #[test]

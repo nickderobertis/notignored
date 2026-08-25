@@ -7,6 +7,14 @@
 //! directive set — llmlint validates a fixture clean and notignored reports the
 //! same directives; llmlint rejects one and notignored reports the same file,
 //! line, and rule with the same defect visible in the record.
+//!
+//! `wrapped/` and `refused/` extend that to the reasons themselves. A
+//! justification long enough to matter is usually long enough to wrap, and a
+//! reason a reviewer reads cut in half is worse than none — so `wrapped/` holds
+//! both comment shapes a reason may continue in and llmlint validates every one
+//! of them, while `refused/` holds the shapes that must **not** join: llmlint
+//! rejects the one whose reason tries to begin below the brackets, and the rest
+//! it accepts while notignored stops each reason where the grammar does.
 
 use std::path::Path;
 
@@ -186,6 +194,157 @@ fn an_unclosed_block_and_a_missing_reason_are_flagged_by_both() {
     let message = errors[0]["message"].as_str().unwrap();
     assert!(message.contains("no_debug_prints"), "{message}");
     assert!(message.contains("line 1"), "{message}");
+}
+
+/// `(file, line, end_line, reason)` for every directive in a report.
+fn reasons(report: &serde_json::Value) -> Vec<(&str, u64, u64, Option<&str>)> {
+    report["ignores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|directive| {
+            (
+                directive["path"].as_str().unwrap(),
+                directive["line"].as_u64().unwrap(),
+                directive["end_line"].as_u64().unwrap(),
+                directive["reason"].as_str(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn llmlint_validates_the_wrapped_fixture_and_notignored_reports_each_reason_whole() {
+    let (passed, output) = llmlint_check_ignores(&parity_dir().join("wrapped"));
+    assert!(
+        passed,
+        "the pinned llmlint rejected the wrapped fixture, so its reasons do not \
+         begin where this parser reads them:\n{output}"
+    );
+
+    let report = report_for("wrapped", 0);
+    assert_eq!(
+        reasons(&report),
+        vec![
+            (
+                "service.py",
+                1,
+                3,
+                Some(
+                    "a thin transport shim: the caller knows which request it made, and a \
+                     wrapper added here would only guess at the context it already has"
+                )
+            ),
+            (
+                "service.py",
+                8,
+                10,
+                Some(
+                    "the trace below is this helper's whole job, and a logger in its place \
+                     would need configuration the caller does not have"
+                )
+            ),
+            (
+                "tables.rs",
+                2,
+                3,
+                Some(
+                    "the vendored grammar tables keep upstream's own markers, and rewriting \
+                     one would fork a generated file"
+                )
+            ),
+            (
+                "tables.rs",
+                6,
+                7,
+                Some(
+                    "the dump below is what this helper is for, and its output is the only \
+                     view a maintainer gets of the table"
+                )
+            ),
+        ],
+        "{report:#}"
+    );
+
+    let found = report["ignores"].as_array().unwrap();
+    // What a `next-line` directive covers is the first line that can hold code:
+    // past the whole run, so never one of the lines its own reason wrapped onto.
+    assert_eq!(found[1]["suppressed"]["start_line"], 11);
+    assert_eq!(found[1]["suppressed"]["end_line"], 11);
+    assert_eq!(found[3]["suppressed"]["start_line"], 9);
+    assert_eq!(found[3]["suppressed"]["end_line"], 9);
+
+    // `raw` is the directive as the source spells it, continuation markers and
+    // all — three physical lines here, not one.
+    let raw = found[1]["raw"].as_str().unwrap();
+    assert_eq!(raw.lines().count(), 3, "{raw:?}");
+    assert!(raw.ends_with("# have"), "{raw:?}");
+}
+
+#[test]
+fn a_reason_stops_where_the_grammar_stops_it() {
+    let refused = parity_dir().join("refused");
+    let (passed, output) = llmlint_check_ignores(&refused);
+    assert!(!passed, "llmlint must reject this fixture:\n{output}");
+    assert_eq!(
+        locations(&refused, &output),
+        vec!["reasonless.py:1"],
+        "only the directive whose reason tries to begin below the brackets is \
+         invalid to llmlint:\n{output}"
+    );
+    assert!(
+        output.contains("give a reason"),
+        "llmlint no longer refuses a reason that starts on the line below:\n{output}"
+    );
+
+    // Every other file here is valid llmlint; what the report has to get right
+    // is where each reason ends.
+    let report = report_for("refused", 0);
+    assert_eq!(
+        reasons(&report),
+        vec![
+            // Continues onto line 2, then stops at the bare `#` — a blank
+            // comment line is a paragraph break, and the prose under it is
+            // commentary rather than justification.
+            (
+                "boundaries.py",
+                1,
+                2,
+                Some("this shim hands the caller a bare error on purpose")
+            ),
+            // The line below is a comment indented past this one: a different
+            // thought, not the rest of this sentence.
+            (
+                "boundaries.py",
+                9,
+                9,
+                Some("the trace below is this helper's whole job")
+            ),
+            // A trailing directive covers the code it shares a line with, so
+            // nothing below it continues its reason.
+            ("boundaries.py", 11, 11, Some("the marker below is data")),
+            // A blank line ends the run.
+            (
+                "boundaries.py",
+                17,
+                17,
+                Some("printing here is the point of the helper")
+            ),
+            // A live `# noqa` on the line below is another tool's suppression,
+            // and filing it as this one's justification is the inversion this
+            // tool exists to prevent.
+            (
+                "boundaries.py",
+                24,
+                24,
+                Some("the dump below is what this helper is for")
+            ),
+            // A reason never begins on a continuation line, so this one has
+            // none — exactly what llmlint just refused it for.
+            ("reasonless.py", 1, 1, None),
+        ],
+        "{report:#}"
+    );
 }
 
 #[test]

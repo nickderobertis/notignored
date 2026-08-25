@@ -12,8 +12,9 @@
 //! `# type: ignore[import-not-found]  # noqa: F401` would file ruff's live
 //! suppression as mypy's stated justification — the exact inversion this tool
 //! exists to prevent. Each parser contributes an `opens_directive` recognizer, so
-//! the boundary is the union of every grammar the crate understands and no module
-//! has to know another's keywords.
+//! the boundary is the union of every Python grammar the crate understands and no
+//! module has to know another's keywords. `super::opens_directive` widens that
+//! union to every tool, for the llmlint parser's line-below boundary.
 //!
 //! Rule-list and reason parsing below is shared by the three type checkers only:
 //! ruff's `noqa: CODE, CODE` list is colon-delimited and its codes have a shape
@@ -75,13 +76,14 @@ pub(super) fn segments(comment: &Comment) -> Vec<Segment<'_>> {
         .collect()
 }
 
-/// True when the text after a `#` opens a directive for any tool the crate
-/// parses — which is what makes it a boundary for the run before it.
+/// True when the text after a `#` opens a directive for one of the Python
+/// tools — which is what makes it a boundary for the run before it.
 ///
 /// Recognizers mirror their parsers exactly, so nothing this crate declines to
 /// report (pyright's `# pyright: basic` mode switch, say) can silently truncate a
-/// neighbour's reason.
-fn opens_directive(after_hash: &str) -> bool {
+/// neighbour's reason. [`super::opens_directive`] is the whole-crate union built
+/// from this one.
+pub(super) fn opens_directive(after_hash: &str) -> bool {
     super::ruff::opens_directive(after_hash)
         || super::mypy::opens_directive(after_hash)
         || super::pyright::opens_directive(after_hash)

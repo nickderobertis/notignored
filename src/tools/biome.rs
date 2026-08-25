@@ -71,7 +71,7 @@ impl ToolParser for BiomeParser {
         let mut open: Vec<usize> = Vec::new();
 
         for comment in file.comments() {
-            let Some((kind, rules, reason)) = directive(comment) else {
+            let Some((kind, rules, reason)) = directive(&comment.text) else {
                 continue;
             };
             if kind == Kind::End {
@@ -141,12 +141,19 @@ fn close_range(out: &mut [IgnoreDirective], open: &mut Vec<usize>, rules: &[Stri
     out[open.remove(position)].suppressed.end_line = Some(line);
 }
 
-/// Recognize a directive that opens `comment`, returning its kind, rule
-/// selectors and reason.
+/// True when the text after a comment marker opens a Biome suppression.
+///
+/// The line-below boundary uses this; see [`crate::tools::opens_directive`].
+pub(super) fn opens_directive(after_marker: &str) -> bool {
+    directive(after_marker).is_some()
+}
+
+/// Recognize a directive that opens a comment whose body is `text`, returning
+/// its kind, rule selectors and reason.
 ///
 /// Returns `None` for a directive with no `: reason`, which Biome rejects.
-fn directive(comment: &Comment) -> Option<(Kind, Vec<String>, Option<String>)> {
-    let text = comment.text.trim_start();
+fn directive(text: &str) -> Option<(Kind, Vec<String>, Option<String>)> {
+    let text = text.trim_start();
     let (kind, rest) = KEYWORDS.iter().find_map(|&(keyword, kind)| {
         let rest = text.strip_prefix(keyword)?;
         // A word boundary, so `biome-ignoreable` is not a directive.

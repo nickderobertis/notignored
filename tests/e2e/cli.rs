@@ -102,11 +102,16 @@ fn the_multi_tool_tree_renders_every_tool_and_scope_readably() {
             // The footer that earns those reason-less directives their keep is a
             // directive of its own, and an unfiltered scan reports it like any
             // other.
-            "scripts/deploy.sh:10:3 llmlint tool_output_is_signal,suppressions_justified (file) -- fixture\n",
+            "scripts/deploy.sh:10:3 llmlint tool_output_is_signal,suppressions_justified (file) -- \
+              fixture input, not a script this project runs: ShellCheck reads it and nothing \
+              executes it, so the noisy expansions are the violations the parity test needs, and \
+              the reason-less directives are the form it asserts comes back with a null `reason`.\n",
             "src/lints.rs:1:1 rust clippy::needless_return (file)\n",
             "src/lints.rs:4:1 rust dead_code,clippy::needless_collect (next-line)\n",
             "src/lints.rs:10:1 rust dead_code (next-line) -- a justification long enough that it wraps across two lines of the attribute\n",
-            "src/lints.rs:21:4 llmlint suppressions_justified (file) -- the missing reason is the\n",
+            "src/lints.rs:21:4 llmlint suppressions_justified (file) -- the missing reason is the \
+              point: this fixture is the input that proves notignored reports an unjustified \
+              suppression, and the parity test asserts its `reason` comes back null.\n",
             "src/service.py:1:3 llmlint boundary_inputs_validated (file) -- a transport shim: the caller validates before this layer\n",
             "src/service.py:2:12 ruff F401 (line) -- re-exported for the public API\n",
             "src/service.py:4:3 llmlint tool_output_is_signal (block) -- the trace is this module's whole job\n",

@@ -22,12 +22,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "the missing reason is the point:",
+      "reason": "the missing reason is the point: this fixture is the input that proves notignored reports an unjustified suppression, and the parity test asserts its `reason` comes back null.",
       "path": "malformed/disable_error_code_no_value.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 11,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:",
+      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:\n# this fixture is the input that proves notignored reports an unjustified\n# suppression, and the parity test asserts its `reason` comes back null.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -91,12 +91,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: this file is the reason-less form of the directive, and the parity e2e asserts the CLI reports `reason: null` for it. A reason here would delete the only coverage of that form.",
       "path": "mypy/disable_error_code.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 12,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: this file is the reason-less form of the directive, and the parity e2e\n# asserts the CLI reports `reason: null` for it. A reason here would delete the\n# only coverage of that form.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -123,12 +123,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: this file is the reason-less form of the directive, and the parity e2e asserts the CLI reports `reason: null` for it. A reason here would delete the only coverage of that form.",
       "path": "mypy/ignore_errors.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 12,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: this file is the reason-less form of the directive, and the parity e2e\n# asserts the CLI reports `reason: null` for it. A reason here would delete the\n# only coverage of that form.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -155,12 +155,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: this file is the reason-less form of the directive, and the parity e2e asserts the CLI reports `reason: null` for it. A reason here would delete the only coverage of that form.",
       "path": "mypy/line_blanket.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 12,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: this file is the reason-less form of the directive, and the parity e2e\n# asserts the CLI reports `reason: null` for it. A reason here would delete the\n# only coverage of that form.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -238,12 +238,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "the missing reason is the point:",
+      "reason": "the missing reason is the point: this fixture is the input that proves notignored reports an unjustified suppression, and the parity test asserts its `reason` comes back null.",
       "path": "pyright/embedded.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 11,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:",
+      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:\n# this fixture is the input that proves notignored reports an unjustified\n# suppression, and the parity test asserts its `reason` comes back null.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -272,12 +272,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: pyright reads the rest of this line as its item list, so the form cannot carry a reason at all and the parity e2e asserts `reason: null` for it. A reason here would break the directive the fixture exists to prove.",
       "path": "pyright/rule_value.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 12,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: pyright reads the rest of this line as its item list, so the form cannot\n# carry a reason at all and the parity e2e asserts `reason: null` for it. A\n# reason here would break the directive the fixture exists to prove.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -306,12 +306,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: pyright reads the rest of this line as its item list, so the form cannot carry a reason at all and the parity e2e asserts `reason: null` for it. A reason here would break the directive the fixture exists to prove.",
       "path": "pyright/rule_value_behind_code.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 12,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: pyright reads the rest of this line as its item list, so the form cannot\n# carry a reason at all and the parity e2e asserts `reason: null` for it. A\n# reason here would break the directive the fixture exists to prove.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -340,12 +340,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "the missing reason is the point:",
+      "reason": "the missing reason is the point: this fixture is the input that proves notignored reports an unjustified suppression, and the parity test asserts its `reason` comes back null.",
       "path": "ty/embedded.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 11,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:",
+      "raw": "llmlint: ignore-file[suppressions_justified] the missing reason is the point:\n# this fixture is the input that proves notignored reports an unjustified\n# suppression, and the parity test asserts its `reason` comes back null.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -387,12 +387,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: this file is the reason-less form of the directive, and the parity e2e asserts the CLI reports `reason: null` for it. A reason here would delete the only coverage of that form.",
       "path": "ty/line_blanket.py",
       "line": 9,
-      "end_line": 9,
+      "end_line": 12,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: this file is the reason-less form of the directive, and the parity e2e\n# asserts the CLI reports `reason: null` for it. A reason here would delete the\n# only coverage of that form.",
       "suppressed": {
         "start_line": 1,
         "end_line": null

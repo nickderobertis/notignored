@@ -109,12 +109,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: pyright reads the rest of a `<rule>=<value>` line as its own item list, so that form cannot carry a reason at all and the golden report pins it as `reason: null`.",
       "path": "api/service.py",
       "line": 13,
-      "end_line": 13,
+      "end_line": 16,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: pyright reads the rest of a `<rule>=<value>` line as its own item list,\n# so that form cannot carry a reason at all and the golden report pins it as\n# `reason: null`.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -161,12 +161,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: mypy reads a trailing comment on a `# mypy:` line as part of the option value, so the form has no reason to carry and the e2e asserts `reason: null` for it.",
       "path": "api/vendored.py",
       "line": 6,
-      "end_line": 6,
+      "end_line": 9,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: mypy reads a trailing comment on a `# mypy:` line as part of the option\n# value, so the form has no reason to carry and the e2e asserts `reason: null`\n# for it.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -196,12 +196,12 @@
         "comments_earn_their_place",
         "suppressions_justified"
       ],
-      "reason": "a generated",
+      "reason": "a generated table: every name here is upstream's own, and the bare attributes below are the reason-less form the golden report pins as `reason: null`.",
       "path": "crates/tables.rs",
       "line": 4,
-      "end_line": 4,
+      "end_line": 6,
       "column": 4,
-      "raw": "llmlint: ignore-file[comments_earn_their_place, suppressions_justified] a generated",
+      "raw": "llmlint: ignore-file[comments_earn_their_place, suppressions_justified] a generated\n// table: every name here is upstream's own, and the bare attributes below are the\n// reason-less form the golden report pins as `reason: null`.",
       "suppressed": {
         "start_line": 1,
         "end_line": null
@@ -300,12 +300,12 @@
       "rules": [
         "suppressions_justified"
       ],
-      "reason": "fixture input, not production",
+      "reason": "fixture input, not production code: the reason-less `disable=SC2046,SC2116` above is the form the golden report pins as `reason: null`, and a reason there would delete that coverage.",
       "path": "scripts/release.sh",
       "line": 13,
-      "end_line": 13,
+      "end_line": 15,
       "column": 3,
-      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production",
+      "raw": "llmlint: ignore-file[suppressions_justified] fixture input, not production\n# code: the reason-less `disable=SC2046,SC2116` above is the form the golden\n# report pins as `reason: null`, and a reason there would delete that coverage.",
       "suppressed": {
         "start_line": 1,
         "end_line": null

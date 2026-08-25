@@ -50,6 +50,28 @@ pub trait ToolParser: Send + Sync {
     fn parse(&self, file: &SourceFile) -> Vec<IgnoreDirective>;
 }
 
+/// True when `after_marker` — a comment's text with its opening marker removed
+/// — opens a directive for another tool the crate parses.
+///
+/// This is the boundary two parsers need. `python::segments` walks it along one
+/// line, so a `# noqa` never lands in the neighbouring directive's reason; the
+/// llmlint parser walks it one line *down*, so a directive on the line below
+/// never lands in a wrapped justification. Each tool contributes its own
+/// recognizer, so neither has to know another's keywords.
+///
+/// Two tools are absent. Rust's suppressions are attributes rather than
+/// comments, so no comment line can open one. llmlint's own grammar is tested by
+/// its parser directly: folding it in here would make an llmlint directive bound
+/// a ruff or mypy record too, which is a change to those parsers and not this
+/// boundary's to make.
+pub(crate) fn opens_directive(after_marker: &str) -> bool {
+    python::opens_directive(after_marker)
+        || shellcheck::opens_directive(after_marker)
+        || eslint::opens_directive(after_marker)
+        || biome::opens_directive(after_marker)
+        || typescript::opens_directive(after_marker)
+}
+
 /// Every registered parser, in [`Tool::ALL`] order.
 ///
 /// Every tool the contract declares has one, and `tests/tools_contract.rs`
@@ -107,6 +129,40 @@ mod tests {
                 Tool::Llmlint
             ]
         );
+    }
+
+    /// A wrapped reason stops at any tool's directive, so every tool with a
+    /// comment grammar has to be in this union — one that is not would be
+    /// swallowed as the justification of the suppression above it.
+    #[test]
+    fn every_comment_grammar_counts_as_a_directive_opening() {
+        for directive in [
+            " noqa: E501",
+            " ruff: noqa",
+            " type: ignore",
+            " mypy: ignore-errors",
+            " pyright: ignore",
+            " ty: ignore",
+            " shellcheck disable=SC2086",
+            " eslint-disable-next-line no-alert",
+            " eslint-disable-line",
+            " biome-ignore lint/style/useConst: paused on purpose",
+            " @ts-expect-error the API is untyped",
+            " @ts-nocheck",
+        ] {
+            assert!(opens_directive(directive), "{directive:?}");
+        }
+        // Prose, a mode switch this crate does not report, and the two forms
+        // their own tools honour only in a block comment.
+        for prose in [
+            " and the rest of the sentence",
+            " pyright: basic",
+            " shellcheckish",
+            " eslint-disable",
+            " eslint-enable",
+        ] {
+            assert!(!opens_directive(prose), "{prose:?}");
+        }
     }
 
     /// A parser needs nothing beyond the three contract methods to be
