@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.13](https://github.com/nickderobertis/notignored/compare/v0.1.12...v0.1.13) - 2026-08-25
+
+### Fixed
+
+- *(llmlint)* read a wrapped suppression reason to its end ([#47](https://github.com/nickderobertis/notignored/pull/47))
+
 ## [0.1.12](https://github.com/nickderobertis/notignored/compare/v0.1.11...v0.1.12) - 2026-08-08
 
 ### Fixed
