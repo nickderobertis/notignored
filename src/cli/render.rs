@@ -9,7 +9,7 @@ use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
 
-use crate::model::{IgnoreDirective, Report};
+use crate::model::{Change, IgnoreDirective, Report};
 
 // The colour roles of the human line, one per field a reader scans for. Whether
 // they are applied is the caller's decision (a plain `bool`) so this module stays
@@ -31,6 +31,13 @@ const RULES: Style = AnsiColor::Yellow.on_default().bold();
 const BLANKET: Style = AnsiColor::Red.on_default().bold();
 /// How far the directive reaches.
 const SCOPE: Style = AnsiColor::Blue.on_default();
+/// The `(justification edited)` token a directive carries when the change
+/// rewrote its reason and nothing else.
+///
+/// Green, because it qualifies the finding *downward* — the change silenced
+/// nothing new here — and in its plain weight so it does not compete with the
+/// summary's bold verdict for the eye.
+const EDITED: Style = AnsiColor::Green.on_default();
 /// The stated justification, and the `--` that introduces it.
 const REASON: Style = Style::new().dimmed();
 /// The `notignored:` label the summary opens with.
@@ -49,6 +56,52 @@ fn paint(text: &str, style: Style, color: bool) -> String {
         format!("{style}{text}{style:#}")
     } else {
         text.to_string()
+    }
+}
+
+/// How a classified report's suppressions divide between the two things a
+/// change can do to one.
+///
+/// The human summary and the comment heading both name these two numbers, so
+/// they are counted in one place rather than in two spellings that could drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChangeCounts {
+    /// Suppressions the change wrote.
+    pub added: usize,
+    /// Suppressions that were already there, whose stated justification is what
+    /// the change rewrote.
+    pub justification_edited: usize,
+}
+
+impl ChangeCounts {
+    /// How `report` divides, or `None` when it carries no classification at all.
+    ///
+    /// A run without `--diff` leaves every record unclassified — and so, having
+    /// no records, does a `--diff` run that found nothing. Both are `None`: with
+    /// nothing found there is nothing to have been added or edited, and every
+    /// surface says exactly what it said before there was a word for the
+    /// difference.
+    ///
+    /// A record whose `change` is unset inside a classified report counts as
+    /// added, the same reading the action's own count takes of a report an older
+    /// build wrote.
+    pub fn of(report: &Report) -> Option<ChangeCounts> {
+        if !report
+            .ignores
+            .iter()
+            .any(|directive| directive.change.is_some())
+        {
+            return None;
+        }
+        let justification_edited = report
+            .ignores
+            .iter()
+            .filter(|directive| directive.change == Some(Change::JustificationEdited))
+            .count();
+        Some(ChangeCounts {
+            added: report.ignores.len() - justification_edited,
+            justification_edited,
+        })
     }
 }
 
@@ -95,25 +148,66 @@ pub fn render_human_colored(
     } else {
         FOUND
     };
-    writeln!(
-        err,
-        "{} {} {} {}",
-        paint("notignored:", LABEL, color),
-        paint(
+    let tally = match ChangeCounts::of(report) {
+        // A classified report names both numbers, zeros included: "your change
+        // edited none" is an answer a reviewer wants, and a summary whose shape
+        // depends on the numbers is one more thing to read wrong.
+        Some(counts) => format!(
+            "{}, {}",
+            paint(
+                &format!("{} added", counts.added),
+                count_style(counts.added),
+                color
+            ),
+            paint(
+                &plural_edited(counts.justification_edited),
+                count_style(counts.justification_edited),
+                color
+            ),
+        ),
+        None => paint(
             &plural(report.ignores.len(), "ignore", "ignores"),
             found,
-            color
+            color,
         ),
+    };
+    writeln!(
+        err,
+        "{} {tally} {} {}",
+        paint("notignored:", LABEL, color),
         paint("in", LABEL, color),
         paint(&plural(files.len(), "file", "files"), found, color),
     )?;
     Ok(())
 }
 
+/// The styling one count of the summary carries: the all-clear when it is zero,
+/// the found colour when it is not.
+fn count_style(count: usize) -> Style {
+    if count == 0 {
+        CLEAN
+    } else {
+        FOUND
+    }
+}
+
+/// `1 justification edited` / `3 justifications edited` — the noun pluralizes,
+/// never the shorthand: a summary that says only "edited" leaves the reader to
+/// guess whether the silenced code moved.
+fn plural_edited(count: usize) -> String {
+    format!(
+        "{} edited",
+        plural(count, "justification", "justifications")
+    )
+}
+
 /// One suppression as `path:line:column tool rules (scope) -- reason`.
 ///
 /// A blanket suppression renders its rules as `*`; a directive with no stated
-/// reason drops the `-- …` tail.
+/// reason drops the `-- …` tail. A directive a `--diff` run classified as a
+/// rewritten justification carries one more token, right after the scope: the
+/// change silenced nothing new there, and the line has to say so before the
+/// reason it is about to quote.
 fn human_line(directive: &IgnoreDirective, color: bool) -> String {
     let rules = if directive.rules.is_empty() {
         paint("*", BLANKET, color)
@@ -131,6 +225,10 @@ fn human_line(directive: &IgnoreDirective, color: bool) -> String {
         rules,
         paint(&format!("({})", directive.scope), SCOPE, color),
     );
+    if directive.change == Some(Change::JustificationEdited) {
+        line.push(' ');
+        line.push_str(&paint("(justification edited)", EDITED, color));
+    }
     if let Some(reason) = &directive.reason {
         line.push(' ');
         line.push_str(&paint(&format!("-- {reason}"), REASON, color));
@@ -175,6 +273,7 @@ mod tests {
                     end_line: Some(12),
                 },
             },
+            change: None,
         }
     }
 
@@ -230,6 +329,137 @@ mod tests {
         assert_eq!(err, "notignored: 0 ignores in 0 files\n");
     }
 
+    /// The same directive as a `--diff` run classified it.
+    fn classified(change: Change, rules: &[&str], reason: Option<&str>) -> IgnoreDirective {
+        IgnoreDirective {
+            change: Some(change),
+            ..directive(rules, reason, Scope::Line)
+        }
+    }
+
+    /// The token goes between the scope and the reason, so the line says what
+    /// kind of finding it is before it quotes the justification.
+    #[test]
+    fn a_rewritten_justification_is_named_on_the_line_after_its_scope() {
+        let mut report = Report::new();
+        report.ignores.push(classified(
+            Change::JustificationEdited,
+            &["E501"],
+            Some("long wrapped URL"),
+        ));
+        let (out, err) = human(&report);
+        assert_eq!(
+            out,
+            "src/app.py:12:20 ruff E501 (line) (justification edited) -- long wrapped URL\n"
+        );
+        assert_eq!(
+            err,
+            "notignored: 0 added, 1 justification edited in 1 file\n"
+        );
+    }
+
+    /// Everything this node left alone: an added directive renders the line an
+    /// unclassified run renders, byte for byte.
+    #[test]
+    fn an_added_directive_renders_exactly_what_an_unclassified_one_does() {
+        let mut added = Report::new();
+        added.ignores.push(classified(
+            Change::Added,
+            &["E501"],
+            Some("long wrapped URL"),
+        ));
+        let mut unclassified = Report::new();
+        unclassified
+            .ignores
+            .push(directive(&["E501"], Some("long wrapped URL"), Scope::Line));
+        assert_eq!(human(&added).0, human(&unclassified).0);
+        // Only the summary differs, and only because it now has two answers.
+        assert_eq!(
+            human(&added).1,
+            "notignored: 1 added, 0 justifications edited in 1 file\n"
+        );
+        assert_eq!(human(&unclassified).1, "notignored: 1 ignore in 1 file\n");
+    }
+
+    /// Both counts, always, with the noun pluralized on each side.
+    #[test]
+    fn a_classified_summary_names_both_counts_including_the_zero() {
+        let mut report = Report::new();
+        report
+            .ignores
+            .push(classified(Change::Added, &["E501"], Some("why")));
+        report
+            .ignores
+            .push(classified(Change::Added, &["F401"], Some("why")));
+        report
+            .ignores
+            .push(classified(Change::JustificationEdited, &["E501"], None));
+        assert_eq!(
+            human(&report).1,
+            "notignored: 2 added, 1 justification edited in 1 file\n"
+        );
+
+        report
+            .ignores
+            .push(classified(Change::JustificationEdited, &["F401"], None));
+        assert_eq!(
+            human(&report).1,
+            "notignored: 2 added, 2 justifications edited in 1 file\n"
+        );
+    }
+
+    /// A `--diff` run that found nothing has nothing to divide, so it says what
+    /// it always said.
+    #[test]
+    fn a_report_with_no_findings_carries_no_classification_to_count() {
+        assert_eq!(ChangeCounts::of(&Report::new()), None);
+        assert_eq!(
+            human(&Report::new()).1,
+            "notignored: 0 ignores in 0 files\n"
+        );
+
+        let mut classified_report = Report::new();
+        classified_report
+            .ignores
+            .push(classified(Change::Added, &["E501"], None));
+        assert_eq!(
+            ChangeCounts::of(&classified_report),
+            Some(ChangeCounts {
+                added: 1,
+                justification_edited: 0
+            })
+        );
+    }
+
+    /// The marker is a role of its own, not the scope's colour with more words
+    /// in it, and each count of the summary is coloured by its own answer.
+    #[test]
+    fn the_edited_marker_and_both_counts_carry_their_own_colours() {
+        let mut report = Report::new();
+        report.ignores.push(classified(
+            Change::JustificationEdited,
+            &["E501"],
+            Some("long wrapped URL"),
+        ));
+        let (out, err) = colored(&report, true);
+        assert!(
+            out.contains(&format!("{EDITED}(justification edited){EDITED:#}")),
+            "{out:?}"
+        );
+        assert_ne!(
+            EDITED.render().to_string(),
+            SCOPE.render().to_string(),
+            "the marker is indistinguishable from the scope beside it"
+        );
+        // Nothing added is the all-clear answer to half the question, and one
+        // rewritten justification is the found answer to the other half.
+        assert!(err.contains(&format!("{CLEAN}0 added{CLEAN:#}")), "{err:?}");
+        assert!(
+            err.contains(&format!("{FOUND}1 justification edited{FOUND:#}")),
+            "{err:?}"
+        );
+    }
+
     #[test]
     fn scan_errors_are_narrated_on_stderr() {
         let mut report = Report::new();
@@ -278,6 +508,11 @@ mod tests {
             .ignores
             .push(directive(&["E501"], Some("long wrapped URL"), Scope::Line));
         report.ignores.push(directive(&[], None, Scope::File));
+        report.ignores.push(classified(
+            Change::JustificationEdited,
+            &["F401"],
+            Some("re-exported on purpose"),
+        ));
 
         let (plain_out, plain_err) = colored(&report, false);
         let (color_out, color_err) = colored(&report, true);

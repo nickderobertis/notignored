@@ -78,6 +78,7 @@ impl ToolParser for RustParser {
                 column: attribute.column,
                 raw: attribute.raw.clone(),
                 suppressed: suppressed_range(file, attribute),
+                change: None,
             });
         }
         out

@@ -5,10 +5,13 @@
 # every body with, so a pull request accumulates a single comment that is edited
 # in place rather than one comment per push. With nothing to report and no
 # previous comment, nothing is posted at all: a pull request that adds no
-# suppressions stays clean.
+# suppressions and rewrites no justification stays clean.
 #
-# Reads BODY_FILE (the rendered body), COUNT (how many suppressions it names),
-# and GH_TOKEN. PR_NUMBER is taken from the event payload when it is not set.
+# Reads BODY_FILE (the rendered body), COUNT (how many suppressions the change
+# added), and GH_TOKEN. JUSTIFICATION_EDITED_COUNT — how many existing
+# suppressions had their justification rewritten — is optional and defaults to 0,
+# so a caller that predates it behaves exactly as it did. PR_NUMBER is taken from
+# the event payload when it is not set.
 set -euo pipefail
 
 # The marker `notignored`'s markdown renderer writes; tests/action_contract.rs
@@ -50,6 +53,9 @@ BODY_FILE="${BODY_FILE:-}"
     "point it at the body the scan step rendered"
 COUNT="${COUNT:-}"
 [ -n "$COUNT" ] || die "COUNT is not set" "pass the scan step's count output"
+# Optional, and zero when it is missing: a workflow calling this script without
+# it is a caller from before the count existed, not a broken one.
+EDITED="${JUSTIFICATION_EDITED_COUNT:-0}"
 API="${GITHUB_API_URL:-https://api.github.com}"
 case "$API" in
     http://*|https://*) ;;
@@ -61,6 +67,10 @@ esac
     "check that the scan step ran and wrote its body"
 case "$COUNT" in
     '' | *[!0-9]*) die "COUNT is not a count: '$COUNT'" "pass the scan step's count output" ;;
+esac
+case "$EDITED" in
+    '' | *[!0-9]*) die "JUSTIFICATION_EDITED_COUNT is not a count: '$EDITED'" \
+        "pass the scan step's justification-edited-count output, or leave it unset" ;;
 esac
 
 # The pull request to comment on. The payload is read as data — never
@@ -88,17 +98,30 @@ found="$(gh api --paginate "$API/repos/$GITHUB_REPOSITORY/issues/$NUMBER/comment
     --jq "map(select((.body // \"\") | contains(\"$MARKER\"))) | .[0].id // empty")" \
     || die "cannot list the comments on #$NUMBER" "$TOKEN_HINT"
 existing="${found%%$'\n'*}"
+# Interpolated into the API path below, so it is bounded like every other value
+# that is: an id is digits, and anything else is an answer this script did not
+# ask for rather than a comment to edit.
+case "$existing" in
+    '' | *[!0-9]*)
+        [ -z "$existing" ] || die "the API named comment '$existing', which is not an id" \
+            "check GITHUB_API_URL — the host answering is not the GitHub API" ;;
+esac
+
+tally="$COUNT suppression(s) added, $EDITED justification(s) edited"
 
 if [ -n "$existing" ]; then
     gh api --silent -X PATCH "$API/repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
         -F "body=@$BODY_FILE" \
         || die "cannot update comment $existing" "$TOKEN_HINT"
-    printf 'notignored: updated comment %s (%s suppression(s))\n' "$existing" "$COUNT"
-elif [ "$COUNT" -gt 0 ]; then
+    printf 'notignored: updated comment %s (%s)\n' "$existing" "$tally"
+# Anything to report earns a comment, added or rejustified. Posting only on
+# additions would say nothing at all about a pull request that rewrote every
+# justification it touched — the very confusion this comment exists to remove.
+elif [ "$COUNT" -gt 0 ] || [ "$EDITED" -gt 0 ]; then
     gh api --silent -X POST "$API/repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" \
         -F "body=@$BODY_FILE" \
         || die "cannot comment on #$NUMBER" "$TOKEN_HINT"
-    printf 'notignored: commented on #%s (%s suppression(s))\n' "$NUMBER" "$COUNT"
+    printf 'notignored: commented on #%s (%s)\n' "$NUMBER" "$tally"
 else
-    printf 'notignored: no suppressions added and no comment to update — posted nothing\n'
+    printf 'notignored: no suppressions added, no justifications edited, and no comment to update — posted nothing\n'
 fi

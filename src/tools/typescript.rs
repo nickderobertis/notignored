@@ -72,6 +72,7 @@ impl ToolParser for TypescriptParser {
                     column: comment.column,
                     raw: comment.raw.clone(),
                     suppressed: suppressed_range(scope, comment),
+                    change: None,
                 })
             })
             .collect()

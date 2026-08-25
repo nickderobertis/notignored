@@ -43,6 +43,8 @@ def test_a_directive_arrives_as_the_whole_record(tree: Path) -> None:
             column=source.index("# noqa") + 1,
             raw="# noqa: E501  # the vendor's documented endpoint",
             suppressed=Suppressed(start_line=1, end_line=1),
+            # A tree scan has no base, so it says nothing about what changed.
+            change=None,
         ),
     )
 

@@ -266,36 +266,63 @@ test("an envelope from a newer build is refused with the upgrade to make", unix,
 });
 
 /**
- * Strict in both directions, at every object in the contract.
+ * A field this SDK has never heard of is carried past, at every object in the
+ * contract.
  *
- * A reader that checked only the fields it knew would accept a record whose
- * meaning had changed under it — a `severity`, a `superseded_by` — and hand the
- * caller a report that quietly says less than the one it was given. Each case
- * below is one object boundary carrying a field version 1 does not define.
+ * This reader used to refuse them, so that a record whose *meaning* had changed
+ * under it — a `severity`, a `superseded_by` — could not be handed on as if it
+ * had not. The price was higher than the protection: the record contract's own
+ * rule is that new fields are optional and additive, so every field the crate
+ * adds within version 1 would break every consumer holding an older SDK, over
+ * something none of them reads. The version check is where an envelope that
+ * really has changed meaning is caught.
  */
-for (const [mode, at, field] of [
-  ["extra-report", "the report", "superseded_by"],
-  ["extra-directive", "the report.ignores[0]", "severity"],
-  ["extra-suppressed", "the report.ignores[0].suppressed", "end_column"],
-  ["extra-error", "the report.errors[0]", "kind"],
+for (const [mode, at] of [
+  ["extra-report", "the report"],
+  ["extra-directive", "the report.ignores[0]"],
+  ["extra-suppressed", "the report.ignores[0].suppressed"],
+  ["extra-error", "the report.errors[0]"],
 ]) {
-  test(`an unknown field on ${at} is refused`, unix, async (t) => {
+  test(`an unknown field on ${at} is carried past`, unix, async (t) => {
     override(t, notNotignored(t, mode));
 
-    await assert.rejects(scan(["."]), (error) => {
-      assert.ok(
-        error instanceof NotignoredContractError,
-        `${error.name} is not a contract error`,
+    const report = await scan(["."]);
+
+    assert.equal(report.version, 1);
+    // Everything the contract *does* define still reads exactly as it says: the
+    // field nobody knew about is ignored, not allowed to swallow its neighbours.
+    if (mode === "extra-error") {
+      assert.deepEqual(report.errors, [
+        { path: "locked.py", message: "Permission denied (os error 13)" },
+      ]);
+    } else {
+      assert.deepEqual(
+        report.ignores.map((directive) => [directive.rules, directive.change]),
+        [[["F401"], null]],
       );
-      assert.ok(
-        error.message.includes(`${at} carries an unknown field "${field}"`),
-        `the message does not name ${at}.${field}: ${error.message}`,
-      );
-      assert.match(error.message, /upgrade notignored-sdk/);
-      return true;
-    });
+    }
   });
 }
+
+/**
+ * What is *not* carried past: a word the contract defines the vocabulary of.
+ *
+ * An unknown `change` is the same call as an unknown tool — reporting a
+ * suppression as something this SDK cannot read would be guessing at what a
+ * reviewer is told.
+ */
+test("a change word the contract does not define is refused", unix, async (t) => {
+  override(t, notNotignored(t, "bad-change"));
+
+  await assert.rejects(scan(["."]), (error) => {
+    assert.ok(
+      error instanceof NotignoredContractError,
+      `${error.name} is not a contract error`,
+    );
+    assert.match(error.message, /the report\.ignores\[0\]\.change should be one of added/);
+    return true;
+  });
+});
 
 /** The other direction, at the same four boundaries. */
 for (const [mode, wanted] of [

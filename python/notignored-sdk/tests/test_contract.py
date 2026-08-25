@@ -2,12 +2,15 @@
 
 A working `notignored` cannot print any of these payloads — the SDK pins its CLI
 exactly, which is what makes strictness safe — so there is no real run that
-produces one. Rather than fabricate a CLI that would, these call the real strict
-reader with the payload a *newer or broken* build would emit. Nothing is mocked:
-the code under test is the code that ships, invoked directly.
+produces one. These call the real strict reader with the payload a *newer or
+broken* build would emit, field by field. Nothing is mocked: the code under test
+is the code that ships, invoked directly.
 
-The plumbing that carries its verdict out through `scan()` is proven separately,
-against a real subprocess, in `test_errors.py`.
+Two things are proven elsewhere, both against a real subprocess: the plumbing
+that carries any verdict out through `scan()` (`test_errors.py`), and the one
+branch a user reaches by upgrading the CLI past the SDK — a report naming a word
+this version's contract does not define — which `test_vocabulary.py` drives
+end to end through `scan` and `ascan`.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from typing import Any
 import pytest
 from conftest import report_payload
 
-from notignored_sdk import NotignoredContractError, Scope, Suppressed, Tool
+from notignored_sdk import Change, NotignoredContractError, Scope, Suppressed, Tool
 from notignored_sdk._model import report_from_payload
 
 
@@ -123,3 +126,21 @@ def test_a_field_this_sdk_has_never_heard_of_is_carried_past() -> None:
     )
 
     assert report.ignores[0].tool is Tool.RUFF
+
+
+def test_a_change_word_this_sdk_does_not_know_is_an_error_not_a_guess() -> None:
+    """The same rule an unknown tool gets: a word we cannot read is not one to guess."""
+    with pytest.raises(NotignoredContractError, match="which this SDK does not know"):
+        report_from_payload(report_payload(directive={"change": "rewritten"}))
+
+    with pytest.raises(NotignoredContractError, match="not a string or null"):
+        report_from_payload(report_payload(directive={"change": 3}))
+
+
+def test_an_absent_change_is_none_rather_than_a_third_value() -> None:
+    """A payload without it is what every scan that is not `--diff` produces."""
+    assert report_from_payload(report_payload()).ignores[0].change is None
+    assert (
+        report_from_payload(report_payload(directive={"change": "added"})).ignores[0].change
+        is Change.ADDED
+    )

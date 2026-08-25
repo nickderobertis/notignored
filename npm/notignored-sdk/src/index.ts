@@ -23,6 +23,7 @@ import { isTool, parseReport, toolNames, type Report, type Tool } from "./contra
 import { NotignoredExitError, NotignoredSpawnError, NotignoredUsageError } from "./errors.js";
 
 export type {
+  Change,
   IgnoreDirective,
   Report,
   ReportError,

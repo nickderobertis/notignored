@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use crate::support::repo_root;
+use crate::support::{commit, git_repo, repo_root, write};
 
 /// The repository and pull request the journeys pretend to run against.
 const REPO: &str = "acme/widgets";
@@ -52,16 +52,22 @@ impl LocalGitHub {
     /// Start a server whose comment list either holds the sticky comment or does
     /// not.
     fn start(sticky: Option<u64>) -> LocalGitHub {
-        LocalGitHub::listen(sticky, true)
+        LocalGitHub::listen(sticky.map(|id| id.to_string()), true)
+    }
+
+    /// The same server, whose sticky comment's `id` field is the JSON `id`
+    /// verbatim — including a shape the real API never answers with.
+    fn answering_with_id(id: &str) -> LocalGitHub {
+        LocalGitHub::listen(Some(id.to_string()), true)
     }
 
     /// The same server, but refusing every write the way GitHub refuses a token
     /// without `pull-requests: write`.
     fn refusing_writes(sticky: Option<u64>) -> LocalGitHub {
-        LocalGitHub::listen(sticky, false)
+        LocalGitHub::listen(sticky.map(|id| id.to_string()), false)
     }
 
-    fn listen(sticky: Option<u64>, writable: bool) -> LocalGitHub {
+    fn listen(sticky: Option<String>, writable: bool) -> LocalGitHub {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the local API");
         let address = format!(
             "http://{}",
@@ -72,6 +78,7 @@ impl LocalGitHub {
 
         let (log, alive) = (Arc::clone(&requests), Arc::clone(&running));
         let server = std::thread::spawn(move || {
+            let sticky = sticky.as_deref();
             for stream in listener.incoming() {
                 if !alive.load(Ordering::SeqCst) {
                     break;
@@ -121,7 +128,7 @@ impl Drop for LocalGitHub {
 /// Answer one request and record it.
 fn serve(
     stream: &mut TcpStream,
-    sticky: Option<u64>,
+    sticky: Option<&str>,
     writable: bool,
     log: &Mutex<Vec<Recorded>>,
 ) -> std::io::Result<()> {
@@ -563,4 +570,174 @@ fn a_missing_body_file_fails_with_the_fix() {
     assert!(stderr.contains("does not exist"), "{stderr}");
     assert!(stderr.contains("ACTION:"), "{stderr}");
     assert!(api.requests().is_empty(), "{:#?}", api.requests());
+}
+
+/// The body a pull request that only rewrote justifications actually renders,
+/// with the repository it was rendered from.
+///
+/// Built rather than checked in: the goldens are unclassified scans, and the
+/// question here is what the script does with a body whose heading counts no
+/// additions at all. The binary renders it from a real branch, so the body the
+/// upsert carries is the body a reviewer would have received.
+fn rejustified_body() -> (tempfile::TempDir, PathBuf) {
+    let repo = git_repo();
+    write(
+        repo.path(),
+        "src/app.py",
+        "import os  # noqa: F401  # imported for its side effects\n",
+    );
+    commit(repo.path(), "base");
+    write(
+        repo.path(),
+        "src/app.py",
+        "import os  # noqa: F401  # re-exported so callers can configure retries\n",
+    );
+    commit(repo.path(), "reword the justification");
+
+    let rendered = crate::support::notignored(repo.path())
+        .args(["--diff", "--diff-base", "HEAD~1", "--format", "markdown"])
+        .output()
+        .expect("render the comment body");
+    assert!(
+        rendered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    let body = String::from_utf8(rendered.stdout).expect("a UTF-8 comment body");
+    assert!(
+        body.contains("### notignored: 1 justification edited"),
+        "the branch did not render a rejustified body:\n{body}"
+    );
+    let path = repo.path().join("comment.md");
+    std::fs::write(&path, &body).expect("write the rendered body");
+    (repo, path)
+}
+
+/// The pull request this whole distinction exists for: it added no suppression,
+/// so the additions count is zero — and it still has something to tell the
+/// reviewer, so it still gets a comment.
+#[test]
+fn a_pull_request_that_only_rewrote_a_justification_still_gets_its_comment() {
+    let api = LocalGitHub::start(None);
+    let (_repo, body) = rejustified_body();
+    let output = comment_with(
+        &api,
+        &[
+            ("BODY_FILE", &body.to_string_lossy()),
+            ("COUNT", "0"),
+            ("JUSTIFICATION_EDITED_COUNT", "1"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let writes = api.writes();
+    assert_eq!(writes.len(), 1, "{writes:#?}");
+    assert_eq!(writes[0].method, "POST");
+    assert_eq!(
+        posted_body(&writes[0]),
+        std::fs::read_to_string(&body).expect("the rendered body"),
+        "the comment body is not the rendered report"
+    );
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        log.contains("0 suppression(s) added, 1 justification(s) edited"),
+        "the log line names one number or the wrong words: {log}"
+    );
+}
+
+/// The same pull request on its second push edits the comment the first one
+/// left, exactly as an addition-only one does.
+#[test]
+fn a_second_push_that_only_rewrote_a_justification_edits_the_same_comment() {
+    let api = LocalGitHub::start(Some(STICKY_ID));
+    let (_repo, body) = rejustified_body();
+    let output = comment_with(
+        &api,
+        &[
+            ("BODY_FILE", &body.to_string_lossy()),
+            ("COUNT", "0"),
+            ("JUSTIFICATION_EDITED_COUNT", "1"),
+        ],
+    );
+    assert!(output.status.success(), "{:?}", output.status);
+
+    let writes = api.writes();
+    assert_eq!(writes.len(), 1, "a second comment was posted: {writes:#?}");
+    assert_eq!(writes[0].method, "PATCH");
+    assert_eq!(
+        writes[0].path,
+        format!("/repos/{REPO}/issues/comments/{STICKY_ID}")
+    );
+}
+
+/// A caller that never heard of the second count is a caller from before it
+/// existed, not a broken one: unset means zero, and the decision is the one it
+/// has always been.
+#[test]
+fn an_unset_second_count_behaves_as_it_did_before_there_was_one() {
+    let clean = LocalGitHub::start(None);
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/action/comment.sh"))
+        .env("GITHUB_REPOSITORY", REPO)
+        .env("GITHUB_API_URL", &clean.address)
+        .env("PR_NUMBER", PULL_REQUEST)
+        .env("BODY_FILE", golden_body(0))
+        .env("COUNT", "0")
+        .env("GH_TOKEN", "local-token")
+        .env_remove("JUSTIFICATION_EDITED_COUNT")
+        .env_remove("GITHUB_EVENT_PATH")
+        .output()
+        .expect("run comment.sh");
+    assert!(output.status.success(), "{:?}", output.status);
+    assert!(clean.writes().is_empty(), "{:#?}", clean.writes());
+
+    // And an addition with no second count still posts.
+    let adding = LocalGitHub::start(None);
+    let output = Command::new("bash")
+        .arg(repo_root().join("scripts/action/comment.sh"))
+        .env("GITHUB_REPOSITORY", REPO)
+        .env("GITHUB_API_URL", &adding.address)
+        .env("PR_NUMBER", PULL_REQUEST)
+        .env("BODY_FILE", golden_body(1))
+        .env("COUNT", "1")
+        .env("GH_TOKEN", "local-token")
+        .env_remove("JUSTIFICATION_EDITED_COUNT")
+        .env_remove("GITHUB_EVENT_PATH")
+        .output()
+        .expect("run comment.sh");
+    assert!(output.status.success(), "{:?}", output.status);
+    assert_eq!(adding.writes().len(), 1, "{:#?}", adding.writes());
+    assert_eq!(adding.writes()[0].method, "POST");
+}
+
+/// Set, it is held to the same shape as the count beside it: a mis-wired
+/// workflow must fail rather than post a comment under the wrong rule.
+#[test]
+fn a_second_count_that_is_not_a_number_is_refused_when_it_is_set() {
+    let api = LocalGitHub::start(None);
+    let output = comment_with(&api, &[("JUSTIFICATION_EDITED_COUNT", "several")]);
+    assert_failed(&output, &api, "JUSTIFICATION_EDITED_COUNT is not a count");
+}
+
+/// The comment id comes back from the network and is interpolated into the next
+/// request's path, so it is bounded like every other value that is.
+///
+/// A host answering something other than the GitHub API — a proxy, a
+/// misconfigured `GITHUB_API_URL` — is the case this catches: an "id" that is
+/// not digits would aim the PATCH somewhere nobody asked for, and the script
+/// stops with the knob to check instead.
+#[test]
+fn an_id_the_api_answered_with_that_is_not_an_id_is_refused() {
+    let api = LocalGitHub::answering_with_id(r#""77/../../evil""#);
+    let output = comment_with(&api, &[]);
+    assert_failed(&output, &api, "which is not an id");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("GITHUB_API_URL"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

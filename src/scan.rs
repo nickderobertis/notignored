@@ -12,7 +12,7 @@ use ignore::WalkBuilder;
 use crate::model::{Report, ReportError, Tool};
 use crate::source::{display_path, Language, SourceFile};
 use crate::tools::llmlint::LlmlintParser;
-use crate::tools::registry_for;
+use crate::tools::{registry_for, ToolParser};
 
 /// What to look for in the selected files.
 #[derive(Debug, Clone, Default)]
@@ -84,26 +84,7 @@ pub fn scan_files(files: &[PathBuf], options: &ScanOptions) -> Report {
             continue;
         }
         match SourceFile::read(path) {
-            Ok(file) => {
-                for parser in &parsers {
-                    if !parser.applies_to(&file) {
-                        continue;
-                    }
-                    // `ToolParser::parse` hands back directives and nothing
-                    // else — that trait is a fixed contract. llmlint is the one
-                    // syntax whose directive can be malformed in a way an
-                    // `IgnoreDirective` cannot express (an `ignore-block` left
-                    // open), so its parser keeps the richer result as an
-                    // inherent method and the scan integrates it here instead.
-                    if parser.tool() == Tool::Llmlint {
-                        let scanned = LlmlintParser.scan(&file);
-                        report.ignores.extend(scanned.directives);
-                        report.errors.extend(scanned.errors);
-                    } else {
-                        report.ignores.extend(parser.parse(&file));
-                    }
-                }
-            }
+            Ok(file) => parse_into(&mut report, &file, &parsers),
             Err(error) => report.errors.push(ReportError {
                 path: display_path(path),
                 message: error.to_string(),
@@ -112,6 +93,42 @@ pub fn scan_files(files: &[PathBuf], options: &ScanOptions) -> Report {
     }
     report.sort();
     report
+}
+
+/// Parse every directive out of source already in memory.
+///
+/// The one entry point for a file that is not on disk: `--diff` reads a changed
+/// file's contents *at the base* out of git, and classifying what the change did
+/// to a directive only means anything if the previous contents went through the
+/// same parsers, under the same `--tool` narrowing, as the file on disk did.
+pub fn scan_source(file: &SourceFile, options: &ScanOptions) -> Report {
+    let mut report = Report::new();
+    if Language::from_path(file.path()).is_scannable() {
+        parse_into(&mut report, file, &registry_for(&options.tools));
+    }
+    report.sort();
+    report
+}
+
+/// Run every applicable parser over one file, appending to `report`.
+fn parse_into(report: &mut Report, file: &SourceFile, parsers: &[Box<dyn ToolParser>]) {
+    for parser in parsers {
+        if !parser.applies_to(file) {
+            continue;
+        }
+        // `ToolParser::parse` hands back directives and nothing else — that
+        // trait is a fixed contract. llmlint is the one syntax whose directive
+        // can be malformed in a way an `IgnoreDirective` cannot express (an
+        // `ignore-block` left open), so its parser keeps the richer result as an
+        // inherent method and the scan integrates it here instead.
+        if parser.tool() == Tool::Llmlint {
+            let scanned = LlmlintParser.scan(file);
+            report.ignores.extend(scanned.directives);
+            report.errors.extend(scanned.errors);
+        } else {
+            report.ignores.extend(parser.parse(file));
+        }
+    }
 }
 
 /// Discover and scan in one step.

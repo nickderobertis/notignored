@@ -1,7 +1,5 @@
 # AGENTS.md — `notignored-sdk` (TypeScript)
 
-Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
-
 - **The public surface is `scan` plus the contract types and the error classes,
   and nothing else** — `test/surface.test.mjs` reads the emitted `.d.ts` and
   fails on any addition. `src/binary.ts` and `src/contract.ts` are internals
@@ -20,15 +18,15 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
 - **The record types are the JSON's names** — `start_line`, not `startLine`. A
   camelCase mirror would be a second spelling of a published contract, and the
   first field added upstream would land in only one of them.
-- **Validation at the boundary is strict in both directions.** An unknown tool
-  or scope, a missing field, an envelope from a newer build — and a field this
-  version does not define, at any of the four objects (`Report`,
-  `IgnoreDirective`, `Suppressed`, `ReportError`) — is a
-  `NotignoredContractError`. A suppression reporter that silently skipped a
-  record it did not recognise would report an unjustified suppression as absent.
-  The price is real and deliberate: **adding a field to the crate's record means
-  adding it to the field lists in `src/contract.ts` in the same change**, or
-  this reader refuses the new build's reports even within version 1.
+- **Validation is strict about what the contract specifies, and tolerant about
+  keys.** An unknown tool, scope or `change`, a missing or mistyped field, an
+  envelope from a newer build — each is a `NotignoredContractError`, because a
+  suppression reporter that silently skipped a record it did not recognise would
+  report an unjustified suppression as absent. A field this version has never
+  heard of is **carried past**, at every object in the envelope: the record
+  contract's rule is that new fields are additive, so refusing one would break
+  this SDK against a CLI that had only added something, and the version check
+  already catches an envelope whose meaning has really moved.
 - **Do not confuse this with `npm/notignored/`.** That is the CLI launcher whose
   `PACKAGES` map `tests/packaging_contract.rs` locks against the release
   matrices. This publishes `notignored-sdk`, from `scripts/pack.mjs`.

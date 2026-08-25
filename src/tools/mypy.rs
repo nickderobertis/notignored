@@ -75,6 +75,7 @@ impl ToolParser for MypyParser {
                 column: segment.column,
                 raw: segment.raw.to_string(),
                 suppressed: suppressed_range(scope, comment.line),
+                change: None,
             });
         }
         out

@@ -53,6 +53,14 @@ its additions **appended**, not interleaved: `--diff` reports a directive when t
 change added a line it occupies, so inserting above an existing directive would
 report that one too and the scene would stop being about new suppressions.
 
+It also **rewrites one existing reason** — `src/api_client.py`'s
+`type: ignore[import-untyped]` — and that edit is load-bearing: it is what makes
+the `diff` and `pr-comment` scenes show a `justification edited` entry beside the
+added ones, under a heading and a summary counting both. A change that only
+added would photograph a comment that cannot show the distinction. Keep the
+reworded line's length inside the 102-column wrap, and keep it the *only*
+in-place edit, so every other entry in those scenes stays an addition.
+
 **Consistent text size.** Every scene renders at a fixed window width (`freeze
 --width 919`, with `--wrap 102` folding the few over-wide lines — the markdown
 permalinks, mostly), so the gallery and README — which display each SVG at one

@@ -84,6 +84,7 @@ impl ToolParser for PyrightParser {
                         start_line: comment.line,
                         end_line: Some(comment.line),
                     },
+                    change: None,
                 });
                 continue;
             }
@@ -114,6 +115,7 @@ impl ToolParser for PyrightParser {
                     start_line: 1,
                     end_line: None,
                 },
+                change: None,
             });
         }
         out

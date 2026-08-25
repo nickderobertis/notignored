@@ -848,3 +848,477 @@ fn a_diff_run_from_inside_a_git_hook_still_reads_the_repository_it_was_given() {
     );
     assert_eq!(reported(&output.stdout), vec!["app.py:2 F401"]);
 }
+
+/// Every suppression a JSON run reported, as `path:line change`.
+///
+/// The classification is what the review comment counts on, so it is read back
+/// off the binary's own JSON rather than from any function inside it.
+fn classified(stdout: &[u8]) -> Vec<String> {
+    parse_report(stdout)["ignores"]
+        .as_array()
+        .expect("ignores is an array")
+        .iter()
+        .map(|directive| {
+            format!(
+                "{}:{} {}",
+                directive["path"].as_str().expect("path is a string"),
+                directive["line"].as_u64().expect("line is a number"),
+                directive["change"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("a --diff record carries change: {directive:#}")),
+            )
+        })
+        .collect()
+}
+
+/// Run the binary's JSON report in `dir`, asserting it completed cleanly.
+fn json_report(dir: &std::path::Path, args: &[&str]) -> Vec<u8> {
+    let output = notignored(dir)
+        .args(args)
+        .args(["--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{:?}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+/// llmlint's directive keyword, assembled rather than spelled out.
+///
+/// This file is itself scanned by llmlint, and spelling its directive out here
+/// — keyword, colon, and all — would be read as a real suppression in this
+/// repository, of a rule it does not have, which fails its own gate.
+const LLMLINT: &str = "llmlint";
+
+/// A wrapped llmlint justification: the directive on one line, the rest of the
+/// sentence on the next. Only the continuation moves in the journey below.
+fn wrapped(tail: &str) -> String {
+    format!(
+        "# {LLMLINT}: ignore[dead_code] the first half of the justification,\n# {tail}\nx = 1\n"
+    )
+}
+
+/// The word `--diff` puts on each suppression, over a change carrying one of
+/// every case the contract names.
+///
+/// A justification edit reported as a new suppression is the failure this
+/// exists to prevent: the reviewer reads "2 suppressions" on a pull request
+/// that added none, learns the number lies, and stops trusting the comment.
+#[test]
+fn a_diff_says_of_each_suppression_whether_it_was_added_or_only_rejustified() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(
+        root,
+        "reworded.py",
+        "x = 1  # noqa: E501  # the old reason\n",
+    );
+    write(root, "wrapped.py", &wrapped("and the old second half"));
+    write(root, "gained.py", "x = 1  # noqa: E501\n");
+    write(
+        root,
+        "lost.py",
+        "x = 1  # noqa: E501  # a reason on its way out\n",
+    );
+    write(
+        root,
+        "rules.py",
+        "x = 1  # noqa: E501  # an unchanged reason\n",
+    );
+    write(
+        root,
+        "scope.py",
+        "x = 1  # noqa: E501  # an unchanged reason\n",
+    );
+    write(root, "grown.py", "x = 1\n");
+    commit(root, "baseline");
+
+    git(root, &["checkout", "-q", "-b", "feature"]);
+    // The justification, and only the justification: reworded in place, wrapped
+    // onto a second line, written where there was none, and taken away.
+    write(
+        root,
+        "reworded.py",
+        "x = 1  # noqa: E501  # the new reason\n",
+    );
+    write(root, "wrapped.py", &wrapped("and the new second half"));
+    write(root, "gained.py", "x = 1  # noqa: E501  # now justified\n");
+    write(root, "lost.py", "x = 1  # noqa: E501\n");
+    // What the suppression *silences*: a rule added to the list, and a line
+    // exemption widened to the whole file. Each now silences something its base
+    // version did not, so each is an addition however unchanged its words are.
+    write(
+        root,
+        "rules.py",
+        "x = 1  # noqa: E501,F401  # an unchanged reason\n",
+    );
+    write(
+        root,
+        "scope.py",
+        "# ruff: noqa: E501  # an unchanged reason\nx = 1\n",
+    );
+    // A suppression written into a file that had none, and one in a file the
+    // change created.
+    write(
+        root,
+        "grown.py",
+        "x = 1\ny = 2  # noqa: F401  # newly silenced\n",
+    );
+    write(root, "created.py", "z = 3  # noqa: E501  # brand new\n");
+    commit(root, "the change under review");
+
+    let stdout = json_report(root, &["--diff", "--diff-base", "main"]);
+    assert_eq!(
+        classified(&stdout),
+        vec![
+            "created.py:1 added",
+            "gained.py:1 justification-edited",
+            "grown.py:2 added",
+            "lost.py:1 justification-edited",
+            "reworded.py:1 justification-edited",
+            "rules.py:1 added",
+            "scope.py:1 added",
+            "wrapped.py:1 justification-edited",
+        ]
+    );
+
+    // The scenario hinges on the wrapped reason's *continuation* being the only
+    // line that moved: its directive opens on line 1, which the change never
+    // touched, so the pairing cannot rest on the hunk containing the directive.
+    let patch = git_stdout(
+        root,
+        &[
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "main...HEAD",
+            "--",
+            "wrapped.py",
+        ],
+    );
+    assert!(
+        patch.contains("@@ -2 +2 @@"),
+        "only the continuation line moved: {patch}"
+    );
+    let wrapped_record = parse_report(&stdout)["ignores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|directive| directive["path"] == "wrapped.py")
+        .expect("the wrapped directive is reported")
+        .clone();
+    assert_eq!(wrapped_record["line"], 1);
+    assert_eq!(wrapped_record["end_line"], 2);
+}
+
+/// Several suppressions of one tool inside one hunk pair in file order.
+///
+/// The hunk is what bounds the search for a counterpart, so a file whose change
+/// rewrites a whole block of them is where a pairing could slide by one and put
+/// the wrong word on every entry after it. Two directives of the same tool, on
+/// consecutive lines, rewritten together: the first keeps its rules and gains a
+/// new reason, the second gains a rule.
+#[test]
+fn several_suppressions_of_one_tool_in_one_hunk_pair_in_file_order() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(
+        root,
+        "block.py",
+        "a = 1  # noqa: E501  # the first reason\n\
+         b = 2  # noqa: F401  # the second reason\n\
+         c = 3  # noqa: E711  # the third reason\n",
+    );
+    commit(root, "baseline");
+    write(
+        root,
+        "block.py",
+        "a = 1  # noqa: E501  # the first reason, reworded\n\
+         b = 2  # noqa: F401,F811  # the second reason\n\
+         c = 3  # noqa: E711  # the third reason, reworded\n",
+    );
+
+    // One hunk, covering all three lines on both sides.
+    let patch = git_stdout(
+        root,
+        &["diff", "--unified=0", "--no-color", "--", "block.py"],
+    );
+    assert_eq!(
+        patch.matches("@@ -").count(),
+        1,
+        "the journey hinges on one hunk holding all three: {patch}"
+    );
+    assert!(patch.contains("@@ -1,3 +1,3 @@"), "{patch}");
+
+    assert_eq!(
+        classified(&json_report(root, &["--diff"])),
+        vec![
+            "block.py:1 justification-edited",
+            "block.py:2 added",
+            "block.py:3 justification-edited",
+        ]
+    );
+}
+
+/// Classification labels; it never changes what is reported.
+///
+/// The same change, read by the same binary, with the word stripped back off:
+/// the paths, lines and rules are exactly what `--diff` has always answered.
+#[test]
+fn classifying_reports_the_same_suppressions_in_the_same_order() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(
+        root,
+        "app.py",
+        "import os  # noqa: F401  # the old reason\n",
+    );
+    commit(root, "baseline");
+    write(
+        root,
+        "app.py",
+        "import os  # noqa: F401  # the new reason\nurl = URL  # noqa: E501\n",
+    );
+
+    let stdout = json_report(root, &["--diff"]);
+    assert_eq!(
+        reported(&stdout),
+        vec!["app.py:1 F401", "app.py:2 E501"],
+        "the selection --diff has always made"
+    );
+    assert_eq!(
+        classified(&stdout),
+        vec!["app.py:1 justification-edited", "app.py:2 added"]
+    );
+}
+
+/// A run without `--diff` has no base, so it classifies nothing — and says so by
+/// leaving the field out rather than writing a third value.
+#[test]
+fn a_whole_tree_scan_leaves_change_off_every_record() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "app.py", "import os  # noqa: F401  # a reason\n");
+    commit(root, "baseline");
+    write(
+        root,
+        "app.py",
+        "import os  # noqa: F401  # a different reason\n",
+    );
+
+    let report = parse_report(&json_report(root, &[]));
+    let ignores = report["ignores"].as_array().expect("an ignores array");
+    assert_eq!(ignores.len(), 1, "{report:#}");
+    assert!(
+        ignores[0].get("change").is_none(),
+        "an unclassified record must omit change entirely: {report:#}"
+    );
+}
+
+/// Where there is nothing to compare against, everything is an addition — and
+/// nothing fails.
+///
+/// Three ways to have no counterpart: a repository with no commit yet, which
+/// `--diff` already compares to the empty tree; a file the change created; and a
+/// file whose previous contents this build cannot read as text. The last one is
+/// the one that must not fail the run: a pre-image it cannot parse is a file it
+/// knows nothing about, and refusing to answer would turn a reviewable change
+/// into no review at all.
+#[test]
+fn a_change_with_no_counterpart_to_compare_against_is_all_additions() {
+    let unborn = git_repo();
+    let root = unborn.path();
+    write(
+        root,
+        "app.py",
+        "import os  # noqa: F401  # staged, never committed\n",
+    );
+    git(root, &["add", "app.py"]);
+    assert_eq!(
+        classified(&json_report(root, &["--diff"])),
+        vec!["app.py:1 added"]
+    );
+
+    let repo = git_repo();
+    let root = repo.path();
+    // Committed as bytes no build can read as source, then rewritten as source.
+    fs::write(root.join("was_binary.py"), [b'x', b' ', 0xff, 0xfe, b'\n']).unwrap();
+    commit(root, "baseline");
+    write(
+        root,
+        "was_binary.py",
+        "x = 1  # noqa: E501  # readable at last\n",
+    );
+    write(root, "created.py", "y = 2  # noqa: F401  # a new file\n");
+    git(root, &["add", "-A"]);
+
+    let output = notignored(root)
+        .args(["--diff", "--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an unreadable pre-image is not a failed review: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        parse_report(&output.stdout)["errors"]
+            .as_array()
+            .expect("an errors array")
+            .is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        classified(&output.stdout),
+        vec!["created.py:1 added", "was_binary.py:1 added"]
+    );
+}
+
+/// The human report a reviewer runs at their own terminal, over a change that
+/// did one of each.
+///
+/// The word is on the record already; this is the half a person can read. The
+/// entry that only gained a new sentence says so on its own line, and the
+/// summary answers both halves of the question at once — including the half
+/// whose answer is none.
+#[test]
+fn the_human_report_says_which_suppressions_were_only_rejustified() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path\n",
+    );
+    commit(root, "baseline");
+
+    git(root, &["checkout", "-q", "-b", "feature"]);
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path, not us\n",
+    );
+    write(
+        root,
+        "added.py",
+        "y = 2  # noqa: F401  # imported for its side effects\n",
+    );
+    commit(root, "reword one, add one");
+
+    let human = |args: &[&str]| -> (String, String) {
+        let output = notignored(root)
+            .args(args)
+            .output()
+            .expect("run notignored");
+        assert_eq!(output.status.code(), Some(0), "{:?}", output.status);
+        (
+            String::from_utf8(output.stdout).expect("UTF-8 findings"),
+            String::from_utf8(output.stderr).expect("UTF-8 summary"),
+        )
+    };
+
+    let (found, summary) = human(&["--diff", "--diff-base", "main"]);
+    assert_eq!(
+        found,
+        "added.py:1:8 ruff F401 (line) -- imported for its side effects\n\
+         kept.py:1:8 ruff E501 (line) (justification edited) -- the SDK builds this path, not us\n"
+    );
+    assert_eq!(
+        summary,
+        "notignored: 1 added, 1 justification edited in 2 files\n"
+    );
+
+    // The same tree without `--diff`: no base, no classification, and every
+    // byte of the report is what it was before there was a word for the
+    // difference.
+    let (inventory, unclassified) = human(&["."]);
+    assert_eq!(
+        inventory,
+        "added.py:1:8 ruff F401 (line) -- imported for its side effects\n\
+         kept.py:1:8 ruff E501 (line) -- the SDK builds this path, not us\n"
+    );
+    assert_eq!(unclassified, "notignored: 2 ignores in 2 files\n");
+
+    // A change that rewrote a justification and added nothing: the summary's
+    // additions side is a zero, and it is printed rather than left out.
+    git(root, &["checkout", "-q", "main"]);
+    git(root, &["checkout", "-q", "-b", "reword-only"]);
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path, we do not\n",
+    );
+    commit(root, "reword only");
+    let (found, summary) = human(&["--diff", "--diff-base", "main"]);
+    assert_eq!(
+        found,
+        "kept.py:1:8 ruff E501 (line) (justification edited) -- the SDK builds this path, we do not\n"
+    );
+    assert_eq!(
+        summary,
+        "notignored: 0 added, 1 justification edited in 1 file\n"
+    );
+}
+
+/// A suppression that silences more code than it did is an addition, however
+/// unchanged its words are.
+///
+/// The case is a block: its scope and its rules are the same words either side
+/// of the change, so only how far it *reaches* says that the pull request
+/// silenced two more lines. Calling that a rewritten justification would tell a
+/// reviewer the opposite of what happened, on the entry they are least likely to
+/// look at twice.
+#[test]
+fn a_block_that_swallowed_more_lines_is_added_even_when_its_reason_moved_too() {
+    let repo = git_repo();
+    let root = repo.path();
+    let block = |reason: &str, lines: &str| {
+        format!(
+            "/* eslint-disable no-console -- {reason} */\n{lines}/* eslint-enable no-console */\n"
+        )
+    };
+    write(
+        root,
+        "app.js",
+        &block("the CLI prints here", "console.log(1);\n"),
+    );
+    commit(root, "baseline");
+
+    // The reason is reworded *and* the end marker moves down: two more lines of
+    // real code are now silenced.
+    git(root, &["checkout", "-q", "-b", "widened"]);
+    write(
+        root,
+        "app.js",
+        &block(
+            "the CLI writes its report here",
+            "console.log(1);\nconsole.log(2);\nconsole.log(3);\n",
+        ),
+    );
+    commit(root, "widen the block while rewording it");
+    assert_eq!(
+        classified(&json_report(root, &["--diff", "--diff-base", "main"])),
+        vec!["app.js:1 added"]
+    );
+
+    // The control, on the same directive: the words move and the reach does not.
+    git(root, &["checkout", "-q", "main"]);
+    git(root, &["checkout", "-q", "-b", "reworded"]);
+    write(
+        root,
+        "app.js",
+        &block("the CLI writes its report here", "console.log(1);\n"),
+    );
+    commit(root, "reword only");
+    assert_eq!(
+        classified(&json_report(root, &["--diff", "--diff-base", "main"])),
+        vec!["app.js:1 justification-edited"]
+    );
+}

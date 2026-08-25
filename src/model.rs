@@ -161,6 +161,46 @@ impl fmt::Display for Scope {
     }
 }
 
+/// What a `--diff` run's change did to a suppression.
+///
+/// Only a `--diff` run can answer this: a whole-tree scan has no base to have
+/// changed anything against, so every record it produces leaves
+/// [`IgnoreDirective::change`] as `None`.
+///
+/// The two words are held to their plain meanings, because a reviewer reads
+/// them on every pull request. [`Change::JustificationEdited`] says the
+/// *justification* moved and nothing else did; a directive whose rules, scope,
+/// or reach the change altered is [`Change::Added`], because it now silences
+/// something its base version did not — a block whose end marker moved down has
+/// swallowed real code, however unchanged its own words are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Change {
+    /// The change wrote this suppression — or rewrote which rules, or how far,
+    /// an existing one silences.
+    Added,
+    /// The suppression was already there and what the change rewrote is its
+    /// stated justification. A justification written where there was none, and
+    /// one removed entirely, are both this.
+    JustificationEdited,
+}
+
+impl Change {
+    /// The change's name as it appears in reports.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Change::Added => "added",
+            Change::JustificationEdited => "justification-edited",
+        }
+    }
+}
+
+impl fmt::Display for Change {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The best-effort range of source lines a directive silences.
 // llmlint: ignore[invalid_states_unrepresentable] plain 1-based coordinates are the fixed public contract; see "The ignore-record contract" in AGENTS.md for why they are not newtyped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,6 +242,14 @@ pub struct IgnoreDirective {
     pub raw: String,
     /// The range of lines this directive silences.
     pub suppressed: Suppressed,
+    /// Whether the change introduced this suppression or rewrote the
+    /// justification of one that already existed.
+    ///
+    /// `None` — and omitted from the JSON — on any run that is not `--diff`: a
+    /// tree scan has no base, so there is nothing to have been added or edited
+    /// against. Absent is not a third value; it means the run did not classify.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<Change>,
 }
 
 /// A file that could not be read, or a directive that could not be parsed.
@@ -401,6 +449,7 @@ mod tests {
                 start_line: line,
                 end_line: Some(line),
             },
+            change: None,
         }
     }
 }

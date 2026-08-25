@@ -1,9 +1,7 @@
 # AGENTS.md — `notignored-sdk` (Python)
 
-Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
-
-- **The surface is fixed and small.** `scan` / `ascan`, the five record types, the
-  two enums, and the error hierarchy — `tests/test_api.py` asserts `__all__` is
+- **The surface is fixed and small.** `scan` / `ascan`, the four record types, the
+  three enums, and the error hierarchy — `tests/test_api.py` asserts `__all__` is
   exactly that set, and asserts both entry points' parameters against the
   approved `(paths, *, diff, diff_base, tools, cwd)` spelled out as a literal.
   **Which binary runs is not an argument.** The approved contract asks for both
@@ -20,11 +18,12 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
 - **`scan` and `ascan` take the identical arguments.** They are one call in two
   forms, so a caller can swap either for the other; a flag added to one is a bug
   until it is on both, and `tests/test_api.py` compares the signatures.
-- **Parsing is strict, except about keys.** An unknown tool, an unknown scope, a
-  missing field, or a wrong type is a `NotignoredContractError` — never a
-  dropped record, because a scan that quietly reports fewer suppressions than it
-  found is worse than one that fails. Keys this SDK has never seen are carried
-  past, because the record contract's own rule is that new fields are additive.
+- **Parsing is strict, except about keys.** An unknown tool, an unknown scope, an
+  unknown `change`, a missing field, or a wrong type is a
+  `NotignoredContractError` — never a dropped record, because a scan that quietly
+  reports fewer suppressions than it found is worse than one that fails. Keys this
+  SDK has never seen are carried past, because the record contract's own rule is
+  that new fields are additive.
 - **Every non-zero exit is `NotignoredExitError`, carrying the CLI's stderr.**
   Including the 2 the CLI uses for an unreadable file, which it names on stderr
   as well as in the report's `errors` — so nothing is lost, and a tree that could
@@ -39,13 +38,15 @@ Subtree rules. The repo-wide constraints are in the root `AGENTS.md`.
   the SDK trees affect this one. **Nothing here stands in for the CLI**, and the
   dividing line is what the workspace binary can actually produce: every state it
   *can* reach — reports, `--diff`, the tool filter, a non-zero exit — is covered
-  by driving that binary, and nothing else may stand in for those. The two states
-  it *cannot* reach are covered without fabricating one: `tests/test_contract.py`
-  calls the strict reader directly with the payload a broken or newer build would
-  emit, and `tests/test_errors.py` points `NOTIGNORED_BIN` at real unrelated
-  programs (`echo`, `true`) — the misconfiguration a user actually hits — to
-  prove the plumbing carries that verdict out through `scan()`. A patched second
-  build of the crate, or test-only behaviour in the CLI, is not the answer.
+  by driving that binary, and nothing else may stand in for those. For the states
+  it *cannot* reach, in this order of preference: real unrelated programs on
+  `NOTIGNORED_BIN` (`echo`, `true`) — the misconfiguration a user actually hits;
+  `tests/fixtures/not_notignored.py`, a `notignored` this SDK cannot read, for
+  the **one** branch a user reaches by upgrading the CLI past the SDK, because
+  the public entry point takes no payload and that rejection can be reached no
+  other way; and the strict reader called directly for the field-by-field shape
+  rules. A patched second build of the crate, or test-only behaviour in the CLI,
+  is not the answer.
 - **Its lockfile is its own.** `uv.lock` here pins the dev tier; the repo root has
   no uv project. `bootstrap` runs `uv sync --locked`, so a dependency change
   means committing the refreshed lock in the same commit.

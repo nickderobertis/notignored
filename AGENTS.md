@@ -128,11 +128,28 @@ or the envelope shape unilaterally: bump `REPORT_VERSION` and update
 `tests/golden/` in the same change. `tests/schema.rs` locks the serialized shape.
 New fields must be optional, round-trip, and be omitted when empty.
 
-A **third** place moves with them: `npm/notignored-sdk/src/contract.ts` refuses
-a field it does not know, at every object in the envelope, rather than drop one
-whose presence changes what a record means. That is the SDK's decision and its
-`AGENTS.md` records the trade — but it means a field added here and not there
-makes the TypeScript SDK reject this build's reports.
+Both SDK readers **carry a field they do not know past**, so an additive field
+does not break a consumer holding an older SDK; the version check is what catches
+an envelope whose meaning has really moved. What they still refuse is a **word**
+whose vocabulary this contract defines — an unknown `tool`, `scope`, or `change`
+— because guessing at one reports a suppression as something it is not. Those
+three vocabularies are restated in three languages and generated from none, so
+each SDK's suite holds its own words — and the ones its refusal names a user —
+against `src/model.rs`, exhaustively. Adding a variant means all three in one
+change.
+
+`--diff` records carry one field a tree scan does not: `change`, `added` or
+`justification-edited`, set by `src/diff.rs::classify` and omitted (never null)
+on any run without a base. It is what keeps a rewritten justification from being
+counted as a new suppression on a pull request that added none. Every surface
+reads it and spells it out in full — the human line's `(justification edited)`
+token and its two-count summary, the comment heading's per-kind counts, the
+action's `justification-edited-count` beside a `count` that still means
+additions alone — because "edited" on its own reads as the silenced code having
+changed. Classification
+**labels and never selects**: the directives a `--diff` run reports are exactly
+what `retain_new` left, in the order it left them, so the worst a mis-pairing
+can do is put a wrong word on an entry that is still in front of the reviewer.
 
 The 1-based coordinates stay plain `u32` with public fields rather than newtypes:
 the record is what every parser dispatch builds against, and the extractor's
@@ -181,10 +198,12 @@ product's review surface. Keep the judgment in Rust: `--format markdown` renders
 the whole comment body, golden-tested over the fixture counts
 (`tests/golden/markdown/`), so the composite's shell only moves bytes. The
 `--max-entries` cap needs more findings than those fixtures hold, so it is proven
-either side of its boundary in the renderer's own unit tests instead. Its two
-scripts are proven by *lifting them out of `action.yml`* and running them
-(`tests/e2e/action_scan.rs`, `tests/e2e/action_comment.rs`); a copy in a test
-would keep passing after the action stopped doing what it says. Nothing is
+either side of its boundary in the renderer's own unit tests instead. Its scripts
+are proven by running the real thing, never a copy: the inline steps *lifted out
+of `action.yml`*, `comment.sh` and `counts.sh` through their own env interfaces.
+Counting lives in `counts.sh` so the reports that decide it — from a build with
+no `change` field, or with a word this version never heard of — can be handed to
+it directly; no binary here can produce one. Nothing is
 mocked: github.com is the one host those journeys cannot own, so `gh` talks HTTP
 to a real server they run on loopback, and everything else is a real repository,
 the real binary, and the real `gh`.

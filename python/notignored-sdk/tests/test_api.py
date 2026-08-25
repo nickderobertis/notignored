@@ -16,6 +16,7 @@ import notignored_sdk
 from notignored_sdk import Scope, Tool, ascan, scan
 
 SURFACE = {
+    "Change",
     "IgnoreDirective",
     "NotignoredContractError",
     "NotignoredError",

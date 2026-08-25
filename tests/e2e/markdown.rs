@@ -13,7 +13,7 @@
 
 use std::fs;
 
-use crate::support::{notignored, repo_root};
+use crate::support::{commit, git, git_repo, notignored, repo_root, write};
 
 /// The repo and commit the goldens' permalinks are built from. Fixed, so a
 /// golden body is a byte-stable artifact rather than a function of the checkout.
@@ -284,4 +284,137 @@ fn without_the_permalink_flags_locations_render_as_plain_text() {
         "{body}"
     );
     assert!(!body.contains("https://github.com/"), "{body}");
+}
+
+/// The heading a reviewer reads first, in each of the four shapes a report can
+/// arrive in — rendered by the real binary over a real repository, because the
+/// heading is the one line of this comment that can lie about a pull request.
+///
+/// The fourth shape is why this exists: a change that rewrote justifications
+/// and added nothing must announce exactly that, and say "added" nowhere.
+#[test]
+fn the_comment_heading_counts_what_the_change_actually_did() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path\n",
+    );
+    write(root, "quiet.py", "y = 2\n");
+    commit(root, "baseline");
+
+    let body = |args: &[&str]| -> String {
+        let output = notignored(root)
+            .args(args)
+            .args(["--format", "markdown"])
+            .args(["--github-repo", REPO, "--github-sha", SHA])
+            .output()
+            .expect("run notignored");
+        assert!(
+            output.status.success(),
+            "exit: {:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("a UTF-8 comment body")
+    };
+    let diff = ["--diff", "--diff-base", "main"];
+
+    // Nothing found is nothing to count by kind: a `--diff` run over a change
+    // that touched no directive renders the all-clear body it always rendered.
+    assert_eq!(
+        body(&diff),
+        format!(
+            "{}\n\n### notignored\n\nNo lint or type-check suppressions found.\n",
+            notignored::cli::MARKER
+        )
+    );
+
+    // Added only, singular and plural.
+    git(root, &["checkout", "-q", "-b", "added-one"]);
+    write(
+        root,
+        "quiet.py",
+        "y = 2  # noqa: F401  # imported for its side effects\n",
+    );
+    commit(root, "add one");
+    assert!(
+        body(&diff).contains("### notignored: 1 suppression added\n"),
+        "{}",
+        body(&diff)
+    );
+    write(root, "quiet.py", "y = 2  # noqa: F401  # imported for its side effects\nz = 3  # noqa: E501  # the SDK builds this path\n");
+    commit(root, "add another");
+    assert!(
+        body(&diff).contains("### notignored: 2 suppressions added\n"),
+        "{}",
+        body(&diff)
+    );
+
+    // Added and rejustified together: both counts, and only the rejustified
+    // entry carries the marker.
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path, not us\n",
+    );
+    commit(root, "reword the inherited one");
+    let both = body(&diff);
+    assert!(
+        both.contains("### notignored: 2 suppressions added, 1 justification edited\n"),
+        "{both}"
+    );
+    assert!(
+        both.contains(&format!(
+            "- **ruff E501** _(justification edited)_ — _the SDK builds this path, not us_ — [kept.py:1](https://github.com/{REPO}/blob/{SHA}/kept.py#L1)\n"
+        )),
+        "{both}"
+    );
+    assert!(
+        both.contains(&format!(
+            "- **ruff F401** — _imported for its side effects_ — [quiet.py:1](https://github.com/{REPO}/blob/{SHA}/quiet.py#L1)\n"
+        )),
+        "an added entry gained a marker:\n{both}"
+    );
+    assert_eq!(
+        both.matches("_(justification edited)_").count(),
+        1,
+        "{both}"
+    );
+
+    // Rejustified only: the pull request that this whole distinction exists
+    // for. A justification rewritten, no suppression added, and the word
+    // "added" nowhere in the body.
+    git(root, &["checkout", "-q", "main"]);
+    git(root, &["checkout", "-q", "-b", "reword-only"]);
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the SDK builds this path, we do not\n",
+    );
+    write(
+        root,
+        "quiet.py",
+        "y = 2  # noqa: F401  # re-exported on purpose\n",
+    );
+    commit(root, "add one, to reword it next");
+    write(
+        root,
+        "quiet.py",
+        "y = 2  # noqa: F401  # re-exported so callers can configure retries\n",
+    );
+    commit(root, "reword it");
+    let edited = body(&["--diff", "--diff-base", "HEAD~1"]);
+    assert!(
+        edited.contains("### notignored: 1 justification edited\n"),
+        "{edited}"
+    );
+    assert!(!edited.contains("added"), "{edited}");
+
+    let both_reworded = body(&diff);
+    assert!(
+        both_reworded.contains("### notignored: 1 suppression added, 1 justification edited\n"),
+        "{both_reworded}"
+    );
 }

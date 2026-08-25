@@ -92,6 +92,7 @@ impl ToolParser for BiomeParser {
                 column: comment.column,
                 raw: comment.raw.clone(),
                 suppressed: suppressed_range(kind, comment),
+                change: None,
             });
         }
         out

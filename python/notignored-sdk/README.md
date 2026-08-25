@@ -79,12 +79,17 @@ The records mirror the CLI's JSON contract exactly, as frozen dataclasses:
 
 ```python
 Report(version, ignores, errors)
-IgnoreDirective(tool, scope, rules, reason, path, line, end_line, column, raw, suppressed)
+IgnoreDirective(tool, scope, rules, reason, path, line, end_line, column, raw, suppressed, change)
 Suppressed(start_line, end_line)  # end_line is None when the range runs to end-of-file
 ReportError(path, message)
 ```
 
-`Tool` and `Scope` are `enum.StrEnum`s, so `directive.tool == "ruff"`,
+`change` says what a `diff=True` scan's change did to the suppression —
+`Change.ADDED`, or `Change.JUSTIFICATION_EDITED` when it was already there and
+what moved is its stated reason. It is `None` on any scan that is not a diff,
+which has no base to have changed anything against.
+
+`Tool`, `Scope` and `Change` are `enum.StrEnum`s, so `directive.tool == "ruff"`,
 `f"{directive.tool}"`, and `"/".join([directive.scope])` all give the wire name.
 
 Only a clean run returns. Any non-zero exit — including the 2 the CLI uses for a

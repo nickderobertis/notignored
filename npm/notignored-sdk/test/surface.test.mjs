@@ -1,7 +1,7 @@
 /**
  * The public surface, held to exactly what was approved.
  *
- * `scan`, the six record types, the six error classes — and nothing else. The
+ * `scan`, the seven record types, the six error classes — and nothing else. The
  * options bag is not among them, and neither is any way to name the binary from
  * a call site: that is `NOTIGNORED_BIN`'s job. None of this is visible to the
  * suites that *use* the SDK, because using an API cannot show what it also
@@ -29,6 +29,7 @@ const RUNTIME_EXPORTS = [
 
 /** The types a consumer may import. */
 const TYPE_EXPORTS = [
+  "Change",
   "IgnoreDirective",
   "Report",
   "ReportError",
