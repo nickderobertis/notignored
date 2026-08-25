@@ -12,11 +12,23 @@
 // reader makes for themselves.
 //
 // Usage: node scripts/comment-render/render.mjs <light.png> <dark.png> < body.md
+//
+// llmlint: ignore-file[changed_behavior_has_e2e] this file is the browser half of
+// the capture: nothing in it runs without the pinned Chromium, which this
+// repository deliberately keeps out of `bootstrap` and the gate
+// (screenshots/AGENTS.md), so a test of any path here would install it.
 
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
+
+/** Stop with the exact failure and the one action that clears it. */
+function fail(what, action, error) {
+  const detail = error ? ` (${error.message})` : "";
+  process.stderr.write(`render.mjs: ${what}${detail}\nACTION: ${action}\n`);
+  process.exit(1);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..", "..");
@@ -33,29 +45,36 @@ try {
   ({ chromium } = fromDev("playwright"));
   shiki = await import(pathToFileURL(fromDev.resolve("shiki")).href);
 } catch (error) {
-  process.stderr.write(
-    `render.mjs: the pinned render toolchain is not installed in ${dev} (${error.message})\n` +
-      "ACTION: run 'just screenshots-comment-tools'\n",
+  fail(
+    `the pinned render toolchain is not installed in ${dev}`,
+    "run 'just screenshots-comment-tools'",
+    error,
   );
-  process.exit(1);
 }
 
 const [lightOut, darkOut] = process.argv.slice(2);
 if (!lightOut || !darkOut) {
-  process.stderr.write(
-    "render.mjs: usage: node scripts/comment-render/render.mjs <light.png> <dark.png> < body.md\n" +
-      "ACTION: run 'just screenshots-pr-comment', which supplies both paths\n",
+  fail(
+    "usage: node scripts/comment-render/render.mjs <light.png> <dark.png> < body.md",
+    "run 'just screenshots-pr-comment', which supplies both paths",
   );
-  process.exit(1);
 }
 
-const body = readFileSync(0, "utf8");
-if (!body.includes("<!-- notignored-report -->")) {
-  process.stderr.write(
-    "render.mjs: stdin does not look like a rendered comment body — no notignored marker\n" +
-      "ACTION: check that `notignored --diff --format markdown` still emits the sticky marker\n",
+let body = "";
+try {
+  body = readFileSync(0, "utf8");
+} catch (error) {
+  fail(
+    "cannot read the comment body from stdin",
+    "pipe one in — 'just screenshots-pr-comment' does that for you",
+    error,
   );
-  process.exit(1);
+}
+if (!body.includes("<!-- notignored-report -->")) {
+  fail(
+    "stdin does not look like a rendered comment body — no notignored marker",
+    "check that `notignored --diff --format markdown` still emits the sticky marker",
+  );
 }
 
 // Shiki tokenizes; GitHub's own `pl-*` class names carry the colour. Mapping
@@ -94,10 +113,19 @@ const LANGUAGES = [
 // the suppressed line, the 1-based line number, ` | ` — and then the source.
 const SNIPPET_LINE = /^([ >]*)(\d+) \|(?: (.*))?$/;
 
-const highlighter = await shiki.createHighlighter({
-  themes: ["github-light"],
-  langs: LANGUAGES,
-});
+let highlighter;
+try {
+  highlighter = await shiki.createHighlighter({
+    themes: ["github-light"],
+    langs: LANGUAGES,
+  });
+} catch (error) {
+  fail(
+    "Shiki could not load the pinned themes and grammars",
+    "delete .dev/comment-render and re-run 'just screenshots-comment-tools'",
+    error,
+  );
+}
 
 const escapeHtml = (text) =>
   text.replace(
@@ -139,11 +167,10 @@ function span(token) {
   }
   const className = PL_CLASS.get(colour);
   if (!className) {
-    process.stderr.write(
-      `render.mjs: no GitHub syntax class for the colour ${colour} shiki gave ${JSON.stringify(token.content)}\n` +
-        "ACTION: add it to PL_CLASS in this file and give it a light and a dark value in comment.css\n",
+    fail(
+      `no GitHub syntax class for the colour ${colour} shiki gave ${JSON.stringify(token.content)}`,
+      "add it to PL_CLASS in this file and give it a light and a dark value in comment.css",
     );
-    process.exit(1);
   }
   return `<span class="${className}">${text}</span>`;
 }
@@ -188,31 +215,65 @@ md.renderer.rules.fence = (tokens, index) => {
 // deciding whether to add the Action needs to see what is behind one of these.
 const rendered = md.render(body).replace("<details>", "<details open>");
 if (!rendered.includes("<details open>")) {
-  process.stderr.write(
-    "render.mjs: the body carries no <details> block to open\n" +
-      "ACTION: check that the fixture change still adds a suppression whose code the renderer snippets\n",
+  fail(
+    "the body carries no <details> block to open",
+    "check that the fixture change still adds a suppression whose code the renderer snippets",
   );
-  process.exit(1);
 }
 
-const css = readFileSync(join(here, "comment.css"), "utf8");
+let css = "";
+try {
+  css = readFileSync(join(here, "comment.css"), "utf8");
+} catch (error) {
+  fail(
+    "cannot read scripts/comment-render/comment.css",
+    "restore it from the repository — it is the stylesheet the mimic is made of",
+    error,
+  );
+}
 const page_html = `<!doctype html>
 <html lang="en" data-theme="light"><head><meta charset="utf-8"><style>${css}</style></head>
 <body><div class="timeline-comment"><div class="comment-body markdown-body">
 ${rendered}
 </div></div></body></html>`;
 
-const browser = await chromium.launch();
+let browser;
+try {
+  browser = await chromium.launch();
+} catch (error) {
+  fail(
+    "the pinned Chromium would not start",
+    "delete .dev/comment-render/browsers and re-run 'just screenshots-comment-tools'",
+    error,
+  );
+}
 try {
   // 2×, the density the reference captures were taken at and the one that keeps
   // the README embed crisp on a HiDPI screen at GitHub's ~830px content width.
-  const page = await browser.newPage({
-    viewport: { width: 900, height: 1200 },
-    deviceScaleFactor: 2,
-  });
-  await page.setContent(page_html, { waitUntil: "load" });
-  await page.evaluate(() => document.fonts.ready);
+  const page = await browser
+    .newPage({ viewport: { width: 900, height: 1200 }, deviceScaleFactor: 2 })
+    .catch((error) =>
+      fail(
+        "the pinned Chromium started but would not open a page",
+        "delete .dev/comment-render/browsers and re-run 'just screenshots-comment-tools'",
+        error,
+      ),
+    );
+  await page.setContent(page_html, { waitUntil: "load" }).catch((error) =>
+    fail(
+      "the rendered comment would not load in the browser",
+      "check scripts/comment-render/comment.css parses — it is inlined into the page",
+      error,
+    ),
+  );
+  await page.evaluate(() => document.fonts.ready.then(() => true));
   const card = await page.$(".timeline-comment");
+  if (!card) {
+    fail(
+      "the page carries no comment card to photograph",
+      "check that render.mjs still wraps the body in .timeline-comment",
+    );
+  }
   for (const [theme, out] of [
     ["light", lightOut],
     ["dark", darkOut],
@@ -222,8 +283,16 @@ try {
       theme,
     );
     await page.emulateMedia({ colorScheme: theme });
-    await card.screenshot({ path: out });
+    await card.screenshot({ path: out }).catch((error) => {
+      fail(
+        `cannot write the ${theme} screenshot to ${out}`,
+        "check the checkout is writable (a container capture can leave it root-owned), then re-run 'just screenshots-pr-comment'",
+        error,
+      );
+    });
   }
 } finally {
-  await browser.close();
+  // Nothing to advise about a close that fails after the screenshots are on
+  // disk, and throwing here would bury whichever failure got us out of the try.
+  await browser.close().catch(() => {});
 }

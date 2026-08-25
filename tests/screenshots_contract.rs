@@ -319,6 +319,45 @@ fn the_comment_renderer_knows_every_language_a_fence_can_name() {
     }
 }
 
+/// The mimic's syntax palette lives in two files, and both halves have to agree.
+///
+/// `render.mjs` decides which GitHub class a token gets; `comment.css` decides
+/// what that class looks like in each theme. A class named in one and missing
+/// from the other renders as the body's default colour in a picture nothing
+/// gates — a silent regression in the one image whose job is to be believed.
+#[test]
+fn every_syntax_class_the_renderer_emits_has_both_themes_in_the_stylesheet() {
+    let renderer = read("scripts/comment-render/render.mjs");
+    let classes: Vec<String> = renderer
+        .lines()
+        .skip_while(|line| !line.starts_with("const PL_CLASS"))
+        .skip(1)
+        .take_while(|line| !line.starts_with("]"))
+        .filter_map(|line| {
+            let (_, rest) = line.trim().split_once(", \"")?;
+            let (class, _) = rest.split_once('"')?;
+            Some(class.to_string())
+        })
+        .collect();
+    assert!(
+        classes.len() >= 5,
+        "could not read PL_CLASS out of scripts/comment-render/render.mjs: {classes:?}"
+    );
+    let css = read("scripts/comment-render/comment.css");
+    for class in &classes {
+        for (theme, selector) in [
+            ("light", format!(".{class} {{")),
+            ("dark", format!("[data-theme=\"dark\"] .{class} {{")),
+        ] {
+            assert!(
+                css.contains(&selector),
+                "comment.css has no {theme} colour for `{class}`, which render.mjs \
+                 emits — that token would fall back to the body's own colour"
+            );
+        }
+    }
+}
+
 /// The rendered-comment capture, its installer, and the two PNGs it writes.
 ///
 /// A raster is not byte-reproducible, so screencomp cannot gate these the way it
@@ -338,7 +377,6 @@ fn the_rendered_comment_capture_and_the_images_it_writes_are_all_present() {
     }
     for script in [
         "scripts/pr-comment-body.sh",
-        "scripts/pr-comment-png.sh",
         "scripts/setup-comment-render.sh",
         "scripts/comment-render/render.mjs",
         "scripts/comment-render/comment.css",
@@ -357,9 +395,19 @@ fn the_rendered_comment_capture_and_the_images_it_writes_are_all_present() {
             recipe.trim_end_matches(':')
         );
     }
+    let capture = justfile
+        .split("screenshots-pr-comment:")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .unwrap_or_default();
     assert!(
-        read("scripts/pr-comment-png.sh").contains("scripts/setup-comment-render.sh"),
-        "the capture no longer installs its toolchain on demand"
+        capture.contains("scripts/setup-comment-render.sh"),
+        "the capture no longer installs its toolchain on demand:\n{capture}"
+    );
+    assert!(
+        capture.contains("scripts/pr-comment-body.sh")
+            && capture.contains("scripts/comment-render/render.mjs"),
+        "the capture no longer renders the real binary's body:\n{capture}"
     );
     assert!(
         read("screenshots/AGENTS.md").contains("pr-comment-rendered"),

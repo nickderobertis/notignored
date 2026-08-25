@@ -76,11 +76,18 @@ fn just_binary() -> PathBuf {
 fn permalink_sha() -> String {
     let script = std::fs::read_to_string(repo_root().join("scripts/pr-comment-body.sh"))
         .expect("read scripts/pr-comment-body.sh");
-    script
+    let sha = script
         .lines()
         .find_map(|line| line.trim().strip_prefix("permalink_sha="))
         .map(|value| value.trim().trim_matches('"').to_string())
-        .expect("the script pins a permalink_sha")
+        .expect("the script pins a permalink_sha");
+    // Abbreviated below, so a value read off disk that is not a commit id has to
+    // fail here rather than by slicing.
+    assert!(
+        sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "scripts/pr-comment-body.sh pins a permalink_sha that is not a commit id: {sha:?}"
+    );
+    sha
 }
 
 fn succeeds(output: &Output, what: &str) -> String {
@@ -163,6 +170,93 @@ fn the_capture_names_what_to_install_when_node_is_missing() {
     assert!(
         stderr.contains("node not found") && stderr.contains("nodejs.org"),
         "the capture does not say what to install:\n{stderr}"
+    );
+}
+
+/// A scratch directory laid out like the repo root, with the **real** installer
+/// linked in — the shape `js_tools_setup.rs` uses, for the same reason: the
+/// script resolves its root from its own path, so a controlled layout is what
+/// reaches a branch the real checkout never takes.
+fn installer_sandbox(with_manifest: bool) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("scratch repo root");
+    let scripts = dir.path().join("scripts");
+    std::fs::create_dir_all(&scripts).expect("scripts dir");
+    std::os::unix::fs::symlink(
+        repo_root().join("scripts/setup-comment-render.sh"),
+        scripts.join("setup-comment-render.sh"),
+    )
+    .expect("link the real script");
+    if with_manifest {
+        let manifest = dir.path().join("scripts/comment-render");
+        std::fs::create_dir_all(&manifest).expect("manifest dir");
+        for name in ["package.json", "package-lock.json"] {
+            std::fs::copy(
+                repo_root().join("scripts/comment-render").join(name),
+                manifest.join(name),
+            )
+            .expect("copy the pinned manifest");
+        }
+    }
+    dir
+}
+
+/// With the pinned manifest gone there is nothing to install from, and the
+/// message has to name the manifest rather than the copy that failed.
+#[test]
+fn the_installer_names_the_manifest_it_cannot_find() {
+    let sandbox = installer_sandbox(false);
+    let output = Command::new(bash_program())
+        .arg(sandbox.path().join("scripts/setup-comment-render.sh"))
+        .output()
+        .expect("run the real installer in a sandbox");
+    assert!(
+        !output.status.success(),
+        "the installer claimed to succeed with no pinned manifest"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("scripts/comment-render/package.json") && stderr.contains("ACTION:"),
+        "the installer does not name the manifest it needs:\n{stderr}"
+    );
+}
+
+/// The review repository is built in a scratch directory. With nowhere to put
+/// one, the capture has to say so rather than fail inside `cp`.
+#[test]
+fn the_body_script_says_where_its_scratch_directory_should_have_gone() {
+    let output = capture("pr-comment-body.sh")
+        .env("TMPDIR", repo_root().join("target/no-such-tmpdir"))
+        .output()
+        .expect("run scripts/pr-comment-body.sh");
+    assert!(
+        !output.status.success(),
+        "the body script claimed to succeed with an unusable TMPDIR"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("scratch directory") && stderr.contains("TMPDIR"),
+        "the body script does not name the directory it could not create:\n{stderr}"
+    );
+}
+
+/// The script does not build — the recipe does, the way `screenshots-gif` does —
+/// so with no binary there it has to point at the recipe rather than fail inside
+/// a subshell.
+#[test]
+fn the_body_script_points_at_the_recipe_that_builds_the_binary() {
+    let output = capture("pr-comment-body.sh")
+        .env("NOTIGNORED_BIN", repo_root().join("target/no-such-binary"))
+        .output()
+        .expect("run scripts/pr-comment-body.sh");
+    assert!(
+        !output.status.success(),
+        "the body script claimed to succeed with no binary to drive"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no notignored binary at")
+            && stderr.contains("just screenshots-pr-comment"),
+        "the body script does not say how to get a binary:\n{stderr}"
     );
 }
 

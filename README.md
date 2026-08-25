@@ -52,7 +52,7 @@ this is what the action hands GitHub to render, permalinks and all:
 </details>
 
 > The terminal shots are real captures of the CLI, rendered from its actual
-> colorized output by [`just screenshots`](screenshots/AGENTS.md) and gated by
+> colorized output by `just screenshots` and gated by
 > [screencomp](https://github.com/nickderobertis/screencomp) — so they change
 > only when the output does.
 

@@ -25,48 +25,63 @@ cd "$ROOT" || {
 }
 
 MANIFEST="scripts/comment-render"
-VENV=".dev/comment-render"
-export PLAYWRIGHT_BROWSERS_PATH="$ROOT/$VENV/browsers"
+TOOLCHAIN=".dev/comment-render"
+export PLAYWRIGHT_BROWSERS_PATH="$ROOT/$TOOLCHAIN/browsers"
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "setup-comment-render: npm not found; cannot install the pinned markdown-it/shiki/playwright" >&2
   echo "ACTION: install Node.js 20+ (https://nodejs.org/) and re-run 'just screenshots-comment-tools'" >&2
   exit 1
 fi
+# The pinned packages are ESM-first and Playwright's CLI needs a modern runtime,
+# so "npm exists" is not the requirement — a specific floor is.
+node_major="$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\).*/\1/p')"
+if [ -z "$node_major" ] || [ "$node_major" -lt 20 ]; then
+  echo "setup-comment-render: Node.js 20+ is required (found ${node_major:-none})" >&2
+  echo "ACTION: install or select Node.js 20+ (https://nodejs.org/) and re-run 'just screenshots-comment-tools'" >&2
+  exit 1
+fi
 
 # `npm ci` reinstalls from scratch every time, and the browser download is worse
 # still. Skip both when the installed tree already matches the lockfile we are
 # about to copy in and a browser is already unpacked beside it.
-if [ -d "$VENV/node_modules" ] \
-  && [ -d "$VENV/browsers" ] \
-  && cmp -s "$MANIFEST/package-lock.json" "$VENV/package-lock.json" \
-  && cmp -s "$MANIFEST/package.json" "$VENV/package.json"; then
+if [ -d "$TOOLCHAIN/node_modules" ] \
+  && [ -d "$TOOLCHAIN/browsers" ] \
+  && cmp -s "$MANIFEST/package-lock.json" "$TOOLCHAIN/package-lock.json" \
+  && cmp -s "$MANIFEST/package.json" "$TOOLCHAIN/package.json"; then
   exit 0
 fi
 
-mkdir -p "$VENV" || {
-  echo "setup-comment-render: cannot create $ROOT/$VENV" >&2
+mkdir -p "$TOOLCHAIN" || {
+  echo "setup-comment-render: cannot create $ROOT/$TOOLCHAIN" >&2
   echo "ACTION: check the directory is writable (or remove a stale file at that path), then re-run 'just screenshots-comment-tools'" >&2
   exit 1
 }
-cp "$MANIFEST/package.json" "$MANIFEST/package-lock.json" "$VENV/" || {
-  echo "setup-comment-render: cannot copy the pinned manifest from $MANIFEST into $ROOT/$VENV" >&2
+cp "$MANIFEST/package.json" "$MANIFEST/package-lock.json" "$TOOLCHAIN/" || {
+  echo "setup-comment-render: cannot copy the pinned manifest from $MANIFEST into $ROOT/$TOOLCHAIN" >&2
   echo "ACTION: check that $MANIFEST/package.json and package-lock.json exist, then re-run 'just screenshots-comment-tools'" >&2
   exit 1
 }
+# llmlint: ignore-block[changed_behavior_has_e2e] both branches below are the
+# network install itself — a test of either would download the browser the gate
+# is deliberately kept clear of (screenshots/AGENTS.md).
 # --ignore-scripts: playwright's postinstall would fetch a browser into the
 # ambient cache. We fetch it ourselves, below, into the project-local tree.
-if ! (cd "$VENV" && npm ci --silent --no-audit --no-fund --ignore-scripts); then
-  # A half-written tree would make the skip above lie on the next run.
-  rm -f "$VENV/package-lock.json" "$VENV/package.json"
-  echo "setup-comment-render: 'npm ci' failed in $ROOT/$VENV" >&2
+if ! (cd "$TOOLCHAIN" && npm ci --silent --no-audit --no-fund --ignore-scripts); then
+  # A half-written tree would make the skip above lie on the next run. `|| true`
+  # so a cleanup that itself fails cannot pre-empt the message that says what to
+  # do about the install.
+  rm -f "$TOOLCHAIN/package-lock.json" "$TOOLCHAIN/package.json" || true
+  echo "setup-comment-render: 'npm ci' failed in $ROOT/$TOOLCHAIN" >&2
   echo "ACTION: check network access to the npm registry, then re-run 'just screenshots-comment-tools'" >&2
   exit 1
 fi
 
-if ! (cd "$VENV" && node node_modules/playwright/cli.js install chromium >/dev/null); then
-  rm -f "$VENV/package-lock.json" "$VENV/package.json"
-  echo "setup-comment-render: could not download Chromium into $ROOT/$VENV/browsers" >&2
+if ! (cd "$TOOLCHAIN" && node node_modules/playwright/cli.js install chromium >/dev/null); then
+  rm -f "$TOOLCHAIN/package-lock.json" "$TOOLCHAIN/package.json" || true
+  echo "setup-comment-render: could not download Chromium into $ROOT/$TOOLCHAIN/browsers" >&2
   echo "ACTION: check network access to https://cdn.playwright.dev, then re-run 'just screenshots-comment-tools'" >&2
   exit 1
 fi
+
+# llmlint: ignore-end[changed_behavior_has_e2e]

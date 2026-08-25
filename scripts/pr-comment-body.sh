@@ -11,9 +11,9 @@
 # committed as the base, then the screenshots/change/ overlay laid on top as the
 # uncommitted work a reviewer is looking at.
 #
-# NOTIGNORED_BIN drives a binary other than the release build (the suite points
-# it at the one cargo already compiled); SCREENSHOTS_NO_BUILD skips the build
-# when the release binary is already there.
+# It does not build: `just screenshots-pr-comment` does that first, the way
+# `just screenshots-gif` does. NOTIGNORED_BIN drives a binary other than the
+# release one (the suite points it at the one cargo already compiled).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,17 +32,29 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR \
 permalink_sha="0123456789abcdef0123456789abcdef01234567"
 
 bin="${NOTIGNORED_BIN:-$repo_root/target/release/notignored}"
-if [ -z "${NOTIGNORED_BIN:-}" ] \
-  && { [ -z "${SCREENSHOTS_NO_BUILD:-}" ] || [ ! -x "$bin" ]; }; then
-  cargo build --release --locked --bin notignored >&2
+if [ ! -x "$bin" ]; then
+  echo "pr-comment-body: no notignored binary at $bin" >&2
+  echo "ACTION: run 'just screenshots-pr-comment', which builds the release binary first" >&2
+  exit 1
 fi
 
-tmp_state="$(mktemp -d)"
+tmp_state="$(mktemp -d)" || {
+  echo "pr-comment-body: cannot create a scratch directory for the review repository" >&2
+  echo "ACTION: check \$TMPDIR exists and has space (df -h), then re-run 'just screenshots-pr-comment'" >&2
+  exit 1
+}
 trap 'rm -rf "$tmp_state"' EXIT
 
+# llmlint: ignore-block[changed_behavior_has_e2e] every branch below reports the
+# host breaking under the script mid-run — an unreadable fixture, a git that will
+# not init, a report the binary declines to produce — and reaching one from a
+# test means sabotaging the checkout the rest of the suite is reading.
 diff_repo="$tmp_state/review"
-mkdir -p "$diff_repo"
-cp -R "$repo_root/screenshots/fixture/." "$diff_repo/"
+mkdir -p "$diff_repo" && cp -R "$repo_root/screenshots/fixture/." "$diff_repo/" || {
+  echo "pr-comment-body: cannot stage screenshots/fixture/ into $diff_repo" >&2
+  echo "ACTION: check that screenshots/fixture/ is readable and \$TMPDIR is writable, then re-run 'just screenshots-pr-comment'" >&2
+  exit 1
+}
 (
   cd "$diff_repo"
   # The git config is neutralized and the identity fixed, so a developer's own
@@ -54,12 +66,24 @@ cp -R "$repo_root/screenshots/fixture/." "$diff_repo/"
   git -c init.defaultBranch=main init -q
   git add -A
   git commit -q -m "the tree as it stood before this change"
-) >/dev/null 2>&1
-cp -R "$repo_root/screenshots/change/." "$diff_repo/"
+) >/dev/null 2>&1 || {
+  echo "pr-comment-body: cannot build the throwaway review repository in $diff_repo" >&2
+  echo "ACTION: check that 'git' is on PATH and runs with an empty config, then re-run 'just screenshots-pr-comment'" >&2
+  exit 1
+}
+cp -R "$repo_root/screenshots/change/." "$diff_repo/" || {
+  echo "pr-comment-body: cannot lay screenshots/change/ over the base tree" >&2
+  echo "ACTION: check that screenshots/change/ is readable, then re-run 'just screenshots-pr-comment'" >&2
+  exit 1
+}
 
 body="$tmp_state/body.md"
 (cd "$diff_repo" && "$bin" . --diff --format markdown \
-  --github-repo nickderobertis/notignored --github-sha "$permalink_sha") >"$body"
+  --github-repo nickderobertis/notignored --github-sha "$permalink_sha") >"$body" || {
+  echo "pr-comment-body: '$bin --diff --format markdown' failed over the review repository" >&2
+  echo "ACTION: run it by hand in a copy of screenshots/fixture/ with screenshots/change/ laid over it and read what it reports" >&2
+  exit 1
+}
 if [ ! -s "$body" ]; then
   {
     echo "pr-comment-body: the binary produced no comment body."
@@ -70,3 +94,5 @@ if [ ! -s "$body" ]; then
   exit 1
 fi
 cat "$body"
+
+# llmlint: ignore-end[changed_behavior_has_e2e]
