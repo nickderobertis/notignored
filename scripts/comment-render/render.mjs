@@ -52,11 +52,20 @@ try {
   );
 }
 
-const [lightOut, darkOut] = process.argv.slice(2);
-if (!lightOut || !darkOut) {
+const outputs = process.argv.slice(2);
+const [lightOut, darkOut] = outputs;
+if (outputs.length !== 2 || !lightOut || !darkOut) {
   fail(
-    "usage: node scripts/comment-render/render.mjs <light.png> <dark.png> < body.md",
+    `usage: node scripts/comment-render/render.mjs <light.png> <dark.png> < body.md (got ${outputs.length} argument(s))`,
     "run 'just screenshots-pr-comment', which supplies both paths",
+  );
+}
+// The second capture would overwrite the first and the run would still exit 0,
+// leaving the README pointing at two files with one theme between them.
+if (resolve(lightOut) === resolve(darkOut)) {
+  fail(
+    `the light and dark screenshots would both be written to ${lightOut}`,
+    "give the two themes different paths — 'just screenshots-pr-comment' does",
   );
 }
 
@@ -179,10 +188,16 @@ function span(token) {
 function highlight(source, lang) {
   const rows = splitGutters(source);
   const code = rows ? rows.map((row) => row.code ?? "").join("\n") : source;
-  const { tokens } = highlighter.codeToTokens(code, {
-    lang,
-    theme: "github-light",
-  });
+  let tokens;
+  try {
+    ({ tokens } = highlighter.codeToTokens(code, { lang, theme: "github-light" }));
+  } catch (error) {
+    fail(
+      `Shiki could not tokenize a ${lang} snippet`,
+      `check that "${lang}" is still one of the grammars LANGUAGES loads in this file`,
+      error,
+    );
+  }
   const lines = tokens.map((line) => line.map(span).join(""));
   if (!rows) {
     return lines.join("\n");
@@ -230,7 +245,15 @@ function rejectUnexpectedHtml(source) {
       walk(token.children);
     }
   };
-  walk(md.parse(source, {}));
+  try {
+    walk(md.parse(source, {}));
+  } catch (error) {
+    fail(
+      "markdown-it could not parse the comment body",
+      "check that `notignored --diff --format markdown` still emits markdown, then re-run 'just screenshots-pr-comment'",
+      error,
+    );
+  }
   for (const tag of raw.join("\n").match(/<!--[\s\S]*?-->|<[^>]*>/g) ?? []) {
     if (!ALLOWED_HTML.has(tag.trim())) {
       fail(
@@ -258,7 +281,16 @@ md.renderer.rules.fence = (tokens, index) => {
 // The first snippet open, the rest as the reviewer first meets them. A reader
 // deciding whether to add the Action needs to see what is behind one of these.
 rejectUnexpectedHtml(body);
-const rendered = md.render(body).replace("<details>", "<details open>");
+let rendered = "";
+try {
+  rendered = md.render(body).replace("<details>", "<details open>");
+} catch (error) {
+  fail(
+    "markdown-it could not render the comment body to HTML",
+    "run 'bash scripts/pr-comment-body.sh' and check what it printed is markdown",
+    error,
+  );
+}
 if (!rendered.includes("<details open>")) {
   fail(
     "the body carries no <details> block to open",
@@ -311,7 +343,32 @@ try {
       error,
     ),
   );
-  await page.evaluate(() => document.fonts.ready.then(() => true));
+  // `setContent` resolves whether or not the inlined CSS parsed, so a stylesheet
+  // with a syntax error would photograph an unstyled body and still exit 0.
+  const ruleCount = await page
+    .evaluate(() => document.styleSheets[0]?.cssRules.length ?? 0)
+    .catch((error) =>
+      fail(
+        "the browser would not report whether comment.css parsed",
+        "delete .dev/comment-render/browsers and re-run 'just screenshots-comment-tools'",
+        error,
+      ),
+    );
+  if (ruleCount === 0) {
+    fail(
+      "the browser parsed no rules out of scripts/comment-render/comment.css",
+      "check it for a syntax error — an unstyled body would still photograph",
+    );
+  }
+  await page
+    .evaluate(() => document.fonts.ready.then(() => true))
+    .catch((error) =>
+      fail(
+        "the browser never finished loading the page's fonts",
+        "re-run 'just screenshots-pr-comment'; if it persists, delete .dev/comment-render/browsers and re-install",
+        error,
+      ),
+    );
   const card = await page.$(".timeline-comment");
   if (!card) {
     fail(
@@ -323,11 +380,25 @@ try {
     ["light", lightOut],
     ["dark", darkOut],
   ]) {
-    await page.evaluate(
-      (value) => document.documentElement.setAttribute("data-theme", value),
-      theme,
+    await page
+      .evaluate(
+        (value) => document.documentElement.setAttribute("data-theme", value),
+        theme,
+      )
+      .catch((error) =>
+        fail(
+          `the browser would not switch the document to the ${theme} theme`,
+          "re-run 'just screenshots-pr-comment'; if it persists, delete .dev/comment-render/browsers and re-install",
+          error,
+        ),
+      );
+    await page.emulateMedia({ colorScheme: theme }).catch((error) =>
+      fail(
+        `the browser would not emulate the ${theme} colour scheme`,
+        "re-run 'just screenshots-pr-comment'; if it persists, delete .dev/comment-render/browsers and re-install",
+        error,
+      ),
     );
-    await page.emulateMedia({ colorScheme: theme });
     await card.screenshot({ path: out }).catch((error) => {
       fail(
         `cannot write the ${theme} screenshot to ${out}`,

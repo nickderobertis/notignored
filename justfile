@@ -215,14 +215,12 @@ screenshots-gif:
 # llmlint: ignore-block[changed_behavior_has_e2e] a test of either success path
 # would have to install the browser these deliberately keep out of the gate
 # (screenshots/AGENTS.md); their failure paths are driven by tests/e2e/pr_comment.rs.
-# Also run on demand by `screenshots-pr-comment`; this is the manual entry point.
 # Install the pinned markdown/highlighting/browser toolchain (needs Node.js 20+).
 screenshots-comment-tools:
     @bash scripts/setup-comment-render.sh
 
-# NOT hash-gated, so nothing notices when it goes stale — screenshots/AGENTS.md
-# says when to re-run it.
-# Re-photograph the README's comment: the real binary's body, light and dark.
+# A recipe's doc is only its LAST comment line, so this one stays on one.
+# Nothing gates the result: re-run it whenever the markdown body moves (screenshots/AGENTS.md).
 screenshots-pr-comment:
     @command -v node >/dev/null || { echo "node not found: the render needs Node.js 20+, see https://nodejs.org" >&2; exit 1; }
     @bash scripts/setup-comment-render.sh

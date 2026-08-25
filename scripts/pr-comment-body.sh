@@ -19,7 +19,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$repo_root"
+cd "$repo_root" || {
+  echo "pr-comment-body: cannot enter the repository root $repo_root" >&2
+  echo "ACTION: run this from a checkout whose directories are readable, then re-run 'just screenshots-pr-comment'" >&2
+  exit 1
+}
 
 # Same reason as scripts/screenshots.sh: git exports GIT_DIR (and friends) to the
 # hooks it runs, and inherited they would aim the throwaway repository built
@@ -102,6 +106,10 @@ if [ ! -s "$body" ]; then
   } >&2
   exit 1
 fi
-cat "$body"
+cat "$body" || {
+  echo "pr-comment-body: cannot write the comment body to stdout" >&2
+  echo "ACTION: check what this script is piped into — 'just screenshots-pr-comment' pipes it into the renderer" >&2
+  exit 1
+}
 
 # llmlint: ignore-end[changed_behavior_has_e2e]

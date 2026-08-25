@@ -137,20 +137,12 @@ overlay moves.
 Its toolchain is a **browser download**, so it stays out of everything an
 ordinary contributor runs: pinned in `scripts/comment-render/package-lock.json`,
 installed into `.dev/comment-render` on demand the way `scripts/setup-js.sh`
-installs the pinned linters.
-
-### Open follow-up: the render half has no automated proof
-
-Every success path past the body needs the pinned Chromium, so nothing in the
-gate reaches `scripts/setup-comment-render.sh`'s install, most of
-`scripts/comment-render/render.mjs`, or whether the PNGs still look like a
-GitHub comment; the `changed_behavior_has_e2e` suppressions on those files point
-here. A stand-in `node` or browser would prove less than nothing, so there is
-none — a maintainer running the recipe and looking at what it wrote is the proof,
-which is why it has to keep working from a clean clone. To close this, the
-render half needs a browser CI and a clean clone both already have (a
-pre-fetched image, say); until then, covering it would mean every contributor
-downloading Chromium to run `just check`.
+installs the pinned linters. That is what the `changed_behavior_has_e2e`
+suppressions in `scripts/comment-render/render.mjs` and the capture recipes buy,
+and it costs coverage: nothing in the gate renders a comment, so a maintainer
+running the recipe and looking at what it wrote is the only proof the styling
+still holds. Closing that needs a browser CI and a clean clone both already
+have; a stand-in would prove less than nothing.
 
 ## Commands
 
@@ -160,11 +152,6 @@ downloading Chromium to run `just check`.
   README copies). Quiet on success.
 - `just screenshots-gif` — regenerate the animated demo GIF (needs Python 3 +
   Pillow).
-- `just screenshots-comment-tools` — install the pinned markdown/highlighting/
-  browser toolchain into `.dev/comment-render` (needs Node.js 20+ and a network
-  fetch of Chromium). The capture below runs it for you.
-- `just screenshots-pr-comment` — re-photograph the rendered comment, light and
-  dark. Commit both PNGs; nothing gates them.
 - `just screenshots-bless` — after an **intended** output change, recapture and
   refresh `shots/baseline/<arch>.json`. Commit it alongside `docs/screenshots/`.
 
