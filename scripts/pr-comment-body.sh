@@ -18,12 +18,16 @@
 # release one (the suite points it at the one cargo already compiled).
 set -euo pipefail
 
+# llmlint: ignore-block[changed_behavior_has_e2e] reaching this means the
+# checkout disappearing under the script mid-run, which a test would have to do
+# to the tree the rest of the suite is reading.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root" || {
   echo "pr-comment-body: cannot enter the repository root $repo_root" >&2
   echo "ACTION: run this from a checkout whose directories are readable, then re-run 'just screenshots-pr-comment'" >&2
   exit 1
 }
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 # Same reason as scripts/screenshots.sh: git exports GIT_DIR (and friends) to the
 # hooks it runs, and inherited they would aim the throwaway repository built

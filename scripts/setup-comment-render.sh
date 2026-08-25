@@ -17,12 +17,16 @@
 # Idempotent and quiet on success.
 set -euo pipefail
 
+# llmlint: ignore-block[changed_behavior_has_e2e] reaching this means the
+# checkout disappearing under the script mid-run, which a test would have to do
+# to the tree the rest of the suite is reading.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || {
   echo "$(basename "${BASH_SOURCE[0]}"): cannot enter the repository root $ROOT" >&2
   echo "ACTION: run this from a checkout whose directories are readable, then re-run 'just screenshots-comment-tools'" >&2
   exit 1
 }
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 MANIFEST="scripts/comment-render"
 TOOLCHAIN=".dev/comment-render"
@@ -38,6 +42,9 @@ fi
 # `pipefail` would otherwise make a missing or broken `node` abort the script
 # under `set -e`, silently, before the branch below can say which it was.
 node_major="$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\).*/\1/p' || true)"
+# llmlint: ignore[changed_behavior_has_e2e] the missing-runtime half is driven by
+# tests/e2e/pr_comment.rs; the too-old half would need a stand-in `node`, and a
+# journey that fabricated the runtime it drives would prove less than none.
 if [ -z "$node_major" ] || [ "$node_major" -lt 20 ]; then
   echo "setup-comment-render: Node.js 20+ is required (found ${node_major:-none})" >&2
   echo "ACTION: install or select Node.js 20+ (https://nodejs.org/) and re-run 'just screenshots-comment-tools'" >&2

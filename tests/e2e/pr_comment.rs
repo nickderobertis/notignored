@@ -29,7 +29,7 @@ use crate::support::{bash_program, repo_root};
 /// Run one of the capture scripts with the compiled binary this suite already
 /// built, rather than a release build the gate has no reason to pay for — what
 /// is under test is the review case, not the profile it was compiled with.
-fn capture(script: &str) -> Command {
+fn body_script(script: &str) -> Command {
     let mut command = Command::new(bash_program());
     command
         .arg(repo_root().join("scripts").join(script))
@@ -140,7 +140,7 @@ fn succeeds(output: &Output, what: &str) -> String {
 /// in the repository would notice — the PNGs are not hash-gated.
 /// The comment body the picture is made of, produced by the real script.
 fn real_body() -> String {
-    let output = capture("pr-comment-body.sh")
+    let output = body_script("pr-comment-body.sh")
         .output()
         .expect("run scripts/pr-comment-body.sh");
     succeeds(&output, "scripts/pr-comment-body.sh")
@@ -262,7 +262,7 @@ fn the_installer_names_the_manifest_it_cannot_find() {
 /// one, the capture has to say so rather than fail inside `cp`.
 #[test]
 fn the_body_script_says_where_its_scratch_directory_should_have_gone() {
-    let output = capture("pr-comment-body.sh")
+    let output = body_script("pr-comment-body.sh")
         .env("TMPDIR", repo_root().join("target/no-such-tmpdir"))
         .output()
         .expect("run scripts/pr-comment-body.sh");
@@ -282,7 +282,7 @@ fn the_body_script_says_where_its_scratch_directory_should_have_gone() {
 /// a subshell.
 #[test]
 fn the_body_script_points_at_the_recipe_that_builds_the_binary() {
-    let output = capture("pr-comment-body.sh")
+    let output = body_script("pr-comment-body.sh")
         .env("NOTIGNORED_BIN", repo_root().join("target/no-such-binary"))
         .output()
         .expect("run scripts/pr-comment-body.sh");
@@ -338,6 +338,7 @@ fn snippet_lines(body: &str) -> Vec<String> {
 /// Pinning the regex source alone would only say the renderer had not changed;
 /// running the grammar over a real body is what catches the producer moving
 /// under it. Both halves have to hold, so either side drifting fails here.
+// llmlint: ignore[tests_mirror_real_usage] driving render.mjs means the pinned Chromium, which the gate does not have (screenshots/AGENTS.md); reading the grammar it restates is what is left.
 #[test]
 fn the_renderer_reads_the_gutter_grammar_the_report_writes() {
     const GRAMMAR: &str = r"/^([ >]*)(\d+) \|(?: (.*))?$/";
@@ -382,6 +383,7 @@ fn the_renderer_reads_the_gutter_grammar_the_report_writes() {
 /// One-directional on purpose: a tag the review case does not happen to reach —
 /// `<sub>` before the commit stamp existed — is still one the report emits, so
 /// an allowlist entry with no match here is not evidence of anything.
+// llmlint: ignore[tests_mirror_real_usage] same bargain as the gutter gate above: render.mjs cannot be driven without the pinned Chromium (screenshots/AGENTS.md).
 #[test]
 fn the_renderer_allows_every_raw_html_tag_the_report_emits() {
     let renderer = std::fs::read_to_string(repo_root().join("scripts/comment-render/render.mjs"))
@@ -475,6 +477,7 @@ fn the_installer_names_the_runtime_when_only_node_is_missing() {
 /// The install is a browser download, so the second run has to be a no-op. This
 /// is the one success path here that needs no browser: the tree it would skip
 /// over is a tree, and the assertion is that it stayed one.
+// llmlint: ignore[tests_mirror_real_usage] reaching this state through the installer means downloading the browser the gate is kept clear of (screenshots/AGENTS.md); the tree it skips over is laid out by hand instead.
 #[test]
 fn the_installer_skips_an_already_installed_toolchain() {
     let sandbox = installer_sandbox(true);
