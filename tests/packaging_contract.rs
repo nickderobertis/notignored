@@ -735,6 +735,45 @@ fn no_run_script_interpolates_an_untrusted_value_in(file: &str) {
     }
 }
 
+/// The wheel journey runs first and alone, and the override that says so names
+/// the journey that exists.
+///
+/// `tests/e2e/packaging.rs` builds the wheel with maturin in the suite's own
+/// target directory, which takes `target/debug/notignored` away while every
+/// other journey is spawning it; `.config/nextest.toml` reserves every test
+/// thread for that journey and schedules it first, so nothing else is running
+/// then. nextest matches the override by test name, so a renamed journey drops
+/// out of it silently — and the symptom is a sibling dying on a binary that is
+/// briefly not there, two runs in three, never the packaging test itself.
+#[test]
+fn the_wheel_journey_runs_alone_and_first() {
+    let journey = "the_pypi_wheel_installs_and_runs_the_prebuilt_binary";
+    assert!(
+        read("tests/e2e/packaging.rs").contains(&format!("fn {journey}()")),
+        "tests/e2e/packaging.rs no longer has the `{journey}` journey; rename it in \
+         .config/nextest.toml too"
+    );
+    let config = read(".config/nextest.toml");
+    let filter = format!("filter = 'test(=packaging::{journey})'");
+    let reserved = config
+        .split("[[profile.default.overrides]]")
+        .skip(1)
+        .find(|block| block.contains(&filter))
+        .unwrap_or_else(|| {
+            panic!(".config/nextest.toml has no override for `packaging::{journey}`")
+        });
+    assert!(
+        reserved.contains("threads-required = \"num-test-threads\""),
+        "the wheel journey's override no longer reserves every test thread, so the \
+         build races the journeys that spawn the binary"
+    );
+    assert!(
+        reserved.contains("priority = 100"),
+        "the wheel journey's override no longer runs it first, so the run stalls \
+         behind whatever was already running when it is reached"
+    );
+}
+
 /// The wheel is `notignored-cli`, built by maturin, with no version of its own.
 ///
 /// A literal `version = ` in `pyproject.toml` would be a second version source:
