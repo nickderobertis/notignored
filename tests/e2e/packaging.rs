@@ -388,29 +388,6 @@ fn the_npm_launcher_explains_a_missing_platform_package() {
     );
 }
 
-/// The target directory the wheel build gets to itself.
-///
-/// **Not** the suite's own. `maturin build` runs cargo, and `[tool.maturin]`
-/// sets `strip = true`, so a build in the default directory *replaces*
-/// `target/debug/notignored` with a stripped one — mid-run, while nextest is
-/// still starting tests that resolve exactly that path. Every sibling journey
-/// then either fails to spawn it (the file is briefly gone) or silently runs a
-/// different binary than the one the suite compiled. Under `target/` so it is
-/// already ignored and stays warm between runs.
-fn wheel_target_dir() -> PathBuf {
-    repo_root().join("target").join("packaging-e2e")
-}
-
-/// The binary the wheel build compiles, inside its own target directory.
-fn wheel_built_binary() -> PathBuf {
-    let name = if cfg!(windows) {
-        "notignored.exe"
-    } else {
-        "notignored"
-    };
-    wheel_target_dir().join("debug").join(name)
-}
-
 /// Build the wheel from this repo's `pyproject.toml` with the pinned maturin,
 /// into `dist`, and return the wheel it wrote.
 ///
@@ -422,7 +399,6 @@ fn build_wheel(dist: &Path) -> PathBuf {
         "maturin build",
         Command::new(tool_binary("maturin"))
             .current_dir(repo_root())
-            .env("CARGO_TARGET_DIR", wheel_target_dir())
             .arg("build")
             .arg("--locked")
             .arg("--out")
@@ -443,27 +419,138 @@ fn fingerprint(path: &Path) -> (u64, std::time::SystemTime) {
     (meta.len(), meta.modified().expect("a modification time"))
 }
 
+/// The suite's own binary, held across a wheel build and put back afterwards.
+///
+/// `maturin build` runs cargo in this clone's one target directory (the
+/// `.cargo/config.toml` contract: nothing builds anywhere else), and there it
+/// disturbs `target/debug/notignored` — the path every other journey in this
+/// suite spawns — twice over. Its cargo invocation asks for a `-C strip=symbols`
+/// variant of the binary and uplifts *that* into place, and staging the wheel
+/// then **renames the file out** to `target/maturin/` and back. A sibling that
+/// spawns the path inside that window dies with `NotFoundError` from a test
+/// with nothing to do with packaging; one that spawns it afterwards runs the
+/// stripped variant rather than the binary the suite compiled. (Under `cargo
+/// llvm-cov` the suite runs from its own `target/llvm-cov-target/debug`, which
+/// the wheel build — steered by `.cargo/config.toml` alone — never reaches; the
+/// uninstrumented runs, `just test-e2e` and `test-quick`, are where the two
+/// collide.)
+///
+/// The window is closed by `.config/nextest.toml`, which runs the wheel journey
+/// first and alone — every test thread reserved — so nothing resolves the path
+/// while maturin holds it ([`packaging_contract`](../packaging_contract.rs)
+/// holds that override to the journey's name). One journey, because a second
+/// maturin build would race the first on that same rename. The replacement is
+/// undone here:
+/// the suite's binary is kept as a **hard link** under cargo's own `target/tmp`
+/// and renamed back over whatever the build left, atomically and in `Drop`, so
+/// a build that fails part-way restores it too. A link rather than a copy
+/// because the file is thirty-odd megabytes and the point of one target
+/// directory is fewer writes.
+struct KeptBinary {
+    shared: PathBuf,
+    keep: Option<PathBuf>,
+}
+
+impl KeptBinary {
+    /// Hold `shared` — the binary at that path today — until [`restore`].
+    ///
+    /// [`restore`]: Self::restore
+    fn hold(shared: &Path) -> Self {
+        // `CARGO_TARGET_TMPDIR` is cargo's own scratch directory for integration
+        // tests, on the same filesystem as the binary — a hard link needs that,
+        // and `tempfile`'s directory may be a different one (tmpfs). Held to
+        // being `<target>/tmp` beside the binary's `<target>/debug` before
+        // anything is swept from it.
+        let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let target = shared.parent().and_then(Path::parent);
+        assert!(
+            tmp.file_name().is_some_and(|name| name == "tmp") && tmp.parent() == target,
+            "{} is not the tmp directory of the target directory holding {}",
+            tmp.display(),
+            shared.display()
+        );
+        std::fs::create_dir_all(&tmp)
+            .unwrap_or_else(|error| panic!("create {}: {error}", tmp.display()));
+        // A run killed mid-build leaves its link behind, and a link pins the
+        // binary it names after cargo has replaced it — so sweep the files this
+        // mechanism names (`notignored-kept-<pid>`, and only those) first.
+        for entry in std::fs::read_dir(&tmp).expect("read cargo's tmp directory") {
+            let entry = entry.expect("a tmp entry");
+            let name = entry.file_name();
+            let ours = name
+                .to_string_lossy()
+                .strip_prefix("notignored-kept-")
+                .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
+            if ours && entry.file_type().expect("a file type").is_file() {
+                let path = entry.path();
+                std::fs::remove_file(&path)
+                    .unwrap_or_else(|error| panic!("remove {}: {error}", path.display()));
+            }
+        }
+        let keep = tmp.join(format!("notignored-kept-{}", std::process::id()));
+        std::fs::hard_link(shared, &keep).unwrap_or_else(|error| {
+            panic!(
+                "cannot keep {} as a link at {}: {error}",
+                shared.display(),
+                keep.display()
+            )
+        });
+        Self {
+            shared: shared.to_path_buf(),
+            keep: Some(keep),
+        }
+    }
+
+    /// Put the held binary back at its path, replacing whatever is there now.
+    fn restore(mut self) {
+        let keep = self.keep.take().expect("restored once");
+        put_back(&self.shared, &keep).unwrap_or_else(|error| {
+            panic!(
+                "cannot put {} back from {}: {error}",
+                self.shared.display(),
+                keep.display()
+            )
+        });
+    }
+}
+
+impl Drop for KeptBinary {
+    fn drop(&mut self) {
+        // Only reached when the build panicked before `restore`: best effort, so
+        // the siblings that follow spawn the binary the suite compiled, and the
+        // journey's own failure stays the one reported.
+        if let Some(keep) = self.keep.take() {
+            let _ = put_back(&self.shared, &keep);
+        }
+    }
+}
+
+/// Rename the `keep` link back over `shared` if the build replaced it, and drop
+/// the link either way.
+///
+/// A build that never reached the binary leaves the two as names for one file,
+/// and renaming one such name onto the other is a no-op that keeps both — the
+/// link would linger, pinning that binary's bytes after cargo's next uplift.
+fn put_back(shared: &Path, keep: &Path) -> std::io::Result<()> {
+    // Either replacement — cargo uplifting another artifact, maturin staging a
+    // stripped one — changes the length or the modification time.
+    let same_len_and_mtime = std::fs::metadata(shared)
+        .and_then(|meta| Ok((meta.len(), meta.modified()?)))
+        .is_ok_and(|now| now == fingerprint(keep));
+    if !same_len_and_mtime {
+        std::fs::rename(keep, shared)?;
+    }
+    match std::fs::remove_file(keep) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
 /// The whole PyPI install path: build the wheel from this repo's
 /// `pyproject.toml`, install it into a scratch venv, and run the console command
-/// it put on that venv's PATH — and prove the build did not disturb the binary
-/// the rest of this suite is running.
-///
-/// That last part is a regression, not a nicety. To stage the binary into the
-/// wheel, maturin **renames it out** of `<target>/debug/` and puts it back when
-/// it is done. Pointed at the suite's own target directory, that takes
-/// `target/debug/notignored` away mid-run: sibling journeys resolve exactly that
-/// path as they start, so the ones that start inside the window die with
-/// `NotFoundError { path: ".../target/debug/notignored" }` — from tests that
-/// have nothing to do with packaging. It surfaced as a macOS-only failure in the
-/// ShellCheck parity journeys and reproduces on Linux about two runs in three.
-///
-/// Both halves are asserted because either alone could pass for the wrong
-/// reason: the build landing in its own directory is what fails everywhere if
-/// [`wheel_target_dir`] is ever dropped, and the suite's own binary being
-/// untouched is what catches the theft actually happening. They live inside this
-/// journey rather than in a test of their own because two maturin builds sharing
-/// one target directory race on that same rename — the isolation has to be one
-/// build, not one per assertion.
+/// it put on that venv's PATH — and prove the binary the rest of this suite is
+/// running is the one that was there before the build ([`KeptBinary`] says why
+/// that needs proving, and why here rather than in a test of its own).
 #[test]
 fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
     let scratch = tempfile::tempdir().expect("a scratch directory");
@@ -471,20 +558,16 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
 
     let shared = assert_cmd::cargo::cargo_bin("notignored");
     let before = fingerprint(&shared);
+    let kept = KeptBinary::hold(&shared);
 
     let wheel = build_wheel(&dist);
 
-    assert!(
-        wheel_built_binary().exists(),
-        "the wheel build did not compile into {}; it used the suite's own target \
-         directory instead",
-        wheel_built_binary().display()
-    );
+    kept.restore();
     assert_eq!(
         fingerprint(&shared),
         before,
-        "the wheel build disturbed {}, which every other journey in this suite \
-         spawns while it runs",
+        "the wheel build left a different {} behind, which every other journey in \
+         this suite spawns after it",
         shared.display()
     );
 

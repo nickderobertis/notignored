@@ -1,0 +1,20 @@
+# nextest's run configuration for the crate's suites: `just test`, `test-quick`
+# and `test-e2e` all run through `cargo nextest`, and so does CI.
+
+# An override's `priority` needs 0.9.91. An older runner would not refuse the
+# key; it would run the wheel journey somewhere in the middle of the pack, which
+# is the failure this file exists to prevent.
+nextest-version = { required = "0.9.91" }
+
+# The wheel journey builds the crate with maturin in the clone's one target
+# directory, and that build replaces `target/debug/notignored` — the binary
+# every other e2e journey spawns — and renames it out while it stages the
+# wheel. So it runs first and alone, every test thread reserved, before anything
+# resolves that path. tests/e2e/packaging.rs (`KeptBinary`) says why and how the
+# binary comes back; tests/packaging_contract.rs holds this override to that
+# journey's name, because nextest matches the filter by name and a renamed test
+# would drop out of it silently.
+[[profile.default.overrides]]
+filter = 'test(=packaging::the_pypi_wheel_installs_and_runs_the_prebuilt_binary)'
+threads-required = "num-test-threads"
+priority = 100

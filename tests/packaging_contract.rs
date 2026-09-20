@@ -34,7 +34,7 @@
 #[path = "support/workflow_yaml.rs"]
 mod workflow_yaml;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use workflow_yaml::{parse, read, repo_root, run_steps, Node};
 
@@ -733,6 +733,74 @@ fn no_run_script_interpolates_an_untrusted_value_in(file: &str) {
             }
         }
     }
+}
+
+/// The `key = value` pairs of every `[[profile.default.overrides]]` table in
+/// `.config/nextest.toml`, in file order, with comments dropped and string
+/// values unquoted — so a commented-out override reconciles nothing.
+fn nextest_overrides() -> Vec<BTreeMap<String, String>> {
+    let mut tables = Vec::new();
+    let mut current: Option<BTreeMap<String, String>> = None;
+    for line in read(".config/nextest.toml").lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') {
+            tables.extend(current.take());
+            if line == "[[profile.default.overrides]]" {
+                current = Some(BTreeMap::new());
+            }
+            continue;
+        }
+        if let (Some(table), Some((key, value))) = (current.as_mut(), line.split_once('=')) {
+            let value = value
+                .trim()
+                .trim_matches(|quote| quote == '"' || quote == '\'');
+            table.insert(key.trim().to_string(), value.to_string());
+        }
+    }
+    tables.extend(current);
+    tables
+}
+
+/// The wheel journey runs first and alone, and the override that says so names
+/// the journey that exists.
+///
+/// `tests/e2e/packaging.rs` builds the wheel with maturin in the suite's own
+/// target directory, which takes `target/debug/notignored` away while every
+/// other journey is spawning it; `.config/nextest.toml` reserves every test
+/// thread for that journey and schedules it first, so nothing else is running
+/// then. nextest matches the override by test name, so a renamed journey would
+/// drop out of it silently, and the failure would land on a sibling rather than
+/// on the packaging test.
+#[test]
+fn the_wheel_journey_runs_alone_and_first() {
+    let journey = "the_pypi_wheel_installs_and_runs_the_prebuilt_binary";
+    assert!(
+        read("tests/e2e/packaging.rs").contains(&format!("#[test]\nfn {journey}()")),
+        "tests/e2e/packaging.rs no longer declares the `{journey}` test; rename it in \
+         .config/nextest.toml too"
+    );
+    let filter = format!("test(=packaging::{journey})");
+    let reserved = nextest_overrides()
+        .into_iter()
+        .find(|table| table.get("filter") == Some(&filter))
+        .unwrap_or_else(|| {
+            panic!(".config/nextest.toml has no override whose filter is `{filter}`")
+        });
+    assert_eq!(
+        reserved.get("threads-required").map(String::as_str),
+        Some("num-test-threads"),
+        "the wheel journey's override no longer reserves every test thread, so the \
+         build races the journeys that spawn the binary"
+    );
+    assert_eq!(
+        reserved.get("priority").map(String::as_str),
+        Some("100"),
+        "the wheel journey's override no longer runs it first, so the run stalls \
+         behind whatever was already running when it is reached"
+    );
 }
 
 /// The wheel is `notignored-cli`, built by maturin, with no version of its own.
