@@ -427,14 +427,12 @@ fn fingerprint(path: &Path) -> (u64, std::time::SystemTime) {
 /// suite spawns — twice over. Its cargo invocation asks for a `-C strip=symbols`
 /// variant of the binary and uplifts *that* into place, and staging the wheel
 /// then **renames the file out** to `target/maturin/` and back. A sibling that
-/// spawned the path inside that window died with `NotFoundError { path:
-/// ".../target/debug/notignored" }` from a test with nothing to do with
-/// packaging — a macOS-only ShellCheck parity failure at first, then two Linux
-/// runs in three. One that spawned it afterwards ran the stripped variant, and
-/// under `cargo llvm-cov` an *uninstrumented* one, because cargo's fingerprint
-/// does not see the wrapper's instrumentation as a change and reuses whatever
-/// stripped binary an earlier run left: every journey after it then recorded no
-/// coverage for the bin crate at all.
+/// spawns the path inside that window dies with `NotFoundError` from a test
+/// with nothing to do with packaging; one that spawns it afterwards runs the
+/// stripped variant — under `cargo llvm-cov` an *uninstrumented* one, because
+/// cargo's fingerprint does not see the wrapper's instrumentation as a change
+/// and reuses whatever stripped binary an earlier run left — and records no
+/// coverage for the bin crate.
 ///
 /// The window is closed by `.config/nextest.toml`, which runs the wheel journey
 /// first and alone — every test thread reserved — so nothing resolves the path

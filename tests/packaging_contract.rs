@@ -742,9 +742,9 @@ fn no_run_script_interpolates_an_untrusted_value_in(file: &str) {
 /// target directory, which takes `target/debug/notignored` away while every
 /// other journey is spawning it; `.config/nextest.toml` reserves every test
 /// thread for that journey and schedules it first, so nothing else is running
-/// then. nextest matches the override by test name, so a renamed journey drops
-/// out of it silently — and the symptom is a sibling dying on a binary that is
-/// briefly not there, two runs in three, never the packaging test itself.
+/// then. nextest matches the override by test name, so a renamed journey would
+/// drop out of it silently, and the failure would land on a sibling rather than
+/// on the packaging test.
 #[test]
 fn the_wheel_journey_runs_alone_and_first() {
     let journey = "the_pypi_wheel_installs_and_runs_the_prebuilt_binary";
