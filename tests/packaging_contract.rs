@@ -34,7 +34,7 @@
 #[path = "support/workflow_yaml.rs"]
 mod workflow_yaml;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use workflow_yaml::{parse, read, repo_root, run_steps, Node};
 
@@ -735,6 +735,35 @@ fn no_run_script_interpolates_an_untrusted_value_in(file: &str) {
     }
 }
 
+/// The `key = value` pairs of every `[[profile.default.overrides]]` table in
+/// `.config/nextest.toml`, in file order, with comments dropped and string
+/// values unquoted — so a commented-out override reconciles nothing.
+fn nextest_overrides() -> Vec<BTreeMap<String, String>> {
+    let mut tables = Vec::new();
+    let mut current: Option<BTreeMap<String, String>> = None;
+    for line in read(".config/nextest.toml").lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') {
+            tables.extend(current.take());
+            if line == "[[profile.default.overrides]]" {
+                current = Some(BTreeMap::new());
+            }
+            continue;
+        }
+        if let (Some(table), Some((key, value))) = (current.as_mut(), line.split_once('=')) {
+            let value = value
+                .trim()
+                .trim_matches(|quote| quote == '"' || quote == '\'');
+            table.insert(key.trim().to_string(), value.to_string());
+        }
+    }
+    tables.extend(current);
+    tables
+}
+
 /// The wheel journey runs first and alone, and the override that says so names
 /// the journey that exists.
 ///
@@ -749,26 +778,26 @@ fn no_run_script_interpolates_an_untrusted_value_in(file: &str) {
 fn the_wheel_journey_runs_alone_and_first() {
     let journey = "the_pypi_wheel_installs_and_runs_the_prebuilt_binary";
     assert!(
-        read("tests/e2e/packaging.rs").contains(&format!("fn {journey}()")),
-        "tests/e2e/packaging.rs no longer has the `{journey}` journey; rename it in \
+        read("tests/e2e/packaging.rs").contains(&format!("#[test]\nfn {journey}()")),
+        "tests/e2e/packaging.rs no longer declares the `{journey}` test; rename it in \
          .config/nextest.toml too"
     );
-    let config = read(".config/nextest.toml");
-    let filter = format!("filter = 'test(=packaging::{journey})'");
-    let reserved = config
-        .split("[[profile.default.overrides]]")
-        .skip(1)
-        .find(|block| block.contains(&filter))
+    let filter = format!("test(=packaging::{journey})");
+    let reserved = nextest_overrides()
+        .into_iter()
+        .find(|table| table.get("filter") == Some(&filter))
         .unwrap_or_else(|| {
-            panic!(".config/nextest.toml has no override for `packaging::{journey}`")
+            panic!(".config/nextest.toml has no override whose filter is `{filter}`")
         });
-    assert!(
-        reserved.contains("threads-required = \"num-test-threads\""),
+    assert_eq!(
+        reserved.get("threads-required").map(String::as_str),
+        Some("num-test-threads"),
         "the wheel journey's override no longer reserves every test thread, so the \
          build races the journeys that spawn the binary"
     );
-    assert!(
-        reserved.contains("priority = 100"),
+    assert_eq!(
+        reserved.get("priority").map(String::as_str),
+        Some("100"),
         "the wheel journey's override no longer runs it first, so the run stalls \
          behind whatever was already running when it is reached"
     );

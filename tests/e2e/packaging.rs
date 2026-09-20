@@ -438,7 +438,9 @@ fn fingerprint(path: &Path) -> (u64, std::time::SystemTime) {
 /// The window is closed by `.config/nextest.toml`, which runs the wheel journey
 /// first and alone — every test thread reserved — so nothing resolves the path
 /// while maturin holds it ([`packaging_contract`](../packaging_contract.rs)
-/// holds that override to the journey's name). The replacement is undone here:
+/// holds that override to the journey's name). One journey, because a second
+/// maturin build would race the first on that same rename. The replacement is
+/// undone here:
 /// the suite's binary is kept as a **hard link** under cargo's own `target/tmp`
 /// and renamed back over whatever the build left, atomically and in `Drop`, so
 /// a build that fails part-way restores it too. A link rather than a copy
@@ -470,13 +472,17 @@ impl KeptBinary {
         std::fs::create_dir_all(&tmp)
             .unwrap_or_else(|error| panic!("create {}: {error}", tmp.display()));
         // A run killed mid-build leaves its link behind, and a link pins the
-        // binary it names after cargo has replaced it — so sweep them first.
+        // binary it names after cargo has replaced it — so sweep the files this
+        // mechanism names (`notignored-kept-<pid>`, and only those) first.
         for entry in std::fs::read_dir(&tmp).expect("read cargo's tmp directory") {
-            let path = entry.expect("a tmp entry").path();
-            if path
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("notignored-kept-"))
-            {
+            let entry = entry.expect("a tmp entry");
+            let name = entry.file_name();
+            let ours = name
+                .to_string_lossy()
+                .strip_prefix("notignored-kept-")
+                .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()));
+            if ours && entry.file_type().expect("a file type").is_file() {
+                let path = entry.path();
                 std::fs::remove_file(&path)
                     .unwrap_or_else(|error| panic!("remove {}: {error}", path.display()));
             }
@@ -526,10 +532,12 @@ impl Drop for KeptBinary {
 /// and renaming one such name onto the other is a no-op that keeps both — the
 /// link would linger, pinning that binary's bytes after cargo's next uplift.
 fn put_back(shared: &Path, keep: &Path) -> std::io::Result<()> {
-    let untouched = std::fs::metadata(shared)
+    // Either replacement — cargo uplifting another artifact, maturin staging a
+    // stripped one — changes the length or the modification time.
+    let same_len_and_mtime = std::fs::metadata(shared)
         .and_then(|meta| Ok((meta.len(), meta.modified()?)))
         .is_ok_and(|now| now == fingerprint(keep));
-    if !untouched {
+    if !same_len_and_mtime {
         std::fs::rename(keep, shared)?;
     }
     match std::fs::remove_file(keep) {
@@ -541,13 +549,8 @@ fn put_back(shared: &Path, keep: &Path) -> std::io::Result<()> {
 /// The whole PyPI install path: build the wheel from this repo's
 /// `pyproject.toml`, install it into a scratch venv, and run the console command
 /// it put on that venv's PATH — and prove the binary the rest of this suite is
-/// running is the one that was there before the build.
-///
-/// That last part is a regression, not a nicety: [`KeptBinary`] says what the
-/// build does to `target/debug/notignored` and why it matters. Asserted inside
-/// this journey rather than in a test of its own because two maturin builds
-/// sharing one target directory race on that same rename — the exclusivity
-/// `.config/nextest.toml` grants is one build, not one per assertion.
+/// running is the one that was there before the build ([`KeptBinary`] says why
+/// that needs proving, and why here rather than in a test of its own).
 #[test]
 fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
     let scratch = tempfile::tempdir().expect("a scratch directory");
