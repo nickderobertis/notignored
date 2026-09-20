@@ -429,10 +429,11 @@ fn fingerprint(path: &Path) -> (u64, std::time::SystemTime) {
 /// then **renames the file out** to `target/maturin/` and back. A sibling that
 /// spawns the path inside that window dies with `NotFoundError` from a test
 /// with nothing to do with packaging; one that spawns it afterwards runs the
-/// stripped variant — under `cargo llvm-cov` an *uninstrumented* one, because
-/// cargo's fingerprint does not see the wrapper's instrumentation as a change
-/// and reuses whatever stripped binary an earlier run left — and records no
-/// coverage for the bin crate.
+/// stripped variant rather than the binary the suite compiled. (Under `cargo
+/// llvm-cov` the suite runs from its own `target/llvm-cov-target/debug`, which
+/// the wheel build — steered by `.cargo/config.toml` alone — never reaches; the
+/// uninstrumented runs, `just test-e2e` and `test-quick`, are where the two
+/// collide.)
 ///
 /// The window is closed by `.config/nextest.toml`, which runs the wheel journey
 /// first and alone — every test thread reserved — so nothing resolves the path
@@ -441,8 +442,8 @@ fn fingerprint(path: &Path) -> (u64, std::time::SystemTime) {
 /// the suite's binary is kept as a **hard link** under cargo's own `target/tmp`
 /// and renamed back over whatever the build left, atomically and in `Drop`, so
 /// a build that fails part-way restores it too. A link rather than a copy
-/// because the file is thirty-odd megabytes, more when instrumented, and the
-/// point of one target directory is fewer writes.
+/// because the file is thirty-odd megabytes and the point of one target
+/// directory is fewer writes.
 struct KeptBinary {
     shared: PathBuf,
     keep: Option<PathBuf>,
@@ -455,8 +456,17 @@ impl KeptBinary {
     fn hold(shared: &Path) -> Self {
         // `CARGO_TARGET_TMPDIR` is cargo's own scratch directory for integration
         // tests, on the same filesystem as the binary — a hard link needs that,
-        // and `tempfile`'s directory may be a different one (tmpfs).
+        // and `tempfile`'s directory may be a different one (tmpfs). Held to
+        // being `<target>/tmp` beside the binary's `<target>/debug` before
+        // anything is swept from it.
         let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let target = shared.parent().and_then(Path::parent);
+        assert!(
+            tmp.file_name().is_some_and(|name| name == "tmp") && tmp.parent() == target,
+            "{} is not the tmp directory of the target directory holding {}",
+            tmp.display(),
+            shared.display()
+        );
         std::fs::create_dir_all(&tmp)
             .unwrap_or_else(|error| panic!("create {}: {error}", tmp.display()));
         // A run killed mid-build leaves its link behind, and a link pins the
