@@ -159,7 +159,7 @@ jobs:
         with:
           tool: just,nextest,cargo-llvm-cov
       - run: just bootstrap
-      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] the `test` job's `just check` predates this trigger and is the release's own gate on the artifacts it builds (see that job); the tag trigger only replaced the Release trigger that already ran it, and dropping it is a decision about what a release may publish, not part of changing the trigger.
+      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] a standing gate, not added here: this change only swapped the trigger that runs it.
       - run: just check
 
   upload:
