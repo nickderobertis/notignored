@@ -71,7 +71,7 @@ name: Release
 # release-plz stays the single version driver.
 #
 # llmlint: ignore-file[changed_behavior_has_e2e] the publish and verify jobs are steps
-# in a GitHub Actions job on a published Release: installing an exact version until the
+# in a GitHub Actions job run by a release tag: installing an exact version until the
 # registry serves it, and smoke-testing what it installed. Driving them from a test
 # would mean standing up a runner and a public release, or replacing both with a
 # simulation — and a simulation is what would then be under test. They are proven the

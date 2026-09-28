@@ -78,7 +78,7 @@ node -e '
   const fail = (message, action) => {
     process.stderr.write(`ACTION: ${action}\n`);
     process.stderr.write(`npm-install-probe: ${message}\n`);
-    process.exit(1);
+    process.exit(3);
   };
   const versionOf = (manifest) => {
     try {
@@ -114,11 +114,11 @@ node -e '
   }
 ' "$root" "$version" || {
   status=$?
-  # The program's own failures print their ACTION and exit 1; anything else is
-  # node itself failing to run it.
-  if [ "$status" -ne 1 ]; then
+  # The program's own failures have printed their ACTION and exit 3; any other
+  # status is node failing to run the check at all.
+  if [ "$status" -ne 3 ]; then
     echo "ACTION: check that 'node --version' runs on this runner (actions/setup-node)" >&2
     echo "npm-install-probe: node exited $status while checking the install" >&2
   fi
-  exit "$status"
+  exit 1
 }

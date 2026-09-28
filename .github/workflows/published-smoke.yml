@@ -22,8 +22,8 @@ name: Published smoke
 # release it had ever cut. Nothing caught it: the local suite served a fixture
 # named after the script rather than after a release, and the dogfood workflow
 # runs `version: local`, which compiles from source and never downloads anything.
-# The `github-release` job below is that missing leg — the GitHub Action's own
-# default install path, run against the live release.
+# The `github-release` job below is that missing leg — the installer the GitHub
+# Action runs, here on its `version: latest` path, against the live release.
 #
 # Deliberately cheap: a checkout, the language runtime that owns the installer,
 # `pip install` / `npm install -g`, and bash. No Rust toolchain, no build, no
