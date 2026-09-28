@@ -129,6 +129,7 @@ fn an_unreadable_manifest_fails_naming_the_version_input() {
         None,
         Some("[workspace]\nmembers = []\n"),
         Some("[package]\nname = \"notignored\"\nversion = \"1.2\"\n"),
+        Some("[package]\nname = \"notignored\"\nversion = \"1.2.3\" garbage\n"),
     ] {
         if let Some(contents) = manifest {
             std::fs::write(action.path().join("Cargo.toml"), contents)

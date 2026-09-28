@@ -93,7 +93,12 @@ runs:
               own="$(awk '
                 /^\[/ { section = $0 }
                 section == "[package]" && /^version[ \t]*=/ {
-                  sub(/^version[ \t]*=[ \t]*"/, ""); sub(/".*$/, ""); print; exit
+                  # The whole assignment, or nothing: a line TOML would reject
+                  # names no version.
+                  if ($0 ~ /^version[ \t]*=[ \t]*"[^"]*"[ \t]*(#.*)?$/) {
+                    sub(/^version[ \t]*=[ \t]*"/, ""); sub(/".*$/, ""); print
+                  }
+                  exit
                 }' "$manifest" || true)"
             fi
             # Held to the vX.Y.Z shape a release tag has before it names one.
