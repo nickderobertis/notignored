@@ -9,19 +9,12 @@ name: Release
 # section (`git_release_draft` in release-plz.toml). Versioning and building stay
 # separate workflows, joined only by that tag.
 #
-# Draft first because release immutability is on for this repository: once a
-# Release is published it accepts no new, replaced or deleted asset and its tag
-# cannot move. So every asset is attached while the Release is a draft, and this
-# workflow publishes it only after every `upload` leg succeeded. A draft is not
-# `latest` and its assets are not public, so nothing — `scripts/install.sh`
-# resolving `latest` included — sees a Release with half its assets.
-#
-# release-plz authenticates with a PAT precisely so that its tag push fires this
-# workflow — a tag created by the default GITHUB_TOKEN triggers nothing, and the
-# release would silently ship no artifacts. The draft's own `created` event runs
-# no workflow at all, which is why the tag, not the Release, is the trigger. The
-# publication below uses the job's GITHUB_TOKEN, which fires no workflow either,
-# so publishing cannot start this pipeline a second time.
+# Draft first, because a published Release is immutable (AGENTS.md, "Commits,
+# releases, and merging"): every asset is attached to the draft and this
+# workflow publishes it after every `upload` leg succeeded. The tag is the
+# trigger because a draft's creation runs no workflow, and release-plz pushes it
+# with a PAT because a tag pushed by the default GITHUB_TOKEN triggers nothing.
+# The publication uses the GITHUB_TOKEN, so it cannot start this pipeline again.
 #
 #   * test          — the complete deterministic gate, so untested artifacts
 #                     never publish.

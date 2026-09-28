@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# The three steps release.yml takes on the GitHub Release itself: attach only to
-# a draft, publish it, and require it immutable. AGENTS.md ("Commits, releases,
-# and merging") says why the order is draft-first and what each failure leaves.
+# release.yml's steps on the GitHub Release itself; AGENTS.md ("Commits,
+# releases, and merging") says why the order is draft-first.
 #
 #   await-draft       wait (bounded) for the Release for TAG to exist, and refuse
 #                     one that is already published: nothing can be attached to
@@ -62,7 +61,8 @@ while [ "$#" -gt 0 ]; do
     --wait)
       [ "$#" -ge 2 ] || fail_usage "--wait needs a value"
       case "$2" in
-        "" | *[!0-9]*) fail_usage "--wait needs a whole number of seconds, not '$2'" ;;
+        # At most four digits: a budget beyond a job's own timeout means nothing.
+        "" | *[!0-9]* | ?????*) fail_usage "--wait needs a whole number of seconds up to 9999, not '$2'" ;;
       esac
       wait="$2"
       shift 2
@@ -70,7 +70,7 @@ while [ "$#" -gt 0 ]; do
     --interval)
       [ "$#" -ge 2 ] || fail_usage "--interval needs a value"
       case "$2" in
-        "" | *[!0-9]* | 0) fail_usage "--interval needs a whole number of seconds above 0, not '$2'" ;;
+        "" | *[!0-9]* | 0 | 0* | ????*) fail_usage "--interval needs a whole number of seconds from 1 to 999, not '$2'" ;;
       esac
       interval="$2"
       shift 2
@@ -95,15 +95,10 @@ esac
   "run this inside GitHub Actions, which sets it"
 repo="$GITHUB_REPOSITORY"
 api="${GITHUB_API_URL:-https://api.github.com}"
-# An http(s) origin, optionally with a path (GitHub Enterprise's `/api/v3`):
-# no userinfo, query, fragment, or whitespace to redirect or truncate the
-# request paths built on it.
-case "$api" in
-  *[!A-Za-z0-9._:/-]* | http:///* | https:///*) api_ok="" ;;
-  http://?* | https://?*) api_ok="ok" ;;
-  *) api_ok="" ;;
-esac
-[ -n "$api_ok" ] || die "GITHUB_API_URL is not an http(s) API origin: '$api'" \
+# An http(s) host, an optional port, and an optional path (GitHub Enterprise's
+# `/api/v3`): no userinfo, query, fragment, or whitespace to redirect or truncate
+# the request paths built on it.
+[[ "$api" =~ ^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?$ ]] || die "GITHUB_API_URL is not an http(s) API origin: '$api'" \
   "unset it to use https://api.github.com, or point it at your GitHub Enterprise API"
 token_hint="give the job contents: write and pass its token as GH_TOKEN"
 
@@ -114,7 +109,9 @@ token_hint="give the job contents: write and pass its token as GH_TOKEN"
 find_release() {
   local found
   found="$(gh api --paginate "$api/repos/$repo/releases?per_page=100" \
-    --jq ".[] | select(.tag_name == \"$tag\") | \"\(.id) \(.draft)\"")" \
+    --jq ".[] | select(.tag_name == \"$tag\")
+      | if (.id | type) == \"number\" and (.draft | type) == \"boolean\"
+        then \"\(.id) \(.draft)\" else \"malformed\" end")" \
     || die "cannot list the Releases of $repo" "$token_hint"
   found="${found%%$'\n'*}"
   case "$found" in
@@ -171,11 +168,14 @@ case "$command" in
     # `releases/tags/…` answers only for a published Release, so a 404 here is a
     # draft (or no Release at all) — a different failure from a mutable one, and
     # told apart below so the advice matches it.
-    answer="$(mktemp)"
+    answer="$(mktemp)" || die "cannot create a temporary file" \
+      "free space in \$TMPDIR on the runner and re-run the job"
     trap 'rm -f "$answer"' EXIT
     while :; do
       state="$(gh api "$api/repos/$repo/releases/tags/$tag" \
-        --jq '"\(.draft) \(.immutable)"' 2>"$answer")" || state="unpublished"
+        --jq 'if (.draft | type) == "boolean" and (.immutable | type) == "boolean"
+          then "\(.draft) \(.immutable)" else "malformed" end' 2>"$answer")" \
+        || state="unpublished"
       if [ "$state" = "false true" ]; then
         echo "github-release: $tag is published and immutable"
         exit 0
@@ -186,6 +186,10 @@ case "$command" in
       sleep "$interval"
     done
     case "$state" in
+      malformed)
+        die "the API read the Release for $tag back without boolean draft and immutable fields" \
+          "check GITHUB_API_URL — the host answering is not the GitHub API"
+        ;;
       "false "*)
         die "the Release for $tag reads back \"immutable\": ${state#* }, so release immutability is off for $repo — its tag can still move, and v0 stays where it was" \
           "turn the setting on (Settings → General → Releases → Enable release immutability; 'gh api repos/$repo/immutable-releases' reads it) — it is not retroactive, so the next release is the first published under it"

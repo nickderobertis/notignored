@@ -353,8 +353,7 @@ it just cached. Only the install retries — the smoke assertion after it stays
 single-shot, so a wrong version fails now instead of in ten minutes. An npm
 install's exit 0 is not enough: npm skips an optional dependency it cannot resolve
 yet, so npm verify installs run `scripts/npm-install-probe.sh`, which also fails
-until the runner's platform package is installed (`tests/e2e/verify_npm.rs` says
-which releases that broke).
+until the runner's platform package is installed.
 
 ## Commits, releases, and merging
 

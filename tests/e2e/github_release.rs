@@ -45,7 +45,8 @@ enum Broken {
     Listing,
     Publishing,
     ReadBack,
-    /// Not a 500: the listing answers, with a `draft` that is not a boolean.
+    /// Not a 500: the listing and the read-back answer, with `draft` and
+    /// `immutable` spelled as strings rather than booleans.
     GarbledDraft,
 }
 
@@ -208,11 +209,16 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
         Broken::ReadBack => method == "GET" && path == by_tag,
         Broken::GarbledDraft => false,
     };
-    if state.broken == Broken::GarbledDraft && method == "GET" && path == list {
-        let payload = format!(
-            r#"[{{"id":{RELEASE_ID},"tag_name":"{}","draft":"yes"}}]"#,
+    if state.broken == Broken::GarbledDraft && method == "GET" && (path == list || path == by_tag) {
+        let release = format!(
+            r#"{{"id":{RELEASE_ID},"tag_name":"{}","draft":"false","immutable":"true"}}"#,
             tag()
         );
+        let payload = if path == list {
+            format!("[{release}]")
+        } else {
+            release
+        };
         write!(
             stream,
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
@@ -583,6 +589,8 @@ fn an_api_url_with_a_query_or_userinfo_is_refused() {
         "http://user@127.0.0.1:1".to_string(),
         "ftp://127.0.0.1".to_string(),
         "http:///repos".to_string(),
+        "http://:80".to_string(),
+        "http://127.0.0.1:bad".to_string(),
     ] {
         let output = Command::new("bash")
             .arg(repo_root().join("scripts/github-release.sh"))
@@ -607,7 +615,7 @@ fn an_api_url_with_a_query_or_userinfo_is_refused() {
 #[test]
 fn a_draft_value_that_is_not_a_boolean_is_refused() {
     let api = LocalGitHub::breaking(Some(DRAFT), Broken::GarbledDraft);
-    for command in ["publish", "await-draft"] {
+    for command in ["publish", "await-draft", "verify-immutable"] {
         let output = github_release(&api, &[command, "--tag", &tag(), "--wait", "0"]);
         assert!(!output.status.success(), "{command}: {}", text(&output));
         assert!(
@@ -617,4 +625,20 @@ fn a_draft_value_that_is_not_a_boolean_is_refused() {
         );
     }
     assert!(api.writes().is_empty());
+}
+
+/// A budget or an interval that is not a small whole number is refused rather
+/// than left to bash arithmetic or `sleep` to misread.
+#[test]
+fn an_unbounded_wait_or_interval_is_refused() {
+    let api = LocalGitHub::start(Some(DRAFT), true);
+    for args in [
+        ["--wait", "99999999999999999999"],
+        ["--interval", "0"],
+        ["--interval", "1e3"],
+    ] {
+        let output = github_release(&api, &["await-draft", "--tag", &tag(), args[0], args[1]]);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {}", text(&output));
+    }
+    assert!(api.state.lock().expect("the state").requests.is_empty());
 }

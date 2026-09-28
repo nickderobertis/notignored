@@ -47,6 +47,7 @@ done
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] \
   || fail_usage "--version must be a release version such as 1.2.3, not '$version'"
 [ "$#" -gt 0 ] || fail_usage "no package to install"
+command -v node >/dev/null 2>&1 || fail_usage "node is not on PATH; the install check runs in it (actions/setup-node)"
 
 # npm's own error comes first; the last line is ours, because it is the one
 # retry-install.sh shows per attempt.
@@ -111,4 +112,13 @@ node -e '
       `install notignored-cli@${expected}, whose launcher pins ${pkg}@${expected}, rather than another version of it`
     );
   }
-' "$root" "$version"
+' "$root" "$version" || {
+  status=$?
+  # The program's own failures print their ACTION and exit 1; anything else is
+  # node itself failing to run it.
+  if [ "$status" -ne 1 ]; then
+    echo "ACTION: check that 'node --version' runs on this runner (actions/setup-node)" >&2
+    echo "npm-install-probe: node exited $status while checking the install" >&2
+  fi
+  exit "$status"
+}
