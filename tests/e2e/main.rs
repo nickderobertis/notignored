@@ -8,6 +8,7 @@
 mod support;
 
 mod action_comment;
+mod action_install;
 mod action_scan;
 mod biome_parity;
 mod cli;
@@ -15,6 +16,7 @@ mod color;
 mod diff;
 mod eslint_parity;
 mod examples;
+mod github_release;
 mod installer;
 mod js_tools_setup;
 mod llmlint_parity;
@@ -37,3 +39,4 @@ mod shellcheck_parity;
 mod smoke;
 mod symlinked_root;
 mod typescript_parity;
+mod verify_npm;

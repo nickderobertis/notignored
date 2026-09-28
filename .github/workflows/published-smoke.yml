@@ -22,8 +22,8 @@ name: Published smoke
 # release it had ever cut. Nothing caught it: the local suite served a fixture
 # named after the script rather than after a release, and the dogfood workflow
 # runs `version: local`, which compiles from source and never downloads anything.
-# The `github-release` job below is that missing leg — the GitHub Action's own
-# default install path, run against the live release.
+# The `github-release` job below is that missing leg — the installer the GitHub
+# Action runs, here on its `version: latest` path, against the live release.
 #
 # Deliberately cheap: a checkout, the language runtime that owns the installer,
 # `pip install` / `npm install -g`, and bash. No Rust toolchain, no build, no
@@ -67,8 +67,9 @@ concurrency:
 
 jobs:
   # `curl … install.sh | sh`, on each OS, as a user runs it — and as the GitHub
-  # Action's default `version: latest` runs it, since that step is literally
-  # `sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to …` with no version. This is
+  # Action's `version: latest` runs it, since that step is literally
+  # `sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to …` with no version. (The
+  # action's empty default passes `--version v<its own version>` instead.) This is
   # the leg whose absence let a 404 on the checksum ship through every release.
   #
   # Ungated by any repository variable, unlike the two registry jobs: a GitHub
@@ -112,9 +113,9 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      # No `--version`: this is byte-for-byte the GitHub Action's default install
-      # step, which passes only `--to`. Resolving `latest` is part of what broke,
-      # so it is part of what runs.
+      # No `--version`, as the GitHub Action's `version: latest` install passes
+      # only `--to`: resolving the latest release is part of what a user runs, so
+      # it is part of what this runs.
       - name: Install the latest release with scripts/install.sh
         env:
           # Lifts api.github.com's anonymous rate limit when install.sh resolves

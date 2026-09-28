@@ -8,10 +8,11 @@
 #      is why the action's surface is listed there. See AGENTS.md.
 #   2. The `release-pr` job opens/updates a PR that bumps the version in
 #      Cargo.toml + Cargo.lock and writes the CHANGELOG section.
-#   3. Merging that PR makes the `release` job tag `vX.Y.Z` and cut a GitHub
-#      Release with the changelog notes. That Release (created with a PAT, not
-#      the default GITHUB_TOKEN) triggers release.yml, which builds, archives,
-#      checksums, and attaches the cross-platform binaries.
+#   3. Merging that PR makes the `release` job push the `vX.Y.Z` tag and cut a
+#      *draft* GitHub Release with the changelog notes. That tag (pushed with a
+#      PAT, not the default GITHUB_TOKEN) triggers release.yml, which builds,
+#      archives, checksums, and attaches the cross-platform binaries to the
+#      draft, then publishes it.
 
 [workspace]
 # release-plz only versions, changelogs, tags, and cuts the GitHub Release — it
@@ -28,6 +29,10 @@ semver_check = false
 
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
+
+# A draft, because a published Release is immutable: release.yml attaches the
+# binaries and publishes it (AGENTS.md, "Commits, releases, and merging").
+git_release_draft = true
 
 # Keep-a-Changelog-style grouping. The version bump is computed from the
 # conventional-commit *type*, independent of these display groups.

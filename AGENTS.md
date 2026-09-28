@@ -215,6 +215,14 @@ as shell source. Pass it through `env`, or read the payload as data from
 also gates the inputs, outputs, and the sticky marker the renderer and the
 comment script must agree on.
 
+**The action's ref pins its binary.** `version` defaults to empty, which installs
+`v<version>` for the `[package] version` in `$GITHUB_ACTION_PATH/Cargo.toml` — at
+a release tag that *is* the released version, because release-plz is its only
+writer — so `uses: …@vX.Y.Z` with nothing else is a complete pin. An unreadable
+manifest fails naming the input rather than falling back to `latest`, which would
+silently unpin every caller of the default. `tests/e2e/action_install.rs` runs the
+lifted step against a loopback release.
+
 `.github/workflows/notignored.yml` dogfoods it with `version: local`, which
 builds the branch's own source. It is **not a required check** and must not
 become one: it is skipped on fork pull requests, whose read-only token cannot
@@ -342,7 +350,10 @@ having published fine. Every pinned-version install therefore runs through
 `scripts/retry-install.sh` (bounded, ~10 minutes, last error shown) and carries
 its client's cache-bypass flag, or the retry re-reads the "no such version" page
 it just cached. Only the install retries — the smoke assertion after it stays
-single-shot, so a wrong version fails now instead of in ten minutes.
+single-shot, so a wrong version fails now instead of in ten minutes. An npm
+install's exit 0 is not enough: npm skips an optional dependency it cannot resolve
+yet, so npm verify installs run `scripts/npm-install-probe.sh`, which also fails
+until the runner's platform package is installed.
 
 ## Commits, releases, and merging
 
@@ -354,7 +365,7 @@ single-shot, so a wrong version fails now instead of in ten minutes.
 - **A new CI job is advisory until it is required.** Branch protection lists
   contexts by name, so adding a job means re-running the create-repo skill's
   `setup_github_governance.py` with the new context — otherwise a red run still
-  merges. Release-triggered and scheduled jobs (`release.yml`,
+  merges. Release-tag-triggered and scheduled jobs (`release.yml`,
   `published-smoke.yml`) are the exception and must stay unrequired: they report
   no pull-request context, so requiring one would block every PR forever — the
   same trap `notignored.yml` and `visual-docs.yml` are kept out of (each for the
@@ -371,13 +382,35 @@ single-shot, so a wrong version fails now instead of in ten minutes.
   pipeline is broken.
 - **`RELEASE_PLZ_TOKEN` must stay a PAT.** A tag pushed by the default
   `GITHUB_TOKEN` does not trigger other workflows, so `release.yml` would never
-  build the binaries and the release would ship nothing — silently.
+  build the binaries and the release would stay an empty draft — silently.
+- **Releases are immutable, so the Release is a draft until it is complete.**
+  With release immutability on, a published Release takes no new, replaced or
+  deleted asset and its tag cannot move — which is what lets a consumer pin
+  `@vX.Y.Z` alone. It is not retroactive. So: release-plz pushes the tag (PAT) and
+  cuts a *draft* with its changelog (`git_release_draft`); the tag push starts
+  `release.yml`, since a draft's creation runs no workflow; each `upload` leg
+  checks the draft and attaches; `publish-release` publishes with the
+  `GITHUB_TOKEN` (which fires nothing, so no re-entry) and fails unless the
+  read-back says `"immutable": true`. A draft is not public or `latest`.
+  `scripts/github-release.sh` holds the steps. PyPI and npm publish independently
+  of the Release, and `v0` moves in none of the failures below:
+  - *Before publication*: the Release stays a draft (maybe partial), the tag
+    exists unlocked, the registries may hold the version, and an action pinned at
+    that tag cannot install. Re-run the failed jobs while it is a draft, or let the
+    next release cut a fresh one; delete the stale draft.
+  - *After publication*: the Release is complete, immutable and `latest`, its tag
+    locked; registries hold what their jobs finished. Re-running registry jobs is
+    safe (they skip live versions); the next release moves `v0`.
+  - *Read-back `"immutable": false`*: published and complete but mutable — the
+    setting was off. Re-running cannot fix it; turn the setting on and the next
+    release publishes under it.
 - **`@v0` is the action's consumption ref, and the release maintains it.**
   release-plz cuts only exact `vX.Y.Z`, so `release.yml`'s `major-tag` job
   force-moves a floating major tag — derived from the release tag, so `v1` starts
   moving at 1.0 with no edit — and it runs *last*, gated on every publish and
-  verify job, because `@v0` must never resolve to a release whose artifacts
-  failed to publish. `scripts/update-major-tag.sh` refuses a pre-release and
+  verify job and on the immutable read-back having succeeded, because `@v0` must
+  never resolve to a release whose artifacts failed to publish or whose tag could
+  still move. `scripts/update-major-tag.sh` refuses a pre-release and
   refuses to walk the tag backwards onto an older release. README examples use
   `@v0`; the dogfood workflow stays `uses: ./`.
 - **Anything a consumer receives at the action tag must be release-relevant.**

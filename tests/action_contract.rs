@@ -40,7 +40,10 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
         inputs.get("github-token").get("default").scalar(),
         "${{ github.token }}"
     );
-    assert_eq!(inputs.get("version").get("default").scalar(), "latest");
+    // Empty: install the release this action's own ref names, read from the
+    // `Cargo.toml` at `$GITHUB_ACTION_PATH`, so `@vX.Y.Z` pins the binary too.
+    // `tests/e2e/action_install.rs` proves what the install step does with it.
+    assert_eq!(inputs.get("version").get("default").scalar(), "");
     // The renderer's own default, so the action and the binary cannot disagree
     // about how long a comment gets before it stops listing.
     assert_eq!(
@@ -53,6 +56,37 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
     for input in ["diff-base", "paths"] {
         assert_eq!(inputs.get(input).get("default").scalar(), "", "{input}");
     }
+}
+
+/// The documents that restate the `version` default say what `action.yml`
+/// declares: an empty default that installs the release the action's own ref
+/// names. A README still reading `latest` would tell a consumer to expect the
+/// newest release under a pinned tag.
+#[test]
+fn the_documented_version_default_is_the_declared_one() {
+    let declared = action()
+        .get("inputs")
+        .get("version")
+        .get("default")
+        .scalar()
+        .to_string();
+    assert_eq!(
+        declared, "",
+        "update the README and AGENTS.md with the new default"
+    );
+    let readme = read("README.md");
+    let row = readme
+        .lines()
+        .find(|line| line.starts_with("| `version` |"))
+        .expect("the README's input table documents `version`");
+    assert!(
+        row.starts_with("| `version` | empty: the release the action's own ref names |"),
+        "the README documents a different `version` default: {row}"
+    );
+    assert!(
+        read("AGENTS.md").contains("`version` defaults to empty"),
+        "AGENTS.md no longer records the empty `version` default"
+    );
 }
 
 /// Two counts, not one: `count` is a published output workflows gate builds on,

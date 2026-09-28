@@ -2,20 +2,22 @@ name: Release-plz
 
 # Conventional-commit release automation. On every push to main:
 #   * release     — if a merged version-bump PR left Cargo.toml at a version with
-#                   no tag yet, tag vX.Y.Z and cut the GitHub Release.
+#                   no tag yet, push the vX.Y.Z tag and cut the GitHub Release as
+#                   a draft (`git_release_draft` in release-plz.toml).
 #   * release-pr  — open/update a "release vX.Y.Z" PR that bumps the version and
 #                   writes the CHANGELOG for the commits since the last release.
 #   * auto-merge  — enable auto-merge on that PR so it merges once the required
 #                   checks pass; the merge re-triggers `release` above.
 #
-# The Release release-plz cuts (via the PAT) fires the `release: published` event
-# that drives release.yml to build and attach the binaries — so artifacts publish
-# only after a green gate, with no manual step. Merging a PR is the only human
-# action in a release.
+# The tag release-plz pushes (via the PAT) is what drives release.yml to build
+# the binaries, attach them to the draft, and publish it — so artifacts publish
+# only after a green gate, with no manual step. The draft itself fires nothing: a
+# draft's `created` event runs no workflow. Merging a PR is the only human action
+# in a release.
 #
-# RELEASE_PLZ_TOKEN is a PAT, not the default GITHUB_TOKEN: a tag/release created
-# by GITHUB_TOKEN does NOT trigger other workflows, so release.yml would never
-# build the binaries. The PAT needs `contents: write` + `pull-requests: write`.
+# RELEASE_PLZ_TOKEN is a PAT, not the default GITHUB_TOKEN: a tag created by
+# GITHUB_TOKEN does NOT trigger other workflows, so release.yml would never build
+# the binaries. The PAT needs `contents: write` + `pull-requests: write`.
 # Until that secret is set, the `guard` job keeps this workflow dormant.
 #
 # This crate is not published to crates.io by default, so release-plz has no

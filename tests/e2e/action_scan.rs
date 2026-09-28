@@ -18,7 +18,7 @@ use crate::support::{commit, git, git_repo, git_stdout, repo_root, write};
 ///
 /// Read out of `action.yml` on purpose: a copy in this file would keep passing
 /// long after the action stopped doing what it says.
-fn step_script(name: &str) -> String {
+pub(crate) fn step_script(name: &str) -> String {
     let action = std::fs::read_to_string(repo_root().join("action.yml")).expect("read action.yml");
     let mut lines = action
         .lines()
