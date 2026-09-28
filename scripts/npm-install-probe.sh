@@ -47,6 +47,13 @@ done
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] \
   || fail_usage "--version must be a release version such as 1.2.3, not '$version'"
 [ "$#" -gt 0 ] || fail_usage "no package to install"
+# Every remaining argument is a package spec: an option here would reach npm and
+# change what or where it installs.
+for spec in "$@"; do
+  case "$spec" in
+    -*) fail_usage "'$spec' is not a package spec; options go before the specs" ;;
+  esac
+done
 command -v node >/dev/null 2>&1 || fail_usage "node is not on PATH; the install check runs in it (actions/setup-node)"
 
 # npm's own error comes first; the last line is ours, because it is the one
@@ -71,7 +78,6 @@ fi
 # The single-quoted program is JavaScript; its template expressions are not shell.
 # shellcheck disable=SC2016
 node -e '
-  const fs = require("node:fs");
   const path = require("node:path");
   const [root, expected] = process.argv.slice(1);
   const pkg = `notignored-cli-${process.platform}-${process.arch}`;
@@ -79,13 +85,6 @@ node -e '
     process.stderr.write(`ACTION: ${action}\n`);
     process.stderr.write(`npm-install-probe: ${message}\n`);
     process.exit(3);
-  };
-  const versionOf = (manifest) => {
-    try {
-      return JSON.parse(fs.readFileSync(manifest, "utf8")).version;
-    } catch (error) {
-      fail(`cannot read ${manifest}: ${error.message}`, "the install is damaged; retrying reinstalls it");
-    }
   };
   let launcher;
   try {
@@ -105,7 +104,7 @@ node -e '
       `check https://www.npmjs.com/package/${pkg} lists ${expected}; publish-npm publishes it, and a retry installs it once the registry serves it`
     );
   }
-  const installed = versionOf(manifest);
+  const installed = require(manifest).version;
   if (installed !== expected) {
     fail(
       `npm installed ${pkg}@${installed}, not ${pkg}@${expected}`,

@@ -78,6 +78,10 @@ while [ "$#" -gt 0 ]; do
     *) fail_usage "unknown option $1" ;;
   esac
 done
+# publish asks once and never polls, so a budget given to it is a mistake.
+if [ "$command" = "publish" ] && { [ "$wait" != 0 ] || [ "$interval" != 10 ]; }; then
+  fail_usage "publish does not wait; --wait and --interval belong to await-draft and verify-immutable"
+fi
 
 # The tag is spliced into an API path and a jq filter, so bound it to the shape
 # release-plz writes before either sees it.

@@ -638,5 +638,8 @@ fn an_unbounded_wait_or_interval_is_refused() {
         let output = github_release(&api, &["await-draft", "--tag", &tag(), args[0], args[1]]);
         assert_eq!(output.status.code(), Some(2), "{args:?}: {}", text(&output));
     }
+    let output = github_release(&api, &["publish", "--tag", &tag(), "--wait", "5"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("publish does not wait"));
     assert!(api.state.lock().expect("the state").requests.is_empty());
 }

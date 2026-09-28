@@ -630,3 +630,24 @@ fn the_probe_fails_with_npms_error_when_the_install_fails() {
         text(&output)
     );
 }
+
+/// Only package specs follow the options: an npm option there would change what
+/// or where the probe installs, so it is refused before npm runs.
+#[test]
+fn the_probe_refuses_an_option_among_its_specs() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let version = cargo_version();
+    let spec = format!("notignored-cli@{version}");
+    let output = Command::new(bash_program())
+        .current_dir(scratch.path())
+        .arg(repo_root().join("scripts/npm-install-probe.sh"))
+        .args(["--version", &version, &spec, "--prefix=/tmp/elsewhere"])
+        .output()
+        .expect("run the probe");
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("is not a package spec"),
+        "{}",
+        text(&output)
+    );
+}

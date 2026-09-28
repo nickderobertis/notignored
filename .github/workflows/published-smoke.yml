@@ -113,9 +113,9 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      # No `--version`: this is byte-for-byte the GitHub Action's `version: latest`
-      # install step, which passes only `--to`. Resolving `latest` is part of what broke,
-      # so it is part of what runs.
+      # No `--version`, as the GitHub Action's `version: latest` install passes
+      # only `--to`: resolving the latest release is part of what a user runs, so
+      # it is part of what this runs.
       - name: Install the latest release with scripts/install.sh
         env:
           # Lifts api.github.com's anonymous rate limit when install.sh resolves
