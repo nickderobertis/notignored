@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.17](https://github.com/nickderobertis/notignored/compare/v0.1.16...v0.1.17) - 2026-09-28
+
+### Added
+
+- *(action)* install the pinned release's binary, from immutable tags ([#59](https://github.com/nickderobertis/notignored/pull/59))
+
 ## [0.1.16](https://github.com/nickderobertis/notignored/compare/v0.1.15...v0.1.16) - 2026-08-25
 
 ### Added
