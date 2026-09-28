@@ -15,6 +15,9 @@
 #
 # Usage:
 #   npm-install-probe.sh --version VERSION [--global] SPEC...
+#
+# Exit status: 0 installed with its platform package; 1 not (retry-install.sh
+# retries it); 2 a usage error, which no retry fixes.
 set -euo pipefail
 
 version=""
@@ -54,7 +57,11 @@ for spec in "$@"; do
     -*) fail_usage "'$spec' is not a package spec; options go before the specs" ;;
   esac
 done
-command -v node >/dev/null 2>&1 || fail_usage "node is not on PATH; the install check runs in it (actions/setup-node)"
+if ! command -v node >/dev/null 2>&1; then
+  echo "npm-install-probe: node is not on PATH, and the install check runs in it" >&2
+  echo "ACTION: set node up before this step (actions/setup-node)" >&2
+  exit 2
+fi
 
 # npm's own error comes first; the last line is ours, because it is the one
 # retry-install.sh shows per attempt.
@@ -64,7 +71,6 @@ if ! npm install ${global:+"$global"} --prefer-online "$@"; then
   exit 1
 fi
 
-# Where the install landed: the global tree, or this directory's node_modules.
 # llmlint: ignore[changed_behavior_has_e2e] `npm root` failing straight after the same npm installed successfully cannot be staged without replacing npm with a stub, and a journey over a stub would prove the stub; the branch only turns that into a named failure.
 if ! root="$(npm root ${global:+"$global"})"; then
   echo "ACTION: check the npm on PATH works ('npm root${global:+ $global}')" >&2

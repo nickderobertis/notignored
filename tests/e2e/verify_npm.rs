@@ -66,7 +66,6 @@ fn host_target() -> &'static str {
     }
 }
 
-/// One package the registry can serve: its tarball and npm's integrity for it.
 struct Package {
     manifest: serde_json::Value,
     tarball: Vec<u8>,

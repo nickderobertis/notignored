@@ -21,6 +21,9 @@
 #   github-release.sh publish --tag vX.Y.Z
 #   github-release.sh verify-immutable --tag vX.Y.Z [--wait SECONDS] [--interval SECONDS]
 #
+# Exit status: 0 done; 1 the Release or the API is not in the state the step
+# needs (an `::error::` says which); 2 a usage error.
+#
 # --wait bounds how long a command polls for GitHub to catch up (300s for the
 # draft to appear, 60s for the read-back), --interval how often it asks.
 set -euo pipefail

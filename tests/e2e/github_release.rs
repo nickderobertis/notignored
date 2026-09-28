@@ -50,7 +50,6 @@ enum Broken {
     GarbledDraft,
 }
 
-/// What the server knows.
 struct State {
     broken: Broken,
     /// The Release for [`tag`], if release-plz has cut one.
