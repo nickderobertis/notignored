@@ -152,7 +152,7 @@ jobs:
         with:
           tool: just,nextest,cargo-llvm-cov
       - run: just bootstrap
-      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] a standing gate, not added here: this change only swapped the trigger that runs it.
+      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] the release publishes only artifacts built from a tree that passed the gate in this run; see the job's comment.
       - run: just check
 
   upload:

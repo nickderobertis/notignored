@@ -184,7 +184,8 @@ fn serve_one(
         })
         .unwrap_or(0);
     if length > 0 {
-        let mut body = vec![0u8; length];
+        // A loopback test server: bound what a request can make it allocate.
+        let mut body = vec![0u8; length.min(1 << 20)];
         let _ = reader.read_exact(&mut body);
     }
 

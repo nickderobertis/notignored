@@ -189,7 +189,8 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
             length = value.trim().parse().unwrap_or(0);
         }
     }
-    let mut body = vec![0u8; length];
+    // A loopback test server: bound what a request can make it allocate.
+    let mut body = vec![0u8; length.min(1 << 20)];
     reader.read_exact(&mut body)?;
     let body = String::from_utf8_lossy(&body).into_owned();
 

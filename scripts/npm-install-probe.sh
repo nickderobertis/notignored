@@ -104,7 +104,13 @@ node -e '
       `check https://www.npmjs.com/package/${pkg} lists ${expected}; publish-npm publishes it, and a retry installs it once the registry serves it`
     );
   }
-  const installed = require(manifest).version;
+  let installed;
+  // llmlint: ignore[changed_behavior_has_e2e] npm validates a package manifest when it unpacks it, so an installed platform package whose package.json will not parse cannot be staged through a real install; this turns that damage into a named failure rather than node setup advice.
+  try {
+    installed = require(manifest).version;
+  } catch (error) {
+    fail(`cannot read ${manifest}: ${error.message.split("\n")[0]}`, "the install is damaged; the retry reinstalls it");
+  }
   if (installed !== expected) {
     fail(
       `npm installed ${pkg}@${installed}, not ${pkg}@${expected}`,
