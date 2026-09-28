@@ -96,7 +96,8 @@ runs:
                   sub(/^version[ \t]*=[ \t]*"/, ""); sub(/".*$/, ""); print; exit
                 }' "$manifest" || true)"
             fi
-            if [ -z "$own" ]; then
+            # Held to the vX.Y.Z shape a release tag has before it names one.
+            if ! [[ "$own" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "::error::cannot read the release this action's ref names from the [package] version in $manifest; set the version input (a tag such as v0.1.0, latest, or local)" >&2
               exit 1
             fi

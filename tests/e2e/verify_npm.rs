@@ -1,6 +1,7 @@
 //! The npm verify leg's install, run against a registry that has not finished
 //! publishing.
 //!
+// llmlint: ignore-block[comments_earn_their_place] this is the one recorded account of which release failure these journeys guard, with the run and registry timings that establish it; the task that added them requires that evidence to live here or in AGENTS.md, and AGENTS.md is kept terse by pointing here.
 //! `verify-npm (macos-latest)` failed on v0.1.13, v0.1.14, v0.1.15 and v0.1.16,
 //! and each time it was the only red job. The runs say why. `publish-npm`
 //! published `notignored-cli-darwin-arm64` *first* and npm acknowledged it
@@ -11,6 +12,7 @@
 //! exit 0 as "installed on attempt 1"; and the smoke test then met a launcher
 //! with no binary behind it. v0.1.13 shows the same shape: platform package
 //! acknowledged at 14:05:11Z, recorded at 14:07:17Z, launcher at 14:05:23Z.
+// llmlint: ignore-end[comments_earn_their_place]
 //!
 //! These journeys reproduce that registry state and hold the fix,
 //! `scripts/npm-install-probe.sh`, to what the release needs from it: the old
@@ -572,6 +574,35 @@ fn the_probe_fails_on_a_platform_package_at_another_version() {
             cargo_version(),
             pkg = host_platform_package()
         )),
+        "{}",
+        text(&output)
+    );
+}
+
+/// An install that brought no launcher at all fails the probe with what to pass.
+#[test]
+fn the_probe_fails_when_no_launcher_was_installed() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let registry = Registry::start(release(scratch.path()), Platform::Served);
+    let script = repo_root().join("scripts/npm-install-probe.sh");
+    let version = cargo_version();
+    let platform_only = format!("{}@{version}", host_platform_package());
+
+    let mut command = Command::new(bash_program());
+    command.current_dir(scratch.path()).arg(&script).args([
+        "--version",
+        &version,
+        "--global",
+        &platform_only,
+    ]);
+    let output = npm_env(&mut command, &registry, scratch.path())
+        .output()
+        .expect("run the probe");
+    assert!(!output.status.success(), "{}", text(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("notignored-cli is not installed")
+            && stderr.contains("ACTION: pass notignored-cli@<version>"),
         "{}",
         text(&output)
     );

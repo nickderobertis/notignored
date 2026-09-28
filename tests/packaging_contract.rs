@@ -1301,6 +1301,38 @@ fn the_floating_major_tag_moves_after_every_publish_and_verification() {
     );
 }
 
+/// The release-tag shape is spelled once for the workflow and the script.
+///
+/// `release.yml`'s verify jobs check `GITHUB_REF_NAME` against a pattern before
+/// slicing a version out of it, and `scripts/github-release.sh` checks its
+/// `--tag` against one before it reaches an API path. A tag one accepts and the
+/// other refuses would fail a release half-way through, after assets attached.
+#[test]
+fn the_release_tag_pattern_is_the_same_in_the_workflow_and_the_script() {
+    let pattern_in = |text: &str| -> BTreeSet<String> {
+        text.match_indices("=~ ^v")
+            .map(|(at, _)| {
+                text[at + 3..]
+                    .split(|c: char| c.is_whitespace())
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    };
+    let workflow = pattern_in(&read(RELEASE));
+    let script = pattern_in(&read(RELEASE_SCRIPT));
+    assert_eq!(
+        workflow.len(),
+        1,
+        "release.yml spells the tag pattern {workflow:?}"
+    );
+    assert_eq!(
+        script, workflow,
+        "{RELEASE_SCRIPT} and release.yml accept different release tags"
+    );
+}
+
 /// Failed is not skipped, and the immutable read-back must have passed.
 ///
 /// Most of the jobs `major-tag` waits for are *skipped* whenever PYPI_PUBLISH or

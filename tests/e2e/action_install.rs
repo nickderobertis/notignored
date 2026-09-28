@@ -126,7 +126,13 @@ fn an_unreadable_manifest_fails_naming_the_version_input() {
     )
     .expect("copy the installer");
 
-    for manifest in [None, Some("[workspace]\nmembers = []\n")] {
+    // No manifest; one with no [package] version; one whose version is not the
+    // X.Y.Z a release tag is made of.
+    for manifest in [
+        None,
+        Some("[workspace]\nmembers = []\n"),
+        Some("[package]\nname = \"notignored\"\nversion = \"1.2\"\n"),
+    ] {
         if let Some(contents) = manifest {
             std::fs::write(action.path().join("Cargo.toml"), contents)
                 .expect("write a manifest with no [package] version");

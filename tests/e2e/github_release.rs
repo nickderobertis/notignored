@@ -38,8 +38,18 @@ struct Stored {
     immutable: bool,
 }
 
+/// The one endpoint the server answers with a 500, if any.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Broken {
+    Nothing,
+    Listing,
+    Publishing,
+    ReadBack,
+}
+
 /// What the server knows.
 struct State {
+    broken: Broken,
     /// The Release for [`tag`], if release-plz has cut one.
     release: Option<Stored>,
     /// The repository's release-immutability setting, applied on publication.
@@ -80,6 +90,7 @@ impl LocalGitHub {
             listener.local_addr().expect("the local API address")
         );
         let state = Arc::new(Mutex::new(State {
+            broken: Broken::Nothing,
             release,
             immutability,
             unlisted_for,
@@ -104,6 +115,13 @@ impl LocalGitHub {
             running,
             server: Some(server),
         }
+    }
+
+    /// The same server, answering `endpoint` with a 500 every time.
+    fn breaking(release: Option<Stored>, endpoint: Broken) -> Self {
+        let api = Self::start(release, true);
+        api.state.lock().expect("the state").broken = endpoint;
+        api
     }
 
     fn release(&self) -> Option<Stored> {
@@ -181,7 +199,17 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
     let one = format!("/repos/{REPO}/releases/{RELEASE_ID}");
     let by_tag = format!("/repos/{REPO}/releases/tags/{}", tag());
     let not_found = || ("404 Not Found", r#"{"message":"Not Found"}"#.to_string());
+    let broken = match state.broken {
+        Broken::Nothing => false,
+        Broken::Listing => method == "GET" && path == list,
+        Broken::Publishing => method == "PATCH",
+        Broken::ReadBack => method == "GET" && path == by_tag,
+    };
     let (status, payload) = match (method.as_str(), path.as_str()) {
+        _ if broken => (
+            "500 Internal Server Error",
+            r#"{"message":"Server Error"}"#.to_string(),
+        ),
         ("GET", p) if p == list && state.unlisted_for > 0 => {
             state.unlisted_for -= 1;
             (
@@ -466,5 +494,94 @@ fn a_tag_that_is_not_a_version_is_refused_before_the_api_is_asked() {
     let api = LocalGitHub::start(Some(DRAFT), true);
     let output = github_release(&api, &["publish", "--tag", "v1.2.3\" or true"]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(api.state.lock().expect("the state").requests.is_empty());
+}
+
+/// Each API call that fails fails the step with its cause and what to do —
+/// never a silent pass, and never the wrong diagnosis.
+#[test]
+fn an_api_that_errors_fails_each_step_with_its_cause() {
+    let tag = tag();
+
+    let api = LocalGitHub::breaking(Some(DRAFT), Broken::Listing);
+    for command in ["await-draft", "publish"] {
+        let output = github_release(&api, &[command, "--tag", &tag, "--wait", "0"]);
+        assert!(!output.status.success(), "{command}: {}", text(&output));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("::error::cannot list the Releases of {REPO}"))
+                && stderr.contains("ACTION: give the job contents: write"),
+            "{command}: {}",
+            text(&output)
+        );
+    }
+    assert!(api.writes().is_empty());
+
+    let api = LocalGitHub::breaking(Some(DRAFT), Broken::Publishing);
+    let output = github_release(&api, &["publish", "--tag", &tag]);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(&format!(
+            "::error::cannot publish the draft Release for {tag}"
+        )),
+        "{}",
+        text(&output)
+    );
+    assert!(api.release().is_some_and(|release| release.draft));
+
+    let api = LocalGitHub::breaking(
+        Some(Stored {
+            draft: false,
+            immutable: true,
+        }),
+        Broken::ReadBack,
+    );
+    let output = github_release(
+        &api,
+        &[
+            "verify-immutable",
+            "--tag",
+            &tag,
+            "--wait",
+            "2",
+            "--interval",
+            "1",
+        ],
+    );
+    assert!(!output.status.success(), "{}", text(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("HTTP 500")
+            && stderr.contains(&format!("no published Release for {tag} reads back"))
+            && !stderr.contains("immutability is off"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// An API origin that could redirect the request is refused before any call.
+#[test]
+fn an_api_url_with_a_query_or_userinfo_is_refused() {
+    let api = LocalGitHub::start(Some(DRAFT), true);
+    for url in [
+        format!("{}?x=1", api.address),
+        "http://user@127.0.0.1:1".to_string(),
+        "ftp://127.0.0.1".to_string(),
+    ] {
+        let output = Command::new("bash")
+            .arg(repo_root().join("scripts/github-release.sh"))
+            .args(["publish", "--tag", &tag()])
+            .env("GITHUB_REPOSITORY", REPO)
+            .env("GITHUB_API_URL", &url)
+            .env("GH_TOKEN", "local-token")
+            .output()
+            .expect("run github-release.sh");
+        assert!(!output.status.success(), "{url}: {}", text(&output));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("not an http(s) API origin"),
+            "{url}: {}",
+            text(&output)
+        );
+    }
     assert!(api.state.lock().expect("the state").requests.is_empty());
 }

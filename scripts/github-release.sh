@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
-# The three steps release.yml takes on the GitHub Release itself, under release
-# immutability.
-#
-# With immutability on, a Release accepts no new, replaced or deleted asset once
-# it is published, and its tag can no longer move. So the order is draft first:
-# release-plz cuts the Release as a draft (`git_release_draft` in
-# release-plz.toml), every `upload` leg attaches to that draft, and only then is
-# it published — by this script, with the job's GITHUB_TOKEN, which fires no
-# workflow, so publication cannot start the pipeline a second time.
+# The three steps release.yml takes on the GitHub Release itself: attach only to
+# a draft, publish it, and require it immutable. AGENTS.md ("Commits, releases,
+# and merging") says why the order is draft-first and what each failure leaves.
 #
 #   await-draft       wait (bounded) for the Release for TAG to exist, and refuse
 #                     one that is already published: nothing can be attached to
@@ -87,6 +81,8 @@ done
 
 # The tag is spliced into an API path and a jq filter, so bound it to the shape
 # release-plz writes before either sees it.
+# The same pattern release.yml's jobs check GITHUB_REF_NAME against;
+# tests/packaging_contract.rs holds the two to one spelling.
 if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
   fail_usage "--tag must be a vX.Y.Z release tag, not '$tag'"
 fi
@@ -99,11 +95,16 @@ esac
   "run this inside GitHub Actions, which sets it"
 repo="$GITHUB_REPOSITORY"
 api="${GITHUB_API_URL:-https://api.github.com}"
+# An http(s) origin, optionally with a path (GitHub Enterprise's `/api/v3`):
+# no userinfo, query, fragment, or whitespace to redirect or truncate the
+# request paths built on it.
 case "$api" in
-  http://* | https://*) ;;
-  *) die "GITHUB_API_URL is not an http(s) origin: '$api'" \
-    "unset it to use https://api.github.com" ;;
+  *[!A-Za-z0-9._:/-]*) api_ok="" ;;
+  http://?* | https://?*) api_ok="ok" ;;
+  *) api_ok="" ;;
 esac
+[ -n "$api_ok" ] || die "GITHUB_API_URL is not an http(s) API origin: '$api'" \
+  "unset it to use https://api.github.com, or point it at your GitHub Enterprise API"
 token_hint="give the job contents: write and pass its token as GH_TOKEN"
 
 # `<id> <draft>` for the Release carrying TAG, or nothing when there is none yet.

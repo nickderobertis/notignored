@@ -351,15 +351,10 @@ having published fine. Every pinned-version install therefore runs through
 its client's cache-bypass flag, or the retry re-reads the "no such version" page
 it just cached. Only the install retries — the smoke assertion after it stays
 single-shot, so a wrong version fails now instead of in ten minutes. An npm
-install that exits 0 is not yet a probe, though: npm skips an optional dependency
-it cannot resolve, and the registry can serve a platform package minutes after
-the launcher even when `publish-npm` published it first — which left a launcher
-with no binary behind and a red smoke test. Every npm verify install therefore
-runs `scripts/npm-install-probe.sh`, which also fails until the runner's platform
-package is installed at the release's version; `tests/e2e/verify_npm.rs`
-reproduces that registry state and records the releases it broke. `publish-npm` does not
-wait for its own publishes — the verify install stays the only probe — so a user
-installing in that window can still get a launcher without its binary.
+install's exit 0 is not enough: npm skips an optional dependency it cannot resolve
+yet, so npm verify installs run `scripts/npm-install-probe.sh`, which also fails
+until the runner's platform package is installed (`tests/e2e/verify_npm.rs` says
+which releases that broke).
 
 ## Commits, releases, and merging
 
@@ -390,42 +385,26 @@ installing in that window can still get a launcher without its binary.
   `GITHUB_TOKEN` does not trigger other workflows, so `release.yml` would never
   build the binaries and the release would stay an empty draft — silently.
 - **Releases are immutable, so the Release is a draft until it is complete.**
-  Release immutability is on for this repository: a published Release accepts no
-  new, replaced or deleted asset, and its tag can neither move nor be deleted
-  while the Release exists. That is what lets a consumer pin `@vX.Y.Z` alone.
-  It is not retroactive: a Release published before the setting was on stays
-  mutable.
-  The order is therefore draft-first: release-plz pushes the `vX.Y.Z` tag
-  (through the API, with the PAT) and then cuts a *draft* with its changelog
-  section (`git_release_draft`); the tag push starts `release.yml`, because a
-  draft's `created` event runs no workflow; every `upload` leg checks the Release
-  is still a draft and attaches to it; `publish-release` publishes it with the
-  `GITHUB_TOKEN` once every leg succeeded — which fires no workflow, so the
-  pipeline cannot re-enter — and then reads it back and fails unless it reports
-  `"immutable": true`. A draft is neither public nor `latest`, so nothing resolves
-  a Release with half its assets. `scripts/github-release.sh` holds those steps;
-  `tests/e2e/github_release.rs` drives it with the real `gh` against a loopback
-  API. What each failure leaves, and how it recovers:
-  - *Before publication* (the gate, an `upload` leg, or the publish step): the
-    Release stays a draft, invisible and not `latest`, possibly holding some
-    assets; the tag exists but is not locked; PyPI and npm publish independently
-    of the Release, so they may already carry the version; `v0` does not move.
-    An action pinned at that tag fails to install, because its Release is not
-    downloadable. Re-running the run's failed jobs is safe while it is a draft
-    (uploads replace with `--clobber`); otherwise the next release tags a new
-    version and cuts a fresh draft, and the stale draft — mutable, like any
-    draft — can be deleted.
-  - *After publication* (`verify-install`, a registry publish or verify, or
-    `major-tag`): the Release is complete, immutable and `latest`, and its tag is
-    locked; the registries hold whatever their jobs finished; `v0` does not move.
-    Re-running the failed registry jobs is safe, since their publishes skip a
-    version already live; otherwise the next release publishes everything and
-    moves `v0` past it.
-  - *A read-back of `"immutable": false`*: the Release is published and complete
-    but mutable — its tag can still move — because the setting was off at
-    publication; the registries are unaffected; `v0` does not move. Re-running
-    cannot help, since immutability is fixed at publication: turn the setting on
-    and the next release publishes under it and moves `v0`.
+  With release immutability on, a published Release takes no new, replaced or
+  deleted asset and its tag cannot move — which is what lets a consumer pin
+  `@vX.Y.Z` alone. It is not retroactive. So: release-plz pushes the tag (PAT) and
+  cuts a *draft* with its changelog (`git_release_draft`); the tag push starts
+  `release.yml`, since a draft's creation runs no workflow; each `upload` leg
+  checks the draft and attaches; `publish-release` publishes with the
+  `GITHUB_TOKEN` (which fires nothing, so no re-entry) and fails unless the
+  read-back says `"immutable": true`. A draft is not public or `latest`.
+  `scripts/github-release.sh` holds the steps. PyPI and npm publish independently
+  of the Release, and `v0` moves in none of the failures below:
+  - *Before publication*: the Release stays a draft (maybe partial), the tag
+    exists unlocked, the registries may hold the version, and an action pinned at
+    that tag cannot install. Re-run the failed jobs while it is a draft, or let the
+    next release cut a fresh one; delete the stale draft.
+  - *After publication*: the Release is complete, immutable and `latest`, its tag
+    locked; registries hold what their jobs finished. Re-running registry jobs is
+    safe (they skip live versions); the next release moves `v0`.
+  - *Read-back `"immutable": false`*: published and complete but mutable — the
+    setting was off. Re-running cannot fix it; turn the setting on and the next
+    release publishes under it.
 - **`@v0` is the action's consumption ref, and the release maintains it.**
   release-plz cuts only exact `vX.Y.Z`, so `release.yml`'s `major-tag` job
   force-moves a floating major tag — derived from the release tag, so `v1` starts

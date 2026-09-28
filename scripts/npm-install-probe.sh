@@ -54,12 +54,26 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$version" ] || fail_usage "--version is required: the platform package must be at the release's exact version"
+# Compared against an installed manifest and named in every failure, so held to
+# the X.Y.Z[-pre] shape a release version has.
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] \
+  || fail_usage "--version must be a release version such as 1.2.3, not '$version'"
 [ "$#" -gt 0 ] || fail_usage "no package to install"
 
-npm install ${global:+"$global"} --prefer-online "$@"
+# npm's own error comes first; the last line is ours, because it is the one
+# retry-install.sh shows per attempt.
+if ! npm install ${global:+"$global"} --prefer-online "$@"; then
+  echo "ACTION: read npm's error above — a version the registry does not serve yet is retried; anything else needs fixing" >&2
+  echo "npm-install-probe: npm install $* failed" >&2
+  exit 1
+fi
 
 # Where the install landed: the global tree, or this directory's node_modules.
-root="$(npm root ${global:+"$global"})"
+if ! root="$(npm root ${global:+"$global"})"; then
+  echo "ACTION: check the npm on PATH works ('npm root${global:+ $global}')" >&2
+  echo "npm-install-probe: cannot ask npm where it installed to" >&2
+  exit 1
+fi
 
 # Resolved from the installed launcher's own directory, exactly as the launcher
 # resolves it at run time — so a package npm hoisted, nested, or skipped is judged

@@ -102,7 +102,6 @@ name: Release
 
 # Release tags only: `v*.*.*` never matches the floating `v0` that `major-tag`
 # moves, and that push uses the GITHUB_TOKEN, which triggers nothing anyway.
-# llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] the `test` job's `just check` predates this trigger and is the release's own gate on the artifacts it builds (see that job); this change only moved what starts the workflow from the Release to its tag, and removing that gate is a decision about what a release may publish, not part of changing the trigger.
 on:
   push:
     tags: ["v*.*.*"]
@@ -160,6 +159,7 @@ jobs:
         with:
           tool: just,nextest,cargo-llvm-cov
       - run: just bootstrap
+      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] the `test` job's `just check` predates this trigger and is the release's own gate on the artifacts it builds (see that job); the tag trigger only replaced the Release trigger that already ran it, and dropping it is a decision about what a release may publish, not part of changing the trigger.
       - run: just check
 
   upload:
@@ -835,14 +835,11 @@ jobs:
       # and its platform dependency, so it is what waits for them rather than a
       # separate `npm view` poll that can answer from a different edge.
       #
-      # Through scripts/npm-install-probe.sh rather than a bare `npm install`,
-      # because npm skips an optional dependency it cannot resolve and exits 0:
-      # v0.1.13–v0.1.16 each went red here after the registry recorded
-      # notignored-cli-darwin-arm64 a minute or two after the launcher, and a bare
-      # install took the launcher alone as "installed on attempt 1". The probe
-      # also fails unless this runner's platform package landed at this exact
-      # version, so that state is retried like any other unserved version. It
-      # passes `--prefer-online`, for the reason pip gets `--no-cache-dir`.
+      # Through scripts/npm-install-probe.sh rather than a bare `npm install`:
+      # npm skips an optional dependency it cannot resolve yet and exits 0, so
+      # the probe also fails until this runner's platform package landed at this
+      # version. It passes `--prefer-online`, for the reason pip gets
+      # `--no-cache-dir`.
       - name: Install the published package
         run: |
           ver="${GITHUB_REF_NAME#v}"
