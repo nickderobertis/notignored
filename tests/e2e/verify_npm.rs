@@ -356,6 +356,50 @@ fn release_with_platform_packed_as(
     ])
 }
 
+/// The TypeScript SDK as `build-sdk-npm` packs it: compiled by the pinned `tsc`
+/// (into the scratch directory, not the checkout), its README, and its committed
+/// manifest stamped with the crate's version.
+fn sdk_package(scratch: &Path) -> Package {
+    let project = repo_root().join("npm/notignored-sdk");
+    let package = scratch.join("sdk");
+    run(
+        "tsc (the SDK build)",
+        Command::new("bash")
+            .current_dir(&project)
+            .arg(repo_root().join("scripts/dev-tool.sh"))
+            .args(["tsc", "-p", "tsconfig.json", "--outDir"])
+            .arg(package.join("dist")),
+    );
+    std::fs::copy(project.join("README.md"), package.join("README.md")).expect("copy the README");
+    let mut manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(project.join("package.json")).expect("read the SDK manifest"),
+    )
+    .expect("a valid SDK manifest");
+    manifest["version"] = serde_json::json!(cargo_version());
+    std::fs::write(package.join("package.json"), manifest.to_string())
+        .expect("write the stamped manifest");
+
+    let out = scratch.join("packed/sdk");
+    std::fs::create_dir_all(&out).expect("create the pack destination");
+    let packed: serde_json::Value = serde_json::from_str(&run(
+        "npm pack",
+        Command::new("npm")
+            .current_dir(&package)
+            .args(["pack", "--json", "--pack-destination"])
+            .arg(&out),
+    ))
+    .expect("npm pack --json prints JSON");
+    Package {
+        manifest,
+        tarball: std::fs::read(out.join(packed[0]["filename"].as_str().expect("a filename")))
+            .expect("read the packed tarball"),
+        integrity: packed[0]["integrity"]
+            .as_str()
+            .expect("an integrity")
+            .to_string(),
+    }
+}
+
 /// An environment in which `npm` talks to `registry` and nothing else, and a
 /// `--global` install lands in the scratch prefix.
 fn npm_env<'a>(command: &'a mut Command, registry: &Registry, scratch: &Path) -> &'a mut Command {
@@ -650,4 +694,71 @@ fn the_probe_refuses_an_option_among_its_specs() {
         "{}",
         text(&output)
     );
+}
+
+/// The SDK step's install, as `verify-npm` runs it: the SDK and the launcher into
+/// a project, through the probe. The launcher's platform package arrives a
+/// moment late, the probe waits for it, and the SDK's `scan` then runs through
+/// the binary it brought — which is the promise that step exists to prove.
+#[test]
+fn the_sdk_install_waits_for_the_launchers_platform_package_and_scans() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let project = scratch.path().join("project");
+    std::fs::create_dir_all(&project).expect("create the project");
+    std::fs::write(
+        project.join("package.json"),
+        r#"{"name":"verify-npm-sdk","version":"1.0.0","private":true}"#,
+    )
+    .expect("write the project manifest");
+
+    let mut packages = release(scratch.path());
+    packages.insert("notignored-sdk".to_string(), sdk_package(scratch.path()));
+    let registry = Registry::start(packages, Platform::ServedFromAttempt(2));
+
+    let version = cargo_version();
+    let script = repo_root().join("scripts/npm-install-probe.sh");
+    let sdk = format!("notignored-sdk@{version}");
+    let cli = format!("notignored-cli@{version}");
+    let mut retry = Command::new(bash_program());
+    retry
+        .current_dir(&project)
+        .arg(repo_root().join("scripts/retry-install.sh"))
+        .args([
+            "--budget",
+            "120",
+            "--first-delay",
+            "1",
+            "--max-delay",
+            "1",
+            "--",
+        ])
+        .arg("bash")
+        .arg(&script)
+        .args(["--version", &version, &sdk, &cli]);
+    let output = npm_env(&mut retry, &registry, scratch.path())
+        .output()
+        .expect("run retry-install.sh");
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("attempt 1 failed"),
+        "the install before the platform package was served was accepted:\n{}",
+        text(&output)
+    );
+
+    std::fs::write(
+        project.join("app.py"),
+        "x = 1  # noqa: E501  # smoke test\n",
+    )
+    .expect("write the smoke file");
+    let report = run(
+        "the SDK's scan",
+        Command::new("node").current_dir(&project).args([
+            "--input-type=module",
+            "-e",
+            r#"import { scan } from "notignored-sdk";
+               const report = await scan(["app.py"]);
+               process.stdout.write(JSON.stringify(report.ignores.map((d) => [d.tool, d.rules, d.reason])));"#,
+        ]),
+    );
+    assert_eq!(report, r#"[["ruff",["E501"],"smoke test"]]"#);
 }
