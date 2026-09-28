@@ -72,14 +72,26 @@ const RETRY_SCRIPT: &str = "scripts/retry-install.sh";
 /// pip and npm both cache the index response they just read, so a second attempt
 /// without these would re-read the cached "no such version" page for the whole
 /// budget — a retry polling its own memory.
-const RETRIED_COMMANDS: [&str; 4] = [
+const RETRIED_COMMANDS: [&str; 6] = [
     "pip install --no-cache-dir ",
     "npm install -g --prefer-online ",
     "npm install --prefer-online ",
+    // The release's npm installs: `npm install --prefer-online` plus the check
+    // that the runner's platform package landed, which a bare install skips
+    // silently when the registry has not served it yet. See NPM_PROBE.
+    "bash scripts/npm-install-probe.sh ",
+    "bash \"$GITHUB_WORKSPACE/scripts/npm-install-probe.sh\" ",
     // The GitHub Release's own installer. It needs no cache-bypass flag: it
     // fetches an asset URL with curl, which caches nothing between attempts.
     "sh scripts/install.sh ",
 ];
+
+/// The install the release's npm verification is handed: `npm install
+/// --prefer-online`, then a check that the runner's platform package is installed
+/// at the release's exact version. `tests/e2e/verify_npm.rs` drives it against a
+/// registry that serves the launcher before the platform package — the state
+/// v0.1.13 through v0.1.16 each went red in.
+const NPM_PROBE: &str = "scripts/npm-install-probe.sh";
 
 /// Every job that installs an *exact* version, as `(workflow, job)`.
 ///
@@ -489,7 +501,7 @@ fn the_release_verification_installs_the_version_it_asserts() {
         ),
         (
             "verify-npm",
-            "npm install -g --prefer-online \"notignored-cli@${ver}\"",
+            "npm-install-probe.sh --version \"$ver\" --global \"notignored-cli@${ver}\"",
             "${GITHUB_REF_NAME#v}",
         ),
         // The installer takes a release *tag*, not a bare version, so it reads
@@ -577,6 +589,42 @@ fn every_pinned_install_retries_until_the_registry_serves_it() {
                 );
             }
         }
+    }
+}
+
+/// Every npm install the release verifies goes through the probe, and hands it
+/// the version the Release published.
+///
+/// `npm install` exits 0 when it skips an optional dependency it cannot resolve,
+/// so a bare install under the retry loop accepts a launcher whose platform
+/// package the registry has not served yet — and the smoke test after it is
+/// single-shot, so that is a red release rather than a wait. Both installs in
+/// `verify-npm` bring the launcher (the SDK step installs it beside the SDK), so
+/// both are held here.
+#[test]
+fn every_released_npm_install_checks_the_platform_package_landed() {
+    assert!(
+        repo_root().join(NPM_PROBE).is_file(),
+        "{NPM_PROBE} is gone, and verify-npm installs through it"
+    );
+    let retried: Vec<String> = scripts(&job("verify-npm"))
+        .into_iter()
+        .filter(|script| script.contains(RETRY_SCRIPT))
+        .collect();
+    assert_eq!(
+        retried.len(),
+        2,
+        "verify-npm no longer installs twice (the CLI globally, the SDK with the \
+         launcher beside it): {retried:#?}"
+    );
+    for script in retried {
+        assert!(
+            script.contains(&format!("{NPM_PROBE}\" --version \"$ver\""))
+                || script.contains(&format!("{NPM_PROBE} --version \"$ver\"")),
+            "a verify-npm install does not go through {NPM_PROBE} with the released \
+             version; a bare `npm install` accepts a launcher with no platform \
+             package:\n{script}"
+        );
     }
 }
 

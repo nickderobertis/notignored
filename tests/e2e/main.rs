@@ -37,3 +37,4 @@ mod shellcheck_parity;
 mod smoke;
 mod symlinked_root;
 mod typescript_parity;
+mod verify_npm;

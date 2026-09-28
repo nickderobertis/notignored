@@ -69,8 +69,9 @@ name: Release
 # simulation — and a simulation is what would then be under test. They are proven the
 # only way they can be, by running on every real release, and everything they call that
 # *can* be driven locally is: scripts/publish-npm.sh in tests/e2e/publish_npm.rs,
-# scripts/retry-install.sh in tests/e2e/retry_install.rs, and both packages'
-# build-and-install in tests/e2e/packaging.rs.
+# scripts/retry-install.sh in tests/e2e/retry_install.rs, scripts/npm-install-probe.sh
+# in tests/e2e/verify_npm.rs, and both packages' build-and-install in
+# tests/e2e/packaging.rs.
 #
 # llmlint: ignore-file[live_tier_compiles_and_requires_credential] the publish and
 # verify jobs are deliberately switched by the PYPI_PUBLISH / NPM_PUBLISH repository
@@ -769,15 +770,22 @@ jobs:
       # Same probe as verify-pypi: the install is what resolves the packument
       # and its platform dependency, so it is what waits for them rather than a
       # separate `npm view` poll that can answer from a different edge.
-      # `--prefer-online` for the reason pip gets `--no-cache-dir` — npm will
-      # otherwise serve the metadata it cached on the attempt that failed.
+      #
+      # Through scripts/npm-install-probe.sh rather than a bare `npm install`,
+      # because npm skips an optional dependency it cannot resolve and exits 0:
+      # v0.1.13–v0.1.16 each went red here after the registry recorded
+      # notignored-cli-darwin-arm64 a minute or two after the launcher, and a bare
+      # install took the launcher alone as "installed on attempt 1". The probe
+      # also fails unless this runner's platform package landed at this exact
+      # version, so that state is retried like any other unserved version. It
+      # passes `--prefer-online`, for the reason pip gets `--no-cache-dir`.
       - name: Install the published package
         run: |
           ver="${GITHUB_REF_NAME#v}"
           bash scripts/retry-install.sh \
             --label "npm notignored-cli $ver on $RUNNER_OS/$RUNNER_ARCH" \
-            --action "check https://www.npmjs.com/package/notignored-cli — the platform package for this runner may not have published" \
-            -- npm install -g --prefer-online "notignored-cli@${ver}"
+            --action "check https://www.npmjs.com/package/notignored-cli and the platform package the last attempt names — publish-npm may not have published it, or the registry may not serve it yet" \
+            -- bash scripts/npm-install-probe.sh --version "$ver" --global "notignored-cli@${ver}"
       - name: Smoke-test what npm served
         run: |
           ver="${GITHUB_REF_NAME#v}"
@@ -795,10 +803,12 @@ jobs:
           cd "$work"
           npm init --yes >/dev/null
           # An absolute path: this runs from a temp directory, not the checkout.
+          # The same probe as the global install: the launcher installed beside
+          # the SDK skips an unserved platform package just the same.
           bash "$GITHUB_WORKSPACE/scripts/retry-install.sh" \
             --label "npm notignored-sdk $ver on $RUNNER_OS/$RUNNER_ARCH" \
-            --action "check https://www.npmjs.com/package/notignored-sdk — publish-npm publishes the SDK last, so it propagates last too" \
-            -- npm install --prefer-online "notignored-sdk@${ver}" "notignored-cli@${ver}"
+            --action "check https://www.npmjs.com/package/notignored-sdk and the platform package the last attempt names — publish-npm publishes the SDK last, so it propagates last too" \
+            -- bash "$GITHUB_WORKSPACE/scripts/npm-install-probe.sh" --version "$ver" "notignored-sdk@${ver}" "notignored-cli@${ver}"
           printf 'x = 1  # noqa: E501  # smoke test\n' > app.py
           node --input-type=module -e '
             import { scan } from "notignored-sdk";
