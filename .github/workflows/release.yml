@@ -1,23 +1,37 @@
 name: Release
 
-# Build, archive, checksum, and publish everything a published GitHub Release
-# ships: the cross-platform binaries, the PyPI wheels, and the npm packages.
+# Build, archive, checksum, and publish everything a GitHub Release ships: the
+# cross-platform binaries, the PyPI wheels, and the npm packages.
 #
-# The Release is what fires this: release-plz (see release-plz.yml) computes the
-# version, writes the changelog and manifests, tags `vX.Y.Z`, and cuts the
-# Release. Versioning and building stay separate workflows, joined only by that
-# Release. Creating a Release by hand in the GitHub UI is the supported manual
-# fallback — it triggers this same validated path.
+# The tag is what fires this: release-plz (see release-plz.yml) computes the
+# version, writes the changelog and manifests, pushes the `vX.Y.Z` tag through
+# the API, and then cuts the Release as a **draft** carrying its changelog
+# section (`git_release_draft` in release-plz.toml). Versioning and building stay
+# separate workflows, joined only by that tag.
 #
-# release-plz authenticates with a PAT precisely so that Release fires this
-# workflow — a tag or release created by the default GITHUB_TOKEN triggers
-# nothing, and the release would silently ship no artifacts.
+# Draft first because release immutability is on for this repository: once a
+# Release is published it accepts no new, replaced or deleted asset and its tag
+# cannot move. So every asset is attached while the Release is a draft, and this
+# workflow publishes it only after every `upload` leg succeeded. A draft is not
+# `latest` and its assets are not public, so nothing — `scripts/install.sh`
+# resolving `latest` included — sees a Release with half its assets.
+#
+# release-plz authenticates with a PAT precisely so that its tag push fires this
+# workflow — a tag created by the default GITHUB_TOKEN triggers nothing, and the
+# release would silently ship no artifacts. The draft's own `created` event runs
+# no workflow at all, which is why the tag, not the Release, is the trigger. The
+# publication below uses the job's GITHUB_TOKEN, which fires no workflow either,
+# so publishing cannot start this pipeline a second time.
 #
 #   * test          — the complete deterministic gate, so untested artifacts
 #                     never publish.
 #   * upload        — build each target on a native runner and attach the archive
-#                     + sha256 checksum to the Release (what scripts/install.sh
-#                     downloads).
+#                     + sha256 checksum to the draft Release (what
+#                     scripts/install.sh downloads), after checking it is still a
+#                     draft.
+#   * publish-release — once every upload leg succeeded, publish the draft, then
+#                     read it back and fail unless GitHub reports
+#                     `"immutable": true` (scripts/github-release.sh).
 #   * verify-install— install that Release with scripts/install.sh, the way the
 #                     README one-liner and the GitHub Action's default do, and
 #                     smoke-test what it put on PATH. Ungated: the Release
@@ -51,7 +65,8 @@ name: Release
 #                     `npm install notignored-sdk`.
 #   * major-tag     — move the floating `v0` (the ref README tells action
 #                     consumers to use) onto this release, LAST, after every
-#                     publish and verify job. See scripts/update-major-tag.sh.
+#                     publish and verify job and the immutable read-back. See
+#                     scripts/update-major-tag.sh.
 #
 # Every verify job runs the version at publish time only. `published-smoke.yml`
 # runs the identical scripts against whatever the registries and the Release
@@ -69,6 +84,7 @@ name: Release
 # simulation — and a simulation is what would then be under test. They are proven the
 # only way they can be, by running on every real release, and everything they call that
 # *can* be driven locally is: scripts/publish-npm.sh in tests/e2e/publish_npm.rs,
+# scripts/github-release.sh in tests/e2e/github_release.rs,
 # scripts/retry-install.sh in tests/e2e/retry_install.rs, scripts/npm-install-probe.sh
 # in tests/e2e/verify_npm.rs, and both packages' build-and-install in
 # tests/e2e/packaging.rs.
@@ -84,9 +100,11 @@ name: Release
 # variable is on and the token is empty. What cannot be had is a live publish that
 # runs unconditionally — that is a product decision, not a missing check.
 
+# Release tags only: `v*.*.*` never matches the floating `v0` that `major-tag`
+# moves, and that push uses the GITHUB_TOKEN, which triggers nothing anyway.
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*.*.*"]
 
 # Nothing by default: the jobs that read the repository ask for `contents: read`
 # themselves, and the three that only move artifacts between jobs or install from
@@ -164,8 +182,19 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+      # release-plz pushes the tag and then cuts the draft, seconds apart; the
+      # gate above takes minutes, so this normally answers at once. It refuses a
+      # Release that is already published: under immutability it can take no
+      # asset, and the build below would be wasted on a refused attach.
+      - name: Check the Release is still a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/github-release.sh await-draft --tag "$GITHUB_REF_NAME"
       - name: Build, archive, checksum, and upload
         # Same rule as the wheel and npm builds: four of these targets are
         # compiled nowhere else, so a warning specific to one has no other job
@@ -182,15 +211,49 @@ jobs:
           archive: $bin-$tag-$target
           checksum: sha256
           include: README.md,LICENSE,CHANGELOG.md
-          # Uploading an asset to a release that already exists triggers no
-          # workflow, so the job-scoped GITHUB_TOKEN is the least privilege that
-          # does the job; a PAT here would only widen it. The PAT this pipeline
-          # does need is RELEASE_PLZ_TOKEN, which cuts the Release that starts
-          # this workflow — see release-plz.yml and the note at the top.
+          # Uploading an asset to a draft triggers no workflow, so the
+          # job-scoped GITHUB_TOKEN is the least privilege that does the job; a
+          # PAT here would only widen it. The PAT this pipeline does need is
+          # RELEASE_PLZ_TOKEN, which pushes the tag that starts this workflow —
+          # see release-plz.yml and the note at the top. The action attaches with
+          # `gh release upload --clobber`, which finds a draft by its tag, and
+          # replacing an asset is allowed while the Release is still a draft — so
+          # re-running a failed leg before publication is safe.
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  # Post-upload gate: install the release that was just attached, the way the
-  # README one-liner and the GitHub Action's default `version: latest` install it.
+  # Publish the draft once every `upload` leg has attached its assets, then read
+  # it back. `needs: upload` is what makes "every leg" true: one failed leg skips
+  # this job, and the Release stays a draft nobody can install from.
+  #
+  # The read-back is what `major-tag` waits on. Publication only locks the tag
+  # when release immutability is on, and that setting lives outside this
+  # repository's files — so the run asks GitHub rather than assuming it, and
+  # fails unless the Release reports `"immutable": true`, leaving `v0` where it
+  # was. The GITHUB_TOKEN publishes: a Release it publishes fires no workflow, so
+  # this cannot re-enter the pipeline. tests/e2e/github_release.rs drives the
+  # script against a loopback GitHub.
+  publish-release:
+    needs: upload
+    runs-on: ubuntu-latest
+    # Publishing a Release is a write to it; drafts are also only listed to a
+    # token that can push.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish the draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/github-release.sh publish --tag "$GITHUB_REF_NAME"
+      - name: Read the Release back and require it immutable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/github-release.sh verify-immutable --tag "$GITHUB_REF_NAME"
+
+  # Post-publication gate: install the release that was just published, the way
+  # the README one-liner and the GitHub Action install it. It needs the
+  # publication, not only the upload: a draft's assets are not served at the
+  # public download URLs this installs through.
   #
   # `upload` proves the assets were attached; nothing proved they could be
   # *fetched under the names the installer builds*. That gap is why every release
@@ -210,7 +273,7 @@ jobs:
   # README documents is `cargo install`, covered by ci.yml on windows-latest.
   verify-install:
     name: verify-install (${{ matrix.os }})
-    needs: upload
+    needs: publish-release
     permissions:
       contents: read
     strategy:
@@ -407,7 +470,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # A Release can be cut by hand with any tag, and the version below is
+      # A tag can be pushed by hand in any shape, and the version below is
       # sliced straight out of it — so check the shape before it becomes a
       # package specifier. Anything but vX.Y.Z means the Release is not one this
       # pipeline built.
@@ -520,7 +583,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # A Release can be cut by hand with any tag, and the version below is
+      # A tag can be pushed by hand in any shape, and the version below is
       # sliced straight out of it — so check the shape before it becomes a
       # package specifier.
       - name: Check the release tag is a version
@@ -755,7 +818,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      # A Release can be cut by hand with any tag, and the version below is
+      # A tag can be pushed by hand in any shape, and the version below is
       # sliced straight out of it — so check the shape before it becomes a
       # package specifier. Anything but vX.Y.Z means the Release is not one this
       # pipeline built.
@@ -834,12 +897,18 @@ jobs:
   # repository that publishes nothing but the GitHub Release. Skipped is fine;
   # failed is not.
   #
+  # `publish-release` is required to have *succeeded*, not merely not failed: it
+  # is the read-back of `"immutable": true`, and `@v0` must never resolve to a
+  # Release whose tag could still be moved.
+  #
   # The major is derived from the tag inside the script, so `v1` starts moving at
-  # 1.0.0 with nothing here to edit; tests/e2e/major_tag.rs drives that logic over
-  # real repositories.
+  # 1.0.0 with nothing here to edit, and the script itself leaves the major tag
+  # alone for a pre-release; tests/e2e/major_tag.rs drives that logic over real
+  # repositories.
   major-tag:
     needs:
       - upload
+      - publish-release
       - verify-install
       - publish-crate
       - publish-pypi
@@ -848,7 +917,7 @@ jobs:
       - verify-python-sdk
       - publish-npm
       - verify-npm
-    if: ${{ !failure() && !cancelled() && !github.event.release.prerelease }}
+    if: ${{ !failure() && !cancelled() && needs.publish-release.result == 'success' }}
     runs-on: ubuntu-latest
     # Force-updating a tag is a write to refs/tags, and the only write this job
     # makes; the default GITHUB_TOKEN is enough, and a tag it pushes triggers no

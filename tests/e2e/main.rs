@@ -16,6 +16,7 @@ mod color;
 mod diff;
 mod eslint_parity;
 mod examples;
+mod github_release;
 mod installer;
 mod js_tools_setup;
 mod llmlint_parity;

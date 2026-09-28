@@ -235,20 +235,98 @@ fn launcher_manifest() -> serde_json::Value {
         .expect("the launcher package.json is valid JSON")
 }
 
-/// A Release, not a tag push, is what starts the pipeline.
+/// The release tag's push is what starts the pipeline, and nothing else does.
 ///
-/// release-plz cuts the Release with a PAT, and that is the event this workflow
-/// answers; creating a Release by hand in the UI is the documented manual
-/// fallback and takes the identical path. Firing on a bare tag push instead would
-/// build artifacts for a Release that may not exist yet.
+/// Release immutability means a published Release takes no asset, so
+/// release-plz cuts a *draft* — and a draft's `created` event runs no workflow.
+/// The tag release-plz pushes with its PAT is the event left. A
+/// `release: published` trigger would now be worse than useless: the pipeline
+/// publishes the draft itself, and would fire on its own publication.
 #[test]
-fn the_release_pipeline_runs_on_a_published_release() {
-    let workflow = release_workflow();
-    let types = workflow.get("on").get("release").get("types").list();
+fn the_release_pipeline_runs_on_a_release_tag_push() {
+    let on = release_workflow().get("on").clone();
+    assert_eq!(on.keys(), vec!["push"], "release.yml's triggers changed");
     assert_eq!(
-        types.iter().map(Node::scalar).collect::<Vec<_>>(),
-        vec!["published"],
-        "release.yml no longer runs on a published Release"
+        on.get("push")
+            .get("tags")
+            .list()
+            .iter()
+            .map(Node::scalar)
+            .collect::<Vec<_>>(),
+        vec!["v*.*.*"],
+        "release.yml no longer runs on a vX.Y.Z tag push — or runs on the floating \
+         `v0` that major-tag moves"
+    );
+    assert!(
+        read("release-plz.toml")
+            .lines()
+            .any(|line| line.trim() == "git_release_draft = true"),
+        "release-plz no longer cuts the Release as a draft; under immutability the \
+         uploads could not attach to a published one"
+    );
+}
+
+/// The script that publishes the draft and reads it back.
+const RELEASE_SCRIPT: &str = "scripts/github-release.sh";
+
+/// Every asset is attached to a draft, and the draft is published only after
+/// every upload leg — then read back as immutable before anything depends on it.
+///
+/// Each edge here is a guarantee a published Release cannot take back: an
+/// upload after publication is refused by GitHub, a publication before the last
+/// leg ships a Release missing a target that nothing can add, and an installer
+/// check against a draft reads assets the public URLs do not serve.
+#[test]
+fn the_release_is_attached_to_as_a_draft_and_published_after_every_upload() {
+    let upload = job("upload");
+    let steps = upload.get("steps").list();
+    let checks = steps
+        .iter()
+        .position(|step| {
+            step.find("run").is_some_and(|run| {
+                run.scalar()
+                    .contains(&format!("{RELEASE_SCRIPT} await-draft"))
+            })
+        })
+        .expect("`upload` no longer checks the Release is a draft before attaching");
+    let attaches = steps
+        .iter()
+        .position(|step| {
+            step.find("uses").is_some_and(|uses| {
+                uses.scalar()
+                    .starts_with("taiki-e/upload-rust-binary-action@")
+            })
+        })
+        .expect("`upload` no longer attaches the binaries");
+    assert!(
+        checks < attaches,
+        "`upload` checks for the draft after attaching"
+    );
+
+    let publish = job("publish-release");
+    assert_eq!(
+        needs(&publish),
+        ["upload".to_string()].into_iter().collect(),
+        "`publish-release` must wait for every upload leg, and only for them"
+    );
+    let scripts = scripts(&publish);
+    let publishes = scripts
+        .iter()
+        .position(|script| script.contains(&format!("{RELEASE_SCRIPT} publish ")))
+        .expect("`publish-release` no longer publishes the draft");
+    let reads_back = scripts
+        .iter()
+        .position(|script| script.contains(&format!("{RELEASE_SCRIPT} verify-immutable ")))
+        .expect("`publish-release` no longer reads the Release back as immutable");
+    assert!(
+        publishes < reads_back,
+        "the read-back runs before publication"
+    );
+
+    assert!(
+        needs(&job("verify-install")).contains("publish-release"),
+        "`verify-install` installs through public download URLs, which a draft \
+         does not serve"
     );
 }
 
@@ -1211,22 +1289,25 @@ fn the_floating_major_tag_moves_after_every_publish_and_verification() {
     );
 }
 
-/// Failed is not skipped, and a pre-release is not a release consumers follow.
+/// Failed is not skipped, and the immutable read-back must have passed.
 ///
 /// Most of the jobs `major-tag` waits for are *skipped* whenever PYPI_PUBLISH or
 /// NPM_PUBLISH is off, and a skipped `needs:` skips its dependent too — so the
 /// job needs an `if:` to run at all, and that `if:` is then the only thing that
 /// still stops it after a failure. Getting it wrong in either direction is
 /// invisible until a release: too strict and the tag silently never moves, too
-/// loose and it moves over a failed publish.
+/// loose and it moves over a failed publish. `publish-release` is required to
+/// have *succeeded*: it is the read-back of `"immutable": true`, so `v0` never
+/// moves onto a Release whose tag could still move. A pre-release is
+/// `update-major-tag.sh`'s own refusal, driven by `tests/e2e/major_tag.rs`.
 #[test]
 fn the_floating_major_tag_moves_only_when_nothing_failed() {
     let job = job("major-tag");
     assert_eq!(
         job.get("if").scalar(),
-        "${{ !failure() && !cancelled() && !github.event.release.prerelease }}",
+        "${{ !failure() && !cancelled() && needs.publish-release.result == 'success' }}",
         "`major-tag` must run when its publishes were skipped, never when one failed, \
-         and never for a pre-release"
+         and never unless the Release read back immutable"
     );
     assert_eq!(
         job.get("permissions").get("contents").scalar(),
