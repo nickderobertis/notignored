@@ -25,8 +25,6 @@ use crate::support::{cargo_version, repo_root};
 /// fall-back to `latest` would be visible in what got installed and requested.
 const SOME_OTHER_RELEASE: &str = "v0.0.1";
 
-/// Run the install step with `version` as its input and `action_path` as the
-/// action's own checkout, against `release`.
 fn install(release: &Release, action_path: &Path, version: &str, temp: &Path) -> Output {
     let script = temp.join("install-step.sh");
     std::fs::write(&script, step_script("Install notignored")).expect("write the step script");
@@ -49,7 +47,6 @@ fn install(release: &Release, action_path: &Path, version: &str, temp: &Path) ->
         .expect("run the install step")
 }
 
-/// Point the served `releases/latest` document at `tag`.
 fn latest_names(release: &Release, tag: &str) {
     std::fs::write(
         release

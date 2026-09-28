@@ -120,7 +120,6 @@ impl LocalGitHub {
         }
     }
 
-    /// The same server, answering `endpoint` with a 500 every time.
     fn breaking(release: Option<Stored>, endpoint: Broken) -> Self {
         let api = Self::start(release, true);
         api.state.lock().expect("the state").broken = endpoint;
@@ -288,7 +287,6 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
     stream.flush()
 }
 
-/// Run `github-release.sh <args>` against `api`.
 fn github_release(api: &LocalGitHub, args: &[&str]) -> Output {
     let found = Command::new("gh").arg("--version").output();
     assert!(

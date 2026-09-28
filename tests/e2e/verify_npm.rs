@@ -56,7 +56,6 @@ fn host_platform_package() -> String {
     format!("notignored-cli-{platform}-{arch}")
 }
 
-/// The Rust target the host's platform package is built for.
 fn host_target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
@@ -265,7 +264,6 @@ fn packument(base: &str, name: &str, package: &Package) -> String {
     .to_string()
 }
 
-/// Run `command` to success, returning its stdout.
 fn run(what: &str, command: &mut Command) -> String {
     let output = command
         .output()
