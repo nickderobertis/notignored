@@ -45,6 +45,8 @@ enum Broken {
     Listing,
     Publishing,
     ReadBack,
+    /// Not a 500: the listing answers, with a `draft` that is not a boolean.
+    GarbledDraft,
 }
 
 /// What the server knows.
@@ -204,7 +206,20 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
         Broken::Listing => method == "GET" && path == list,
         Broken::Publishing => method == "PATCH",
         Broken::ReadBack => method == "GET" && path == by_tag,
+        Broken::GarbledDraft => false,
     };
+    if state.broken == Broken::GarbledDraft && method == "GET" && path == list {
+        let payload = format!(
+            r#"[{{"id":{RELEASE_ID},"tag_name":"{}","draft":"yes"}}]"#,
+            tag()
+        );
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+            payload.len()
+        )?;
+        return stream.flush();
+    }
     let (status, payload) = match (method.as_str(), path.as_str()) {
         _ if broken => (
             "500 Internal Server Error",
@@ -567,6 +582,7 @@ fn an_api_url_with_a_query_or_userinfo_is_refused() {
         format!("{}?x=1", api.address),
         "http://user@127.0.0.1:1".to_string(),
         "ftp://127.0.0.1".to_string(),
+        "http:///repos".to_string(),
     ] {
         let output = Command::new("bash")
             .arg(repo_root().join("scripts/github-release.sh"))
@@ -584,4 +600,21 @@ fn an_api_url_with_a_query_or_userinfo_is_refused() {
         );
     }
     assert!(api.state.lock().expect("the state").requests.is_empty());
+}
+
+/// A listing whose `draft` is neither `true` nor `false` is not taken as
+/// "already published": publishing nothing and passing would leave a draft.
+#[test]
+fn a_draft_value_that_is_not_a_boolean_is_refused() {
+    let api = LocalGitHub::breaking(Some(DRAFT), Broken::GarbledDraft);
+    for command in ["publish", "await-draft"] {
+        let output = github_release(&api, &[command, "--tag", &tag(), "--wait", "0"]);
+        assert!(!output.status.success(), "{command}: {}", text(&output));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("not the GitHub API"),
+            "{command}: {}",
+            text(&output)
+        );
+    }
+    assert!(api.writes().is_empty());
 }

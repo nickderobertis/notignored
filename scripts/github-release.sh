@@ -99,7 +99,7 @@ api="${GITHUB_API_URL:-https://api.github.com}"
 # no userinfo, query, fragment, or whitespace to redirect or truncate the
 # request paths built on it.
 case "$api" in
-  *[!A-Za-z0-9._:/-]*) api_ok="" ;;
+  *[!A-Za-z0-9._:/-]* | http:///* | https:///*) api_ok="" ;;
   http://?* | https://?*) api_ok="ok" ;;
   *) api_ok="" ;;
 esac
@@ -108,6 +108,7 @@ esac
 token_hint="give the job contents: write and pass its token as GH_TOKEN"
 
 # `<id> <draft>` for the Release carrying TAG, or nothing when there is none yet.
+# `<draft>` is `true` or `false`; any other answer is not the GitHub API's.
 # The list endpoint, not `releases/tags/…`: only the list returns drafts, and
 # only to a token that can push.
 find_release() {
@@ -115,7 +116,12 @@ find_release() {
   found="$(gh api --paginate "$api/repos/$repo/releases?per_page=100" \
     --jq ".[] | select(.tag_name == \"$tag\") | \"\(.id) \(.draft)\"")" \
     || die "cannot list the Releases of $repo" "$token_hint"
-  printf '%s\n' "${found%%$'\n'*}"
+  found="${found%%$'\n'*}"
+  case "$found" in
+    "" | *" true" | *" false") printf '%s\n' "$found" ;;
+    *) die "the API listed the Release for $tag as '$found', not '<id> true|false'" \
+      "check GITHUB_API_URL — the host answering is not the GitHub API" ;;
+  esac
 }
 
 SECONDS=0

@@ -58,6 +58,37 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
     }
 }
 
+/// The documents that restate the `version` default say what `action.yml`
+/// declares: an empty default that installs the release the action's own ref
+/// names. A README still reading `latest` would tell a consumer to expect the
+/// newest release under a pinned tag.
+#[test]
+fn the_documented_version_default_is_the_declared_one() {
+    let declared = action()
+        .get("inputs")
+        .get("version")
+        .get("default")
+        .scalar()
+        .to_string();
+    assert_eq!(
+        declared, "",
+        "update the README and AGENTS.md with the new default"
+    );
+    let readme = read("README.md");
+    let row = readme
+        .lines()
+        .find(|line| line.starts_with("| `version` |"))
+        .expect("the README's input table documents `version`");
+    assert!(
+        row.starts_with("| `version` | empty: the release the action's own ref names |"),
+        "the README documents a different `version` default: {row}"
+    );
+    assert!(
+        read("AGENTS.md").contains("`version` defaults to empty"),
+        "AGENTS.md no longer records the empty `version` default"
+    );
+}
+
 /// Two counts, not one: `count` is a published output workflows gate builds on,
 /// and folding rewritten justifications into it would start failing pull
 /// requests that added no suppression — the false alarm the word exists to

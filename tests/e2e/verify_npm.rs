@@ -607,3 +607,28 @@ fn the_probe_fails_when_no_launcher_was_installed() {
         text(&output)
     );
 }
+
+/// An install npm itself refuses — here the launcher is not on the registry at
+/// all — fails the probe with npm's error, what to do, and a last line naming
+/// the install, which is what the retry loop shows per attempt.
+#[test]
+fn the_probe_fails_with_npms_error_when_the_install_fails() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let mut packages = release(scratch.path());
+    packages.remove("notignored-cli");
+    let registry = Registry::start(packages, Platform::Served);
+
+    let output = probe(&registry, scratch.path(), "3", true);
+    assert!(!output.status.success(), "{}", text(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E404")
+            && stderr.contains("ACTION: an E404 or ETARGET above")
+            && stderr.contains(&format!(
+                "npm-install-probe: npm install notignored-cli@{} failed",
+                cargo_version()
+            )),
+        "{}",
+        text(&output)
+    );
+}

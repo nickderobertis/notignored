@@ -2,28 +2,16 @@
 # Install from npm, and fail unless the install brought this runner's platform
 # package — the part of `notignored-cli` that actually carries the binary.
 #
-# `npm install` treats an optional dependency it cannot resolve as skippable and
-# exits 0, so a bare install is the wrong probe for a just-published release: when
-# the registry serves the launcher before the platform package it pins, the
-# install "succeeds" with a launcher that has no binary to run.
-# `tests/e2e/verify_npm.rs` records the releases that went red that way.
+# npm skips an optional dependency it cannot resolve yet and exits 0, so after a
+# publish a bare install can "succeed" with a launcher whose binary never
+# arrived (`tests/e2e/verify_npm.rs` records when). This also fails until the
+# launcher resolves `notignored-cli-<process.platform>-<process.arch>` — the
+# shim's own rule, which tests/packaging_contract.rs holds it to — at exactly
+# VERSION, so retry-install.sh keeps waiting for it. Always `--prefer-online`, so
+# a retry does not re-read the metadata npm cached on the failed attempt.
 #
-# So the probe is the install *plus* the one thing it can silently omit: this
-# checks that the launcher resolves `notignored-cli-<platform>-<arch>` at exactly
-# VERSION, the way `npm/notignored/bin/notignored.js` resolves it, and exits
-# non-zero naming that package when it does not. Run under retry-install.sh, a
-# platform package the registry has not served yet is then retried inside the
-# same bounded budget as any other not-yet-served version.
-#
-# `--prefer-online` is always passed, for the reason retry-install.sh gives: npm
-# would otherwise re-read the metadata it cached on the attempt that failed.
-#
-# The package name is the launcher's own rule — `notignored-cli-` plus
-# `process.platform-process.arch`, the keys of its PACKAGES map —
-# and tests/packaging_contract.rs holds every entry of that map to it.
-#
-# Quiet on success: npm's own output only. On failure: what to do, then a last
-# line naming the missing package — the line retry-install.sh prints per attempt.
+# Quiet on success. On failure: what to do, then a last line naming what is
+# missing — the line retry-install.sh prints per attempt.
 #
 # Usage:
 #   npm-install-probe.sh --version VERSION [--global] SPEC...
@@ -63,12 +51,13 @@ done
 # npm's own error comes first; the last line is ours, because it is the one
 # retry-install.sh shows per attempt.
 if ! npm install ${global:+"$global"} --prefer-online "$@"; then
-  echo "ACTION: read npm's error above — a version the registry does not serve yet is retried; anything else needs fixing" >&2
+  echo "ACTION: an E404 or ETARGET above means the registry does not serve that version yet, and retry-install.sh retries it; for an auth, network or disk error, fix that and re-run the job" >&2
   echo "npm-install-probe: npm install $* failed" >&2
   exit 1
 fi
 
 # Where the install landed: the global tree, or this directory's node_modules.
+# llmlint: ignore[changed_behavior_has_e2e] `npm root` failing straight after the same npm installed successfully cannot be staged without replacing npm with a stub, and a journey over a stub would prove the stub; the branch only turns that into a named failure.
 if ! root="$(npm root ${global:+"$global"})"; then
   echo "ACTION: check the npm on PATH works ('npm root${global:+ $global}')" >&2
   echo "npm-install-probe: cannot ask npm where it installed to" >&2
@@ -100,18 +89,18 @@ node -e '
   let launcher;
   try {
     launcher = require.resolve("notignored-cli/package.json", { paths: [root] });
-  } catch {
+  } catch (error) {
     fail(
-      `notignored-cli is not installed under ${root}`,
+      `notignored-cli is not installed under ${root} (${error.message.split("\n")[0]})`,
       "pass notignored-cli@<version> among the packages to install"
     );
   }
   let manifest;
   try {
     manifest = require.resolve(`${pkg}/package.json`, { paths: [path.dirname(launcher)] });
-  } catch {
+  } catch (error) {
     fail(
-      `npm installed notignored-cli but not its platform package ${pkg}@${expected} — the registry may not serve ${pkg}@${expected} yet`,
+      `npm installed notignored-cli but not its platform package ${pkg}@${expected} — the registry may not serve ${pkg}@${expected} yet (${error.message.split("\n")[0]})`,
       `check https://www.npmjs.com/package/${pkg} lists ${expected}; publish-npm publishes it, and a retry installs it once the registry serves it`
     );
   }

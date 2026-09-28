@@ -30,11 +30,8 @@ semver_check = false
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
 
-# Cut the Release as a draft. Release immutability is on for this repository,
-# so a published Release accepts no asset: release.yml attaches every binary to
-# the draft and publishes it once all of them are there. release-plz 0.3.158
-# still pushes the tag itself (through the API, with the PAT) before it creates
-# the draft, and that tag push is what starts release.yml. See AGENTS.md.
+# A draft, because a published Release is immutable: release.yml attaches the
+# binaries and publishes it (AGENTS.md, "Commits, releases, and merging").
 git_release_draft = true
 
 # Keep-a-Changelog-style grouping. The version bump is computed from the

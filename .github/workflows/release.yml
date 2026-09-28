@@ -212,14 +212,11 @@ jobs:
           archive: $bin-$tag-$target
           checksum: sha256
           include: README.md,LICENSE,CHANGELOG.md
-          # Uploading an asset to a draft triggers no workflow, so the
-          # job-scoped GITHUB_TOKEN is the least privilege that does the job; a
-          # PAT here would only widen it. The PAT this pipeline does need is
-          # RELEASE_PLZ_TOKEN, which pushes the tag that starts this workflow —
-          # see release-plz.yml and the note at the top. The action attaches with
-          # `gh release upload --clobber`, which finds a draft by its tag, and
-          # replacing an asset is allowed while the Release is still a draft — so
-          # re-running a failed leg before publication is safe.
+          # The job-scoped GITHUB_TOKEN is the least privilege that attaches to
+          # the draft; a PAT here would only widen it. The action runs
+          # `gh release upload --clobber`, which finds a draft by its tag and may
+          # replace its assets, so re-running a failed leg before publication is
+          # safe.
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # Publish the draft once every `upload` leg has attached its assets, then read
