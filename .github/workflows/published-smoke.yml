@@ -67,8 +67,9 @@ concurrency:
 
 jobs:
   # `curl … install.sh | sh`, on each OS, as a user runs it — and as the GitHub
-  # Action's default `version: latest` runs it, since that step is literally
-  # `sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to …` with no version. This is
+  # Action's `version: latest` runs it, since that step is literally
+  # `sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to …` with no version. (The
+  # action's empty default passes `--version v<its own version>` instead.) This is
   # the leg whose absence let a 404 on the checksum ship through every release.
   #
   # Ungated by any repository variable, unlike the two registry jobs: a GitHub
@@ -112,8 +113,8 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      # No `--version`: this is byte-for-byte the GitHub Action's default install
-      # step, which passes only `--to`. Resolving `latest` is part of what broke,
+      # No `--version`: this is byte-for-byte the GitHub Action's `version: latest`
+      # install step, which passes only `--to`. Resolving `latest` is part of what broke,
       # so it is part of what runs.
       - name: Install the latest release with scripts/install.sh
         env:

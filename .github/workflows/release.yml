@@ -33,7 +33,7 @@ name: Release
 #                     read it back and fail unless GitHub reports
 #                     `"immutable": true` (scripts/github-release.sh).
 #   * verify-install— install that Release with scripts/install.sh, the way the
-#                     README one-liner and the GitHub Action's default do, and
+#                     README one-liner and the GitHub Action do, and
 #                     smoke-test what it put on PATH. Ungated: the Release
 #                     publishes whatever the registry variables say.
 #   * publish-crate — idempotent crates.io publish; self-activates the day
