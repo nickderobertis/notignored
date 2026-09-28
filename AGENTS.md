@@ -352,14 +352,12 @@ its client's cache-bypass flag, or the retry re-reads the "no such version" page
 it just cached. Only the install retries — the smoke assertion after it stays
 single-shot, so a wrong version fails now instead of in ten minutes. An npm
 install that exits 0 is not yet a probe, though: npm skips an optional dependency
-it cannot resolve, and on v0.1.13–v0.1.16 the registry recorded
-`notignored-cli-darwin-arm64` a minute or two *after* the launcher even though
-`publish-npm` had published it first (v0.1.16: acknowledged 18:41:14Z, recorded
-18:42:19Z, launcher 18:41:28Z), so the macOS arm64 leg installed a launcher with no
-binary on attempt 1 and its smoke test went red. Every npm verify install
-therefore runs `scripts/npm-install-probe.sh`, which also fails until the
-runner's platform package is installed at the release's version;
-`tests/e2e/verify_npm.rs` reproduces that registry state. `publish-npm` does not
+it cannot resolve, and the registry can serve a platform package minutes after
+the launcher even when `publish-npm` published it first — which left a launcher
+with no binary behind and a red smoke test. Every npm verify install therefore
+runs `scripts/npm-install-probe.sh`, which also fails until the runner's platform
+package is installed at the release's version; `tests/e2e/verify_npm.rs`
+reproduces that registry state and records the releases it broke. `publish-npm` does not
 wait for its own publishes — the verify install stays the only probe — so a user
 installing in that window can still get a launcher without its binary.
 
@@ -395,7 +393,8 @@ installing in that window can still get a launcher without its binary.
   Release immutability is on for this repository: a published Release accepts no
   new, replaced or deleted asset, and its tag can neither move nor be deleted
   while the Release exists. That is what lets a consumer pin `@vX.Y.Z` alone.
-  It is not retroactive — v0.1.16 and earlier read back `"immutable": false`.
+  It is not retroactive: a Release published before the setting was on stays
+  mutable.
   The order is therefore draft-first: release-plz pushes the `vX.Y.Z` tag
   (through the API, with the PAT) and then cuts a *draft* with its changelog
   section (`git_release_draft`); the tag push starts `release.yml`, because a

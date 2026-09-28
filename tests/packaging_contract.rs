@@ -1152,6 +1152,18 @@ fn the_platform_package_names_agree_across_the_manifest_shim_and_builder() {
         "the platform packages must stay unscoped: a scoped name needs an npm \
          organization, which a publish token cannot create"
     );
+
+    // The release's npm verify probe names the package it waits for by rule
+    // rather than through the shim's map; the map entries above are that rule
+    // written out, and both key on the same `process.platform-process.arch`.
+    assert!(
+        shim.contains("`${process.platform}-${process.arch}`"),
+        "the launcher shim no longer keys its map on process.platform-process.arch"
+    );
+    assert!(
+        read(NPM_PROBE).contains("`notignored-cli-${process.platform}-${process.arch}`"),
+        "{NPM_PROBE} no longer names the platform package the way the shim's map does"
+    );
 }
 
 /// The two READMEs name the platforms the release actually builds.

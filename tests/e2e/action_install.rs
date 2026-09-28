@@ -133,9 +133,9 @@ fn an_unreadable_manifest_fails_naming_the_version_input() {
         }
         let output = install(&release, action.path(), "", temp.path());
         assert!(!output.status.success(), "{}", text(&output));
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stdout.contains("::error::") && stdout.contains("set the version input"),
+            stderr.contains("::error::") && stderr.contains("set the version input"),
             "the failure does not name the version input:\n{}",
             text(&output)
         );

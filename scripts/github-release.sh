@@ -24,12 +24,15 @@
 # Quiet on success: one line. On failure: an `::error::` line and what to do.
 #
 # Usage:
-#   github-release.sh await-draft --tag vX.Y.Z [--wait SECONDS]
+#   github-release.sh await-draft --tag vX.Y.Z [--wait SECONDS] [--interval SECONDS]
 #   github-release.sh publish --tag vX.Y.Z
-#   github-release.sh verify-immutable --tag vX.Y.Z [--wait SECONDS]
+#   github-release.sh verify-immutable --tag vX.Y.Z [--wait SECONDS] [--interval SECONDS]
+#
+# --wait bounds how long a command polls for GitHub to catch up (300s for the
+# draft to appear, 60s for the read-back), --interval how often it asks.
 set -euo pipefail
 
-usage="run 'github-release.sh await-draft|publish|verify-immutable --tag vX.Y.Z [--wait SECONDS]'"
+usage="run 'github-release.sh await-draft|publish|verify-immutable --tag vX.Y.Z [--wait SECONDS] [--interval SECONDS]'"
 
 die() {
   echo "::error::$1" >&2
@@ -46,9 +49,10 @@ fail_usage() {
 [ "$#" -gt 0 ] || fail_usage "no command given"
 command="$1"
 shift
+interval=10
 case "$command" in
   await-draft) wait=300 ;;
-  verify-immutable) wait=60 ;;
+  verify-immutable) wait=60; interval=5 ;;
   publish) wait=0 ;;
   *) fail_usage "unknown command '$command'" ;;
 esac
@@ -67,6 +71,14 @@ while [ "$#" -gt 0 ]; do
         "" | *[!0-9]*) fail_usage "--wait needs a whole number of seconds, not '$2'" ;;
       esac
       wait="$2"
+      shift 2
+      ;;
+    --interval)
+      [ "$#" -ge 2 ] || fail_usage "--interval needs a value"
+      case "$2" in
+        "" | *[!0-9]* | 0) fail_usage "--interval needs a whole number of seconds above 0, not '$2'" ;;
+      esac
+      interval="$2"
       shift 2
       ;;
     *) fail_usage "unknown option $1" ;;
@@ -126,7 +138,7 @@ case "$command" in
         die "no Release for $tag after ${SECONDS}s; release-plz pushes the tag and then cuts the draft, so the draft was never cut" \
           "read the release-plz run for the push that tagged $tag; the next release cuts a fresh draft"
       fi
-      sleep 10
+      sleep "$interval"
     done
     ;;
 
@@ -149,10 +161,14 @@ case "$command" in
     ;;
 
   verify-immutable)
+    # `releases/tags/…` answers only for a published Release, so a 404 here is a
+    # draft (or no Release at all) — a different failure from a mutable one, and
+    # told apart below so the advice matches it.
+    answer="$(mktemp)"
+    trap 'rm -f "$answer"' EXIT
     while :; do
       state="$(gh api "$api/repos/$repo/releases/tags/$tag" \
-        --jq '"\(.draft) \(.immutable)"')" \
-        || die "cannot read the published Release for $tag back" "$token_hint"
+        --jq '"\(.draft) \(.immutable)"' 2>"$answer")" || state="unpublished"
       if [ "$state" = "false true" ]; then
         echo "github-release: $tag is published and immutable"
         exit 0
@@ -160,9 +176,18 @@ case "$command" in
       if [ "$SECONDS" -ge "$wait" ]; then
         break
       fi
-      sleep 5
+      sleep "$interval"
     done
-    die "the Release for $tag reads back \"immutable\": ${state#* }, so release immutability is off for $repo — its tag can still move, and v0 stays where it was" \
-      "turn the setting on (Settings → General → Releases → Enable release immutability; 'gh api repos/$repo/immutable-releases' reads it) — it is not retroactive, so the next release is the first published under it"
+    case "$state" in
+      "false "*)
+        die "the Release for $tag reads back \"immutable\": ${state#* }, so release immutability is off for $repo — its tag can still move, and v0 stays where it was" \
+          "turn the setting on (Settings → General → Releases → Enable release immutability; 'gh api repos/$repo/immutable-releases' reads it) — it is not retroactive, so the next release is the first published under it"
+        ;;
+      *)
+        cat "$answer" >&2
+        die "no published Release for $tag reads back after ${SECONDS}s — it is still a draft, or the API cannot see it" \
+          "run 'github-release.sh publish --tag $tag' first, and check GH_TOKEN can read $repo ($token_hint)"
+        ;;
+    esac
     ;;
 esac

@@ -102,6 +102,7 @@ name: Release
 
 # Release tags only: `v*.*.*` never matches the floating `v0` that `major-tag`
 # moves, and that push uses the GITHUB_TOKEN, which triggers nothing anyway.
+# llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] the `test` job's `just check` predates this trigger and is the release's own gate on the artifacts it builds (see that job); this change only moved what starts the workflow from the Release to its tag, and removing that gate is a decision about what a release may publish, not part of changing the trigger.
 on:
   push:
     tags: ["v*.*.*"]

@@ -3,15 +3,10 @@
 # package — the part of `notignored-cli` that actually carries the binary.
 #
 # `npm install` treats an optional dependency it cannot resolve as skippable and
-# exits 0. That made a bare install the wrong probe for a just-published release:
-# on v0.1.13, v0.1.14, v0.1.15 and v0.1.16, `publish-npm` published
-# `notignored-cli-darwin-arm64` *first* and npm acknowledged it, yet the registry
-# only recorded it a minute or two later — after the launcher (v0.1.16: publish
-# acknowledged 18:41:14Z, registry `time` 18:42:19Z, launcher 18:41:28Z). The
-# macOS arm64 verify leg installed at 18:41:43Z, npm skipped the platform package
-# it could not yet resolve, `scripts/retry-install.sh` accepted that exit 0 on the
-# first attempt, and the smoke test then found a launcher with no binary. Every
-# other leg's platform package had landed in time.
+# exits 0, so a bare install is the wrong probe for a just-published release: when
+# the registry serves the launcher before the platform package it pins, the
+# install "succeeds" with a launcher that has no binary to run.
+# `tests/e2e/verify_npm.rs` records the releases that went red that way.
 #
 # So the probe is the install *plus* the one thing it can silently omit: this
 # checks that the launcher resolves `notignored-cli-<platform>-<arch>` at exactly
@@ -23,8 +18,12 @@
 # `--prefer-online` is always passed, for the reason retry-install.sh gives: npm
 # would otherwise re-read the metadata it cached on the attempt that failed.
 #
-# Quiet on success: npm's own output only. On failure the last line names the
-# missing package, which is what retry-install.sh prints per attempt.
+# The package name is the launcher's own rule — `notignored-cli-` plus
+# `process.platform-process.arch`, the keys of its PACKAGES map —
+# and tests/packaging_contract.rs holds every entry of that map to it.
+#
+# Quiet on success: npm's own output only. On failure: what to do, then a last
+# line naming the missing package — the line retry-install.sh prints per attempt.
 #
 # Usage:
 #   npm-install-probe.sh --version VERSION [--global] SPEC...
@@ -68,27 +67,45 @@ root="$(npm root ${global:+"$global"})"
 # The single-quoted program is JavaScript; its template expressions are not shell.
 # shellcheck disable=SC2016
 node -e '
+  const fs = require("node:fs");
   const path = require("node:path");
   const [root, expected] = process.argv.slice(1);
   const pkg = `notignored-cli-${process.platform}-${process.arch}`;
-  const fail = (message) => {
+  const fail = (message, action) => {
+    process.stderr.write(`ACTION: ${action}\n`);
     process.stderr.write(`npm-install-probe: ${message}\n`);
     process.exit(1);
+  };
+  const versionOf = (manifest) => {
+    try {
+      return JSON.parse(fs.readFileSync(manifest, "utf8")).version;
+    } catch (error) {
+      fail(`cannot read ${manifest}: ${error.message}`, "the install is damaged; retrying reinstalls it");
+    }
   };
   let launcher;
   try {
     launcher = require.resolve("notignored-cli/package.json", { paths: [root] });
   } catch {
-    fail(`notignored-cli is not installed under ${root}`);
+    fail(
+      `notignored-cli is not installed under ${root}`,
+      "pass notignored-cli@<version> among the packages to install"
+    );
   }
   let manifest;
   try {
     manifest = require.resolve(`${pkg}/package.json`, { paths: [path.dirname(launcher)] });
   } catch {
-    fail(`npm installed notignored-cli but not its platform package ${pkg}@${expected} — the registry may not serve ${pkg}@${expected} yet`);
+    fail(
+      `npm installed notignored-cli but not its platform package ${pkg}@${expected} — the registry may not serve ${pkg}@${expected} yet`,
+      `check https://www.npmjs.com/package/${pkg} lists ${expected}; publish-npm publishes it, and a retry installs it once the registry serves it`
+    );
   }
-  const installed = require(manifest).version;
+  const installed = versionOf(manifest);
   if (installed !== expected) {
-    fail(`npm installed ${pkg}@${installed}, not ${pkg}@${expected}`);
+    fail(
+      `npm installed ${pkg}@${installed}, not ${pkg}@${expected}`,
+      `install notignored-cli@${expected}, whose launcher pins ${pkg}@${expected}, rather than another version of it`
+    );
   }
 ' "$root" "$version"

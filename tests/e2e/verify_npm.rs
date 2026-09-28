@@ -278,7 +278,12 @@ fn run(what: &str, command: &mut Command) -> String {
 }
 
 /// Assemble one package with `scripts/npm-build.mjs` and pack it.
-fn build(scratch: &Path, args: &[&str]) -> Package {
+///
+/// `packed_as` rewrites the version inside the tarball while the registry keeps
+/// listing it under the crate's — a registry serving bytes other than the
+/// version it names, which is the one way this host can put a platform package
+/// at the wrong version under a launcher that pins it exactly.
+fn build(scratch: &Path, args: &[&str], packed_as: Option<&str>) -> Package {
     let dist = scratch.join("dist");
     let package = PathBuf::from(run(
         "npm-build.mjs",
@@ -293,6 +298,15 @@ fn build(scratch: &Path, args: &[&str]) -> Package {
         .join("packed")
         .join(package.file_name().expect("a package directory has a name"));
     std::fs::create_dir_all(&out).expect("create the pack destination");
+    let manifest =
+        std::fs::read_to_string(package.join("package.json")).expect("read package.json");
+    if let Some(version) = packed_as {
+        let mut rewritten: serde_json::Value =
+            serde_json::from_str(&manifest).expect("a valid package.json");
+        rewritten["version"] = serde_json::json!(version);
+        std::fs::write(package.join("package.json"), rewritten.to_string())
+            .expect("rewrite package.json");
+    }
     let packed: serde_json::Value = serde_json::from_str(&run(
         "npm pack",
         Command::new("npm")
@@ -302,8 +316,6 @@ fn build(scratch: &Path, args: &[&str]) -> Package {
     ))
     .expect("npm pack --json prints JSON");
     let entry = &packed[0];
-    let manifest =
-        std::fs::read_to_string(package.join("package.json")).expect("read package.json");
     Package {
         manifest: serde_json::from_str(&manifest).expect("a valid package.json"),
         tarball: std::fs::read(out.join(entry["filename"].as_str().expect("a filename")))
@@ -318,6 +330,14 @@ fn build(scratch: &Path, args: &[&str]) -> Package {
 /// The launcher and the host's platform package, at the crate's own version,
 /// wrapping the compiled `notignored`.
 fn release(scratch: &Path) -> BTreeMap<String, Package> {
+    release_with_platform_packed_as(scratch, None)
+}
+
+/// [`release`], with the platform package's tarball claiming `packed_as`.
+fn release_with_platform_packed_as(
+    scratch: &Path,
+    packed_as: Option<&str>,
+) -> BTreeMap<String, Package> {
     let binary = assert_cmd::cargo::cargo_bin("notignored");
     let binary = binary.to_str().expect("a UTF-8 binary path");
     BTreeMap::from([
@@ -326,9 +346,13 @@ fn release(scratch: &Path) -> BTreeMap<String, Package> {
             build(
                 scratch,
                 &["platform", "--target", host_target(), "--binary", binary],
+                packed_as,
             ),
         ),
-        ("notignored-cli".to_string(), build(scratch, &["launcher"])),
+        (
+            "notignored-cli".to_string(),
+            build(scratch, &["launcher"], None),
+        ),
     ])
 }
 
@@ -525,6 +549,30 @@ fn the_probe_checks_a_project_install_the_same_way() {
             .join("package.json")
             .is_file(),
         "the project install has no platform package:\n{}",
+        text(&output)
+    );
+}
+
+/// A platform package that installs at some other version fails the probe and
+/// says which version it wanted: the launcher would run a binary that is not
+/// the release being verified.
+#[test]
+fn the_probe_fails_on_a_platform_package_at_another_version() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let registry = Registry::start(
+        release_with_platform_packed_as(scratch.path(), Some("0.0.1")),
+        Platform::Served,
+    );
+
+    let output = probe(&registry, scratch.path(), "3", true);
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(&format!(
+            "npm installed {pkg}@0.0.1, not {pkg}@{}",
+            cargo_version(),
+            pkg = host_platform_package()
+        )),
+        "{}",
         text(&output)
     );
 }

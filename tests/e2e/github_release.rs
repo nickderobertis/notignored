@@ -44,6 +44,12 @@ struct State {
     release: Option<Stored>,
     /// The repository's release-immutability setting, applied on publication.
     immutability: bool,
+    /// How many Release listings still omit the Release — release-plz pushes
+    /// the tag a moment before it cuts the draft.
+    unlisted_for: usize,
+    /// How many by-tag reads still report a published Release mutable — the
+    /// read-back racing GitHub settling the Release it just published.
+    settling_for: usize,
     /// Every `METHOD path body` the script sent.
     requests: Vec<(String, String, String)>,
 }
@@ -57,6 +63,17 @@ struct LocalGitHub {
 
 impl LocalGitHub {
     fn start(release: Option<Stored>, immutability: bool) -> Self {
+        Self::lagging(release, immutability, 0, 0)
+    }
+
+    /// A server that answers the first `unlisted_for` listings without the
+    /// Release and the first `settling_for` read-backs as mutable.
+    fn lagging(
+        release: Option<Stored>,
+        immutability: bool,
+        unlisted_for: usize,
+        settling_for: usize,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the local API");
         let address = format!(
             "http://{}",
@@ -65,6 +82,8 @@ impl LocalGitHub {
         let state = Arc::new(Mutex::new(State {
             release,
             immutability,
+            unlisted_for,
+            settling_for,
             requests: Vec::new(),
         }));
         let running = Arc::new(AtomicBool::new(true));
@@ -163,6 +182,13 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
     let by_tag = format!("/repos/{REPO}/releases/tags/{}", tag());
     let not_found = || ("404 Not Found", r#"{"message":"Not Found"}"#.to_string());
     let (status, payload) = match (method.as_str(), path.as_str()) {
+        ("GET", p) if p == list && state.unlisted_for > 0 => {
+            state.unlisted_for -= 1;
+            (
+                "200 OK",
+                r#"[{"id":1,"tag_name":"v0.0.1","draft":false,"immutable":false}]"#.to_string(),
+            )
+        }
         ("GET", p) if p == list => (
             "200 OK",
             match state.release {
@@ -178,6 +204,16 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
         ),
         // Like GitHub, the by-tag endpoint does not see a draft.
         ("GET", p) if p == by_tag => match state.release {
+            Some(stored) if !stored.draft && state.settling_for > 0 => {
+                state.settling_for -= 1;
+                (
+                    "200 OK",
+                    release_json(Stored {
+                        draft: false,
+                        immutable: false,
+                    }),
+                )
+            }
             Some(stored) if !stored.draft => ("200 OK", release_json(stored)),
             _ => not_found(),
         },
@@ -243,7 +279,7 @@ const DRAFT: Stored = Stored {
 /// The whole order the release takes: the uploads find a draft, the draft is
 /// published once, and the read-back passes because the setting is on.
 #[test]
-fn a_draft_is_attached_to_then_published_and_reads_back_immutable() {
+fn a_draft_is_found_then_published_and_reads_back_immutable() {
     let api = LocalGitHub::start(Some(DRAFT), true);
     let tag = tag();
 
@@ -299,13 +335,76 @@ fn a_release_that_reads_back_mutable_fails_saying_the_setting_is_off() {
     );
 }
 
-/// A Release that is still a draft does not pass the read-back either: the
-/// by-tag endpoint cannot see it, and a draft's tag is not locked.
+/// A Release that is still a draft does not pass the read-back either — the
+/// by-tag endpoint cannot see it, and a draft's tag is not locked — and the
+/// failure says to publish it rather than blaming the setting.
 #[test]
 fn a_draft_does_not_pass_the_read_back() {
     let api = LocalGitHub::start(Some(DRAFT), true);
     let verified = github_release(&api, &["verify-immutable", "--tag", &tag(), "--wait", "0"]);
     assert!(!verified.status.success(), "{}", text(&verified));
+    let stderr = String::from_utf8_lossy(&verified.stderr);
+    assert!(
+        stderr.contains("still a draft") && !stderr.contains("immutability is off"),
+        "{}",
+        text(&verified)
+    );
+}
+
+/// A draft cut a moment after the tag was pushed is waited for, not refused.
+#[test]
+fn await_draft_waits_for_a_draft_cut_after_the_tag() {
+    let api = LocalGitHub::lagging(Some(DRAFT), true, 1, 0);
+    let output = github_release(
+        &api,
+        &[
+            "await-draft",
+            "--tag",
+            &tag(),
+            "--wait",
+            "30",
+            "--interval",
+            "1",
+        ],
+    );
+    assert!(output.status.success(), "{}", text(&output));
+    let lists = api
+        .state
+        .lock()
+        .expect("the state")
+        .requests
+        .iter()
+        .filter(|(_, path, _)| path == &format!("/repos/{REPO}/releases"))
+        .count();
+    assert_eq!(lists, 2, "the draft was not looked for a second time");
+}
+
+/// A read-back that first sees the Release mutable keeps asking inside its
+/// budget, and passes once GitHub reports it immutable.
+#[test]
+fn the_read_back_waits_for_a_release_that_is_still_settling() {
+    let api = LocalGitHub::lagging(
+        Some(Stored {
+            draft: false,
+            immutable: true,
+        }),
+        true,
+        0,
+        1,
+    );
+    let output = github_release(
+        &api,
+        &[
+            "verify-immutable",
+            "--tag",
+            &tag(),
+            "--wait",
+            "30",
+            "--interval",
+            "1",
+        ],
+    );
+    assert!(output.status.success(), "{}", text(&output));
 }
 
 /// Re-running the publish job over a Release it already published writes
@@ -325,11 +424,12 @@ fn an_already_published_release_is_not_published_again() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("already published"));
 }
 
-/// An upload leg refuses a Release that is already published — under
+/// The check each upload leg runs before attaching refuses a Release that is
+/// already published — under
 /// immutability the attach would be refused anyway, after the build — and one
 /// that never appears.
 #[test]
-fn the_uploads_attach_only_to_a_draft() {
+fn await_draft_accepts_only_a_draft() {
     let published = LocalGitHub::start(
         Some(Stored {
             draft: false,

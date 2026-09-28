@@ -97,7 +97,7 @@ runs:
                 }' "$manifest" || true)"
             fi
             if [ -z "$own" ]; then
-              echo "::error::cannot read the release this action's ref names from the [package] version in $manifest; set the version input (a tag such as v0.1.0, latest, or local)"
+              echo "::error::cannot read the release this action's ref names from the [package] version in $manifest; set the version input (a tag such as v0.1.0, latest, or local)" >&2
               exit 1
             fi
             sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to "$root/bin" --version "v$own"
