@@ -36,11 +36,11 @@ use crate::support::repo_root;
 
 /// A directory laid out like a GitHub release — one archive plus its `.sha256`,
 /// named exactly as `release.yml` publishes them — served over real HTTP.
-struct Release {
-    dir: PathBuf,
+pub(crate) struct Release {
+    pub(crate) dir: PathBuf,
     _tempdir: tempfile::TempDir,
     _server: Option<Server>,
-    base_url: String,
+    pub(crate) base_url: String,
     tag: String,
 }
 
@@ -207,7 +207,7 @@ fn sha256_of(path: &Path) -> String {
 }
 
 /// Publish a release holding the real compiled `notignored`, served over HTTP.
-fn publish(tag: &str, corrupt_checksum: bool, with_checksum: bool) -> Release {
+pub(crate) fn publish(tag: &str, corrupt_checksum: bool, with_checksum: bool) -> Release {
     let dir = tempfile::tempdir().unwrap();
     let stage = dir.path().join("stage");
     fs::create_dir_all(&stage).unwrap();
@@ -284,7 +284,7 @@ impl Release {
     }
 
     /// The path of every request, in order — `/v9.9.9/notignored-….sha256`.
-    fn requested_paths(&self) -> Vec<String> {
+    pub(crate) fn requested_paths(&self) -> Vec<String> {
         self.requests()
             .lines()
             .filter_map(|line| {

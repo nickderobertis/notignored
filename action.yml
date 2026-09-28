@@ -32,10 +32,13 @@ inputs:
     default: "20"
   version:
     description: >-
-      notignored release to install (a tag such as `v0.1.0`, or `latest`), or
+      notignored release to install. Empty (the default) installs the release
+      this action's own ref names — the `[package] version` in the action's
+      `Cargo.toml`, as `v<version>` — so pinning the action pins its binary too.
+      Otherwise a tag such as `v0.1.0`, `latest` for the newest release, or
       `local` to build the source shipped with this action using cargo.
     required: false
-    default: latest
+    default: ""
 
 outputs:
   count:
@@ -77,6 +80,27 @@ runs:
             ;;
           latest)
             sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to "$root/bin"
+            ;;
+          "")
+            # The release this action's ref names. At a release tag the crate's
+            # version *is* the released one — release-plz is its only writer —
+            # so `@vX.Y.Z` installs vX.Y.Z with no second pin to keep in step.
+            # Unreadable, this fails rather than guess: falling back to `latest`
+            # would quietly unpin every caller who relied on the default.
+            manifest="$GITHUB_ACTION_PATH/Cargo.toml"
+            own=""
+            if [ -r "$manifest" ]; then
+              own="$(awk '
+                /^\[/ { section = $0 }
+                section == "[package]" && /^version[ \t]*=/ {
+                  sub(/^version[ \t]*=[ \t]*"/, ""); sub(/".*$/, ""); print; exit
+                }' "$manifest" || true)"
+            fi
+            if [ -z "$own" ]; then
+              echo "::error::cannot read the release this action's ref names from the [package] version in $manifest; set the version input (a tag such as v0.1.0, latest, or local)"
+              exit 1
+            fi
+            sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to "$root/bin" --version "v$own"
             ;;
           *)
             sh "$GITHUB_ACTION_PATH/scripts/install.sh" --to "$root/bin" --version "$VERSION"

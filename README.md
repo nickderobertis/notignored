@@ -245,9 +245,18 @@ jobs:
 
 `@v0` is a **floating major tag**: it follows every release in the `0.x` line and
 moves only once that release's artifacts have published, so it never resolves to
-unreleased work. It will keep meaning `0.x` after `v1` exists. Pin exactly —
-`nickderobertis/notignored@v0.1.10` — where a reproducible build matters more
-than picking up fixes; the tag for a specific version never moves.
+unreleased work. It will keep meaning `0.x` after `v1` exists.
+
+Pin exactly — `nickderobertis/notignored@v0.1.10` — where a reproducible build
+matters more than picking up fixes. An exact tag pins the action **and** its
+binary together: leave `version` unset and the action installs the release its
+own ref names, so there is no second version to keep in step. Releases are
+published under GitHub's release immutability, so the tag of every Release
+published after v0.1.16 cannot be moved, and its assets cannot be added,
+replaced, or removed — pinning that tag is as fixed as pinning a commit. Releases up to and
+including v0.1.16 predate immutability: their tags are held in place by this
+project's practice alone, so pin a later release, or a commit SHA, where that
+guarantee matters.
 
 | Input | Default | Meaning |
 | --- | --- | --- |
@@ -255,7 +264,7 @@ than picking up fixes; the tag for a specific version never moves.
 | `diff-base` | the pull request's base branch | Any git revision or range, as `--diff-base` takes. |
 | `paths` | the whole repository | Whitespace-separated files and directories to scan. |
 | `max-entries` | `20` | How many suppressions the comment lists before it closes with a line counting the rest. At least 1; anything else fails the run. |
-| `version` | `latest` | A release tag such as `v0.1.0`, or `local` to build the action's own source with `cargo`. |
+| `version` | empty: the release the action's own ref names | Empty installs `v<version>` for the `version` in the action's own `Cargo.toml` — at `@vX.Y.Z` that is `vX.Y.Z`, at `@v0` the release `v0` points at — and fails rather than guessing if that file cannot be read. Otherwise a release tag such as `v0.1.0`, `latest` for the newest release, or `local` to build the action's own source with `cargo`. |
 
 | Output | Meaning |
 | --- | --- |

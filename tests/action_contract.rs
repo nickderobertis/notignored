@@ -40,7 +40,10 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
         inputs.get("github-token").get("default").scalar(),
         "${{ github.token }}"
     );
-    assert_eq!(inputs.get("version").get("default").scalar(), "latest");
+    // Empty: install the release this action's own ref names, read from the
+    // `Cargo.toml` at `$GITHUB_ACTION_PATH`, so `@vX.Y.Z` pins the binary too.
+    // `tests/e2e/action_install.rs` proves what the install step does with it.
+    assert_eq!(inputs.get("version").get("default").scalar(), "");
     // The renderer's own default, so the action and the binary cannot disagree
     // about how long a comment gets before it stops listing.
     assert_eq!(
