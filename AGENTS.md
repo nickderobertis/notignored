@@ -362,19 +362,32 @@ until the runner's platform package is installed.
   squash commit whose subject is the PR title. Queue with
   `gh pr merge --auto --squash`. Merged head branches auto-delete. Admins may
   bypass in a break-glass.
-- **A new CI job is advisory until it is required.** Branch protection lists
-  contexts by name, so adding a job means re-running the create-repo skill's
-  `setup_github_governance.py` with the new context — otherwise a red run still
-  merges. Release-tag-triggered and scheduled jobs (`release.yml`,
-  `published-smoke.yml`) are the exception and must stay unrequired: they report
-  no pull-request context, so requiring one would block every PR forever — the
-  same trap `notignored.yml` and `visual-docs.yml` are kept out of (each for the
-  fork-pull-request reason recorded with it). `ci.yml`'s `changes` job is the
-  third exception and stays unrequired: it exists only to answer whether the Rust
-  matrices run, it fails closed to "run them", and requiring it would add a
-  context that says nothing about the code. The names it gates — `gate`, `cross`,
-  `msrv`, `deny`, `install` — are unchanged, and a job skipped by an `if:`
-  satisfies its required context.
+- **Protection requires one context: `required`.** `ci.yml`'s `required` job
+  needs every other job there, runs `if: always()`, and passes only when
+  `scripts/ci-required.sh` finds each one succeeded or skipped for the reason its
+  own `if:` gives — `gate` skipped, or `cross` skipped while `changes` said the
+  crate is affected, fails it. A new `ci.yml` job is covered by adding it to
+  `required`'s `needs:` and a row, with its exact `if:`, to that script's rule
+  table; `tests/ci_contract.rs` fails the build until both are done, so nothing
+  in protection has to change. Never require a matrix job's contexts: a matrix
+  skipped by its `if:` reports one `skipped` run under its bare name and never
+  emits `cross (macos-latest)` and its siblings, so a protection naming them
+  blocks every pull request that does not reach the crate however green it is —
+  notignored#63 — and they drift whenever a runner label does. A job skipped by an
+  `if:` satisfies a required context only when it is not a matrix; `required` is
+  not one, and must stay so. Release-tag-triggered and scheduled workflows
+  (`release.yml`, `published-smoke.yml`) stay out of `required` and out of
+  protection: they report no pull-request context, so requiring one would block
+  every PR forever — the same trap `notignored.yml` and `visual-docs.yml` are kept
+  out of (each for the fork-pull-request reason recorded with it). `changes` is
+  covered like any job but is never a protection context of its own: it only
+  answers whether the Rust matrices run, and fails closed to "run them".
+  **Owner's step, outside the change that added `required`:** branch protection on
+  `main` should require exactly `required`, in place of the ten contexts it listed
+  — `gate`, `deny`, `pr-title`, `llmlint`, `msrv`, `cross (macos-latest)`,
+  `cross (windows-latest)`, `install (ubuntu-latest)`, `install (macos-latest)`,
+  `install (windows-latest)` — by re-running the create-repo skill's
+  `setup_github_governance.py` with that one context.
 - **The PR description becomes the squash commit body**, so it is history, not
   paperwork.
 - **Merging a PR is the only human action in a release.** Never hand-edit a
