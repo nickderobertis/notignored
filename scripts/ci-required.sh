@@ -17,8 +17,9 @@ set -euo pipefail
 # changed there and not here, fails the build rather than this job.
 #
 # What each condition lets a skip mean is decided in `skip_allowed` below.
-rules="$(
-  cat <<'RULES'
+# Read with the `read` builtin rather than `cat`, so a host missing `node` still
+# gets as far as saying so.
+IFS= read -r -d '' rules <<'RULES' || true
 changes | (none)
 gate | (none)
 cross | needs.changes.outputs.crate == 'true'
@@ -29,7 +30,7 @@ install-documented | github.event_name == 'push'
 pr-title | github.event_name == 'pull_request'
 llmlint | github.event_name == 'pull_request'
 RULES
-)"
+rules="${rules%$'\n'}"
 
 # The events ci.yml runs on, which the conditions above were read against. Any
 # other would judge event-conditioned skips by a case nobody reasoned about, so
@@ -45,6 +46,10 @@ die() {
 # Every row's condition has to be one `skip_allowed` can read, checked before any
 # payload is, so a row this script cannot interpret fails every run — the
 # journey's included — instead of only the one where that job happens to skip.
+# llmlint: ignore-block[changed_behavior_has_e2e] reaching the refusal below
+# takes a row the committed table does not have, and tests/ci_contract.rs holds
+# every row to the `if:` ci.yml actually carries; every journey run passes
+# through this check with the real table, which is what proves it admits it.
 while IFS= read -r rule; do
   case "${rule#* | }" in
     "(none)" | "needs.changes.outputs.crate == 'true'" | "github.event_name == '"*"'") ;;
@@ -54,6 +59,7 @@ while IFS= read -r rule; do
 done <<EOF
 $rules
 EOF
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 event="${REQUIRED_EVENT:-}"
 needs="${REQUIRED_NEEDS:-}"
@@ -92,8 +98,11 @@ if ! table="$(
         console.error(`the needs payload names ${JSON.stringify(job)}, which is not a job id`);
         process.exit(1);
       }
-      const record = entry !== null && typeof entry === "object" ? entry : {};
-      const result = typeof record.result === "string" ? record.result : "";
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+        console.error(`${job} is ${JSON.stringify(entry)} in the needs payload rather than a job`);
+        process.exit(1);
+      }
+      const result = typeof entry.result === "string" ? entry.result : "";
       // Every field lands in a tab-and-newline table, so one that could carry
       // either is refused here rather than allowed to forge a row. `crate` is
       // written as JSON, which escapes both.
@@ -101,7 +110,11 @@ if ! table="$(
         console.error(`${job} has result ${JSON.stringify(result)}, which is not a job result`);
         process.exit(1);
       }
-      const outputs = record.outputs !== null && typeof record.outputs === "object" ? record.outputs : {};
+      const outputs = entry.outputs;
+      if (outputs === null || typeof outputs !== "object" || Array.isArray(outputs)) {
+        console.error(`${job} has outputs ${JSON.stringify(outputs)} rather than a map`);
+        process.exit(1);
+      }
       const crate = Object.hasOwn(outputs, "crate") ? JSON.stringify(outputs.crate) : "absent";
       console.log(`${job}\t${result}\t${crate}`);
     }

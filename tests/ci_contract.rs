@@ -215,7 +215,7 @@ fn needs_of(job: &Node) -> Vec<String> {
 fn verdict_rules(script: &str) -> Vec<(String, String)> {
     let mut lines = script.lines();
     lines
-        .find(|line| line.trim_end().ends_with("<<'RULES'"))
+        .find(|line| line.contains("<<'RULES'"))
         .unwrap_or_else(|| panic!("{VERDICT_SCRIPT} has no `<<'RULES'` rule table"));
     lines
         .take_while(|line| *line != "RULES")

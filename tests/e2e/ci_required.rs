@@ -20,36 +20,52 @@ use serde_json::{json, Map, Value};
 
 use crate::support::{bash_program, repo_root};
 
-/// Every job `required` covers, as `ci.yml` defines them today.
-const JOBS: [&str; 9] = [
-    "changes",
-    "gate",
-    "cross",
-    "msrv",
-    "deny",
-    "install",
-    "install-documented",
-    "pr-title",
-    "llmlint",
-];
+/// The script's rule table, as `(job, condition)` rows — read from the script
+/// rather than restated, so a job `tests/ci_contract.rs` makes it cover is a job
+/// these journeys drive without an edit here.
+fn rules() -> Vec<(String, String)> {
+    let script = std::fs::read_to_string(repo_root().join("scripts").join("ci-required.sh"))
+        .expect("read scripts/ci-required.sh");
+    let mut lines = script.lines();
+    lines
+        .find(|line| line.contains("<<'RULES'"))
+        .expect("scripts/ci-required.sh has a `<<'RULES'` table");
+    lines
+        .take_while(|line| *line != "RULES")
+        .map(|line| {
+            let (job, condition) = line.split_once(" | ").expect("a `<job> | <if>` row");
+            (job.to_string(), condition.to_string())
+        })
+        .collect()
+}
 
-/// The jobs whose `if:` is `needs.changes.outputs.crate == 'true'`.
-const CRATE_JOBS: [&str; 4] = ["cross", "msrv", "deny", "install"];
+/// The jobs whose `if:` is the crate condition — `cross`, `msrv`, `deny` and
+/// `install` today.
+fn crate_jobs() -> Vec<String> {
+    let jobs: Vec<String> = rules()
+        .into_iter()
+        .filter(|(_, condition)| condition == "needs.changes.outputs.crate == 'true'")
+        .map(|(job, _)| job)
+        .collect();
+    assert!(
+        jobs.len() >= 4,
+        "the rule table has lost its crate-conditioned jobs: {jobs:?}"
+    );
+    jobs
+}
 
 /// A `toJSON(needs)` payload in which every job succeeded, with `changes`
 /// reporting `crate` as given.
 fn all_succeeded(crate_output: &str) -> Map<String, Value> {
-    JOBS.iter()
-        .map(|job| {
-            let outputs = if *job == "changes" {
+    rules()
+        .into_iter()
+        .map(|(job, _)| {
+            let outputs = if job == "changes" {
                 json!({ "crate": crate_output })
             } else {
                 json!({})
             };
-            (
-                (*job).to_string(),
-                json!({ "result": "success", "outputs": outputs }),
-            )
+            (job, json!({ "result": "success", "outputs": outputs }))
         })
         .collect()
 }
@@ -187,11 +203,12 @@ fn the_documented_install_may_not_skip_on_a_push() {
 
 #[test]
 fn a_crate_job_may_not_skip_when_the_crate_is_affected() {
-    for job in CRATE_JOBS {
+    let crate_jobs = crate_jobs();
+    for job in &crate_jobs {
         let payload = with_results(all_succeeded("true"), &[(job, "skipped")]);
         let output = verdict(&payload, "push");
         assert_rejects_naming(&output, &[job]);
-        for other in CRATE_JOBS.iter().filter(|other| **other != job) {
+        for other in crate_jobs.iter().filter(|other| *other != job) {
             assert!(
                 !stderr(&output).contains(&format!("ci-required: {other}: ")),
                 "`{other}` succeeded but was named:\n{}",
@@ -205,13 +222,31 @@ fn a_crate_job_may_not_skip_when_the_crate_is_affected() {
 /// read as "the crate was not reached".
 #[test]
 fn the_crate_jobs_may_not_skip_when_the_crate_output_is_missing_or_empty() {
-    let skipped: Vec<(&str, &str)> = CRATE_JOBS.iter().map(|job| (*job, "skipped")).collect();
+    let crate_jobs = crate_jobs();
+    let named: Vec<&str> = crate_jobs.iter().map(String::as_str).collect();
+    let skipped: Vec<(&str, &str)> = named.iter().map(|job| (*job, "skipped")).collect();
     let mut missing = with_results(all_succeeded("false"), &skipped);
     missing["changes"]["outputs"] = json!({});
     let empty = with_results(all_succeeded(""), &skipped);
     for payload in [missing, empty] {
-        assert_rejects_naming(&verdict(&payload, "push"), &CRATE_JOBS);
+        assert_rejects_naming(&verdict(&payload, "push"), &named);
     }
+}
+
+/// `install` also needs `gate`, and every crate job needs `changes`: when either
+/// fails, GitHub skips the dependants. Those skips are refused alongside the
+/// failure itself — a `crate` of "false" from a `changes` that did not succeed
+/// is not an answer.
+#[test]
+fn the_crate_jobs_may_not_skip_when_changes_did_not_succeed() {
+    let crate_jobs = crate_jobs();
+    let named: Vec<&str> = crate_jobs.iter().map(String::as_str).collect();
+    let mut results: Vec<(&str, &str)> = named.iter().map(|job| (*job, "skipped")).collect();
+    results.push(("changes", "failure"));
+    let output = verdict(&with_results(all_succeeded("false"), &results), "push");
+    let mut expected = named.clone();
+    expected.push("changes");
+    assert_rejects_naming(&output, &expected);
 }
 
 #[test]
@@ -339,39 +374,37 @@ fn a_payload_key_that_is_not_a_job_id_fails_the_verdict() {
     assert!(stderr.contains("which is not a job id"), "{stderr}");
 }
 
-/// A rule whose condition the script cannot read fails every run, not only the
-/// one where that job happens to skip. Driven on a copy of the real script with
-/// one row's condition edited — the only way to hold a row the committed table
-/// does not have.
 #[test]
-fn a_rule_the_script_cannot_interpret_fails_every_run() {
-    let script = std::fs::read_to_string(repo_root().join("scripts").join("ci-required.sh"))
-        .expect("read scripts/ci-required.sh");
-    let row = "deny | needs.changes.outputs.crate == 'true'";
-    assert!(
-        script.contains(row),
-        "the script no longer has the row `{row}`"
-    );
-    let dir = tempfile::tempdir().expect("a scratch directory");
-    let edited = dir.path().join("ci-required.sh");
-    std::fs::write(
-        &edited,
-        script.replacen(row, "deny | needs.changes.outputs.crate != 'false'", 1),
-    )
-    .expect("write the edited script");
+fn a_job_whose_outputs_are_not_a_map_fails_the_verdict() {
+    let mut payload = all_succeeded("false");
+    payload["changes"]["outputs"] = json!(["crate", "false"]);
+    let output = verdict(&payload, "push");
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("changes has outputs"), "{stderr}");
+}
+
+/// Without `node` the payload cannot be read at all; the refusal has to say
+/// so rather than fail on whatever command runs next. `PATH` is an empty
+/// directory and `bash` is resolved absolutely, so nothing else is removed.
+#[test]
+fn a_host_without_node_is_told_so() {
+    let empty = tempfile::tempdir().expect("an empty PATH directory");
     let output = Command::new(bash_program())
-        .arg(&edited)
+        .arg(repo_root().join("scripts").join("ci-required.sh"))
+        .current_dir(repo_root())
+        .env("PATH", empty.path())
         .env(
             "REQUIRED_NEEDS",
             Value::Object(all_succeeded("true")).to_string(),
         )
         .env("REQUIRED_EVENT", "push")
         .output()
-        .expect("run the edited script");
+        .expect("run scripts/ci-required.sh");
     let stderr = stderr(&output);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("cannot judge a skip under") && stderr.contains("deny"),
+        stderr.contains("node is not on PATH") && stderr.contains("ACTION: install Node.js"),
         "{stderr}"
     );
 }
