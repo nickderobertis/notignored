@@ -40,6 +40,11 @@ llmlint | github.event_name == 'pull_request'
 RULES
 )"
 
+# The events ci.yml runs on, which the conditions above were read against. Any
+# other would judge event-conditioned skips by a case nobody reasoned about, so
+# it fails. tests/ci_contract.rs holds this to ci.yml's `on:`.
+events="pull_request push"
+
 die() {
   printf 'ci-required: %s\n' "$1" >&2
   printf 'ACTION: %s\n' "$2" >&2
@@ -63,6 +68,12 @@ event="${REQUIRED_EVENT:-}"
 needs="${REQUIRED_NEEDS:-}"
 [ -n "$event" ] || die "REQUIRED_EVENT is empty or unset, so no event-conditioned skip can be judged" \
   "pass \`github.event_name\` to this script as REQUIRED_EVENT"
+known_event=false
+for candidate in $events; do
+  [ "$event" != "$candidate" ] || known_event=true
+done
+"$known_event" || die "REQUIRED_EVENT is '$event', which ci.yml does not run on (it runs on: $events)" \
+  "pass \`github.event_name\` unaltered; if ci.yml gained a trigger, add it to \`events\` in scripts/ci-required.sh once every rule's skip reads right under it"
 [ -n "$needs" ] || die "REQUIRED_NEEDS is empty or unset, so no job's result is known" \
   "pass \`toJSON(needs)\` to this script as REQUIRED_NEEDS"
 command -v node >/dev/null 2>&1 || die "node is not on PATH; it is what reads the \`needs\` payload" \

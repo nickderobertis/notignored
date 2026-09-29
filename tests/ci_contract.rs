@@ -361,6 +361,33 @@ fn rule_drift(workflow: &Node, rules: &[(String, String)]) -> Vec<String> {
     problems
 }
 
+/// The events the verdict script accepts, from its `events="..."` line.
+fn verdict_events(script: &str) -> Vec<String> {
+    let line = script
+        .lines()
+        .find_map(|line| line.strip_prefix("events="))
+        .unwrap_or_else(|| panic!("{VERDICT_SCRIPT} declares no `events=` list"));
+    let mut events: Vec<String> = line
+        .trim_matches('"')
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    events.sort();
+    events
+}
+
+/// The events ci.yml triggers on.
+fn workflow_events(workflow: &Node) -> Vec<String> {
+    let mut events: Vec<String> = workflow
+        .get("on")
+        .keys()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    events.sort();
+    events
+}
+
 fn assert_none(problems: &[String]) {
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
@@ -381,6 +408,22 @@ fn the_verdict_rules_match_the_workflows_conditions() {
         &parse(&read(CI)),
         &verdict_rules(&read(VERDICT_SCRIPT)),
     ));
+}
+
+/// The script refuses any event outside its list, because the conditions were
+/// read against those alone; a trigger ci.yml gained would otherwise fail every
+/// run it starts, and one it lost would be accepted unexamined.
+#[test]
+fn the_verdict_accepts_exactly_the_events_ci_runs_on() {
+    let (script, workflow) = (
+        verdict_events(&read(VERDICT_SCRIPT)),
+        workflow_events(&parse(&read(CI))),
+    );
+    assert_eq!(
+        script, workflow,
+        "{VERDICT_SCRIPT}'s `events` is {script:?} but ci.yml runs on {workflow:?} — \
+         read every rule's skip under the new event, then make the two agree"
+    );
 }
 
 /// The verdict script is invoked as `bash <path>`, so it must be where the step

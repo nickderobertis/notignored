@@ -306,3 +306,73 @@ fn a_result_that_is_not_a_word_fails_the_verdict() {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("gate has result"), "{stderr}");
 }
+
+/// The event-conditioned rules were reasoned for the events ci.yml runs on;
+/// under any other, "not `push`" and "not `pull_request`" would both hold and
+/// every event-conditioned skip would pass unexamined.
+#[test]
+fn an_event_ci_does_not_run_on_fails_the_verdict() {
+    let payload = with_results(
+        all_succeeded("true"),
+        &[
+            ("install-documented", "skipped"),
+            ("pr-title", "skipped"),
+            ("llmlint", "skipped"),
+        ],
+    );
+    for event in ["schedule", "pull_request push"] {
+        let output = verdict(&payload, event);
+        let stderr = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{event:?} passed:\n{stderr}");
+        assert!(
+            stderr.contains("ci.yml does not run on"),
+            "{event:?}:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn a_payload_key_that_is_not_a_job_id_fails_the_verdict() {
+    let payload = with_results(all_succeeded("true"), &[("gate\tsuccess", "success")]);
+    let output = verdict(&payload, "push");
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("which is not a job id"), "{stderr}");
+}
+
+/// A rule whose condition the script cannot read fails every run, not only the
+/// one where that job happens to skip. Driven on a copy of the real script with
+/// one row's condition edited — the only way to hold a row the committed table
+/// does not have.
+#[test]
+fn a_rule_the_script_cannot_interpret_fails_every_run() {
+    let script = std::fs::read_to_string(repo_root().join("scripts").join("ci-required.sh"))
+        .expect("read scripts/ci-required.sh");
+    let row = "deny | needs.changes.outputs.crate == 'true'";
+    assert!(
+        script.contains(row),
+        "the script no longer has the row `{row}`"
+    );
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let edited = dir.path().join("ci-required.sh");
+    std::fs::write(
+        &edited,
+        script.replacen(row, "deny | needs.changes.outputs.crate != 'false'", 1),
+    )
+    .expect("write the edited script");
+    let output = Command::new(bash_program())
+        .arg(&edited)
+        .env(
+            "REQUIRED_NEEDS",
+            Value::Object(all_succeeded("true")).to_string(),
+        )
+        .env("REQUIRED_EVENT", "push")
+        .output()
+        .expect("run the edited script");
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("cannot judge a skip under") && stderr.contains("deny"),
+        "{stderr}"
+    );
+}
