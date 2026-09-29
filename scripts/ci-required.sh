@@ -92,6 +92,13 @@ if ! table="$(
       }
       const record = entry !== null && typeof entry === "object" ? entry : {};
       const result = typeof record.result === "string" ? record.result : "";
+      // Every field lands in a tab-and-newline table, so one that could carry
+      // either is refused here rather than allowed to forge a row. `crate` is
+      // written as JSON, which escapes both.
+      if (!/^[A-Za-z_]*$/.test(result)) {
+        console.error(`${job} has result ${JSON.stringify(result)}, which is not a job result`);
+        process.exit(1);
+      }
       const outputs = record.outputs !== null && typeof record.outputs === "object" ? record.outputs : {};
       const crate = Object.hasOwn(outputs, "crate") ? JSON.stringify(outputs.crate) : "absent";
       console.log(`${job}\t${result}\t${crate}`);
@@ -103,12 +110,10 @@ fi
 
 tab="$(printf '\t')"
 
-# The payload's line for a job, or nothing.
 payload_line() {
   printf '%s\n' "$table" | grep "^$1$tab" || true
 }
 
-# The condition a rule records for a job, or nothing when it has no rule.
 rule_condition() {
   printf '%s\n' "$rules" | sed -n "s/^$1 | //p"
 }

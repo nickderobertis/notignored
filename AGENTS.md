@@ -382,12 +382,14 @@ until the runner's platform package is installed.
   out of (each for the fork-pull-request reason recorded with it). `changes` is
   covered like any job but is never a protection context of its own: it only
   answers whether the Rust matrices run, and fails closed to "run them".
-  **Owner's step, outside the change that added `required`:** branch protection on
-  `main` should require exactly `required`, in place of the ten contexts it listed
-  — `gate`, `deny`, `pr-title`, `llmlint`, `msrv`, `cross (macos-latest)`,
-  `cross (windows-latest)`, `install (ubuntu-latest)`, `install (macos-latest)`,
-  `install (windows-latest)` — by re-running the create-repo skill's
-  `setup_github_governance.py` with that one context.
+  Protection itself lives in GitHub, where no offline gate can read it, so it is
+  the repository owner's to keep at exactly `required` — set with the create-repo
+  skill's `setup_github_governance.py`, never by hand for one merge. The ten
+  contexts it named before `required` existed — `gate`, `deny`, `pr-title`,
+  `llmlint`, `msrv`, `cross (macos-latest)`, `cross (windows-latest)`,
+  `install (ubuntu-latest)`, `install (macos-latest)`, `install (windows-latest)`
+  — are the owner's step to replace with it; any of them still listed is that
+  step not yet taken.
 - **The PR description becomes the squash commit body**, so it is history, not
   paperwork.
 - **Merging a PR is the only human action in a release.** Never hand-edit a

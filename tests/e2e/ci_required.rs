@@ -292,3 +292,17 @@ fn a_missing_event_fails_the_verdict() {
         assert!(stderr.contains("REQUIRED_EVENT"), "{stderr}");
     }
 }
+
+/// A result is only ever a word; one carrying the verdict's own row delimiters
+/// could otherwise forge a row for a job that never ran.
+#[test]
+fn a_result_that_is_not_a_word_fails_the_verdict() {
+    let payload = with_results(
+        all_succeeded("true"),
+        &[("gate", "failure\nllmlint\tsuccess")],
+    );
+    let output = verdict(&payload, "push");
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("gate has result"), "{stderr}");
+}
