@@ -268,3 +268,34 @@ jobs:
             exit 1
           fi
           just lint-llm-diff origin/main
+
+  # The one context branch protection requires. A matrix job skipped by its `if:`
+  # reports a single `skipped` run under its bare name and never emits its
+  # per-variant contexts (`cross (macos-latest)`), so protection that names those
+  # blocks every pull request that does not reach the crate, however green.
+  # This job needs every other one and always runs, and scripts/ci-required.sh
+  # passes it only when each succeeded or was skipped for the reason its own
+  # `if:` gives. A new job here is covered by adding it to `needs:` below, and a
+  # row to that script's rule table; tests/ci_contract.rs fails the build until
+  # both are done.
+  required:
+    if: always()
+    needs:
+      - changes
+      - gate
+      - cross
+      - msrv
+      - deny
+      - install
+      - install-documented
+      - pr-title
+      - llmlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Both reach the script as environment, never spliced into its text.
+      - name: Every job passed, or skipped for its own reason
+        env:
+          REQUIRED_NEEDS: ${{ toJSON(needs) }}
+          REQUIRED_EVENT: ${{ github.event_name }}
+        run: bash scripts/ci-required.sh
