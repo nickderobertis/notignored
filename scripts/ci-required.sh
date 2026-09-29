@@ -1,22 +1,13 @@
 #!/usr/bin/env bash
-# Decide ci.yml's `required` job: the one context branch protection requires.
+# The verdict of ci.yml's `required` job, the one context branch protection
+# requires. A skip passes only for the reason the job's own `if:` gives: `gate`
+# skipped, or `cross` skipped while `changes` said the crate is affected, is a
+# check that never ran. Everything else fails closed, naming the job.
 #
-# A job skipped by its `if:` reports `skipped`, and a *matrix* job skipped that
-# way reports one `skipped` check run under its bare name — its per-variant
-# contexts (`cross (macos-latest)`) are never emitted, so protection naming them
-# waits forever. `required` needs every other job and runs `if: always()`, so it
-# always reports; this script is what it reports.
-#
-# Accepting every `skipped` would be as wrong as accepting none: `gate` skipped,
-# or `cross` skipped while `changes` said the crate is affected, is a check that
-# never ran. So a skip passes only for the reason the job's own `if:` gives,
-# decided from what `toJSON(needs)` carries (each job's `result` and `outputs`)
-# and the event name (three conditions turn on it, and `needs` does not say it).
-# Everything else fails closed, naming the job.
-#
-# Reads REQUIRED_NEEDS (the `toJSON(needs)` payload) and REQUIRED_EVENT
-# (`github.event_name`). Needs `node`, which `just bootstrap` already requires
-# and every GitHub-hosted runner carries.
+# Reads REQUIRED_NEEDS (`toJSON(needs)`, which carries each job's `result` and
+# `outputs` and nothing else) and REQUIRED_EVENT (`github.event_name`, which
+# three conditions turn on). Needs `node`, which `just bootstrap` already
+# requires and every GitHub-hosted runner carries.
 set -euo pipefail
 
 # The rules, one per job `required` covers: the job id, then the exact `if:` it

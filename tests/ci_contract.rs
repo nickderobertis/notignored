@@ -188,16 +188,12 @@ fn every_harness_credential_is_passed_and_required() {
 const CI: &str = ".github/workflows/ci.yml";
 const VERDICT_SCRIPT: &str = "scripts/ci-required.sh";
 
-/// What the verdict script's rule table records for a job with no `if:`.
 const NO_CONDITION: &str = "(none)";
 
-/// The aggregate job, as branch protection names it.
 const REQUIRED: &str = "required";
 
-/// The exact step that runs the verdict: its outcome is the script's exit status.
 const VERDICT_COMMAND: &str = "bash scripts/ci-required.sh";
 
-/// Every input the script reads, and the expression that has to feed it.
 const VERDICT_INPUTS: [(&str, &str); 2] = [
     ("REQUIRED_NEEDS", "${{ toJSON(needs) }}"),
     ("REQUIRED_EVENT", "${{ github.event_name }}"),
@@ -216,7 +212,6 @@ fn needs_of(job: &Node) -> Vec<String> {
     }
 }
 
-/// The verdict script's rule table: each covered job and the `if:` it records.
 fn verdict_rules(script: &str) -> Vec<(String, String)> {
     let mut lines = script.lines();
     lines
@@ -361,7 +356,6 @@ fn rule_drift(workflow: &Node, rules: &[(String, String)]) -> Vec<String> {
     problems
 }
 
-/// The events the verdict script accepts, from its `events="..."` line.
 fn verdict_events(script: &str) -> Vec<String> {
     let line = script
         .lines()
@@ -376,7 +370,6 @@ fn verdict_events(script: &str) -> Vec<String> {
     events
 }
 
-/// The events ci.yml triggers on.
 fn workflow_events(workflow: &Node) -> Vec<String> {
     let mut events: Vec<String> = workflow
         .get("on")

@@ -54,7 +54,6 @@ fn all_succeeded(crate_output: &str) -> Map<String, Value> {
         .collect()
 }
 
-/// `payload` with each named job's result replaced.
 fn with_results(mut payload: Map<String, Value>, results: &[(&str, &str)]) -> Map<String, Value> {
     for (job, result) in results {
         payload
