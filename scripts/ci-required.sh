@@ -192,7 +192,13 @@ $table
 EOF
 
 if [ "$failures" -gt 0 ]; then
-  echo "ACTION: fix the job(s) named above, or — if a skip was legitimate — the rule that refused it" >&2
+  {
+    echo "ACTION: for a failed or cancelled job, open its log in this workflow run and fix what it reports."
+    echo "        A refused skip is a check that never ran: re-run the workflow. If the skip was"
+    echo "        legitimate, the job's if: in ci.yml and its row in scripts/ci-required.sh changed"
+    echo "        together is the fix. A job with no rule, or a rule with no job, needs both files"
+    echo "        brought back into step; tests/ci_contract.rs names what differs."
+  } >&2
   exit 1
 fi
 echo "ci-required: every covered job succeeded or was skipped for its own condition"

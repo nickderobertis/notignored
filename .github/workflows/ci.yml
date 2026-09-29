@@ -273,11 +273,6 @@ jobs:
   # reports a single `skipped` run under its bare name and never emits its
   # per-variant contexts (`cross (macos-latest)`), so protection that names those
   # blocks every pull request that does not reach the crate, however green.
-  # This job needs every other one and always runs, and scripts/ci-required.sh
-  # passes it only when each succeeded or was skipped for the reason its own
-  # `if:` gives. A new job here is covered by adding it to `needs:` below, and a
-  # row to that script's rule table; tests/ci_contract.rs fails the build until
-  # both are done.
   required:
     if: always()
     needs:

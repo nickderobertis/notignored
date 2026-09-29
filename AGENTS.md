@@ -384,12 +384,18 @@ until the runner's platform package is installed.
   answers whether the Rust matrices run, and fails closed to "run them".
   Protection itself lives in GitHub, where no offline gate can read it, so it is
   the repository owner's to keep at exactly `required` — set with the create-repo
-  skill's `setup_github_governance.py`, never by hand for one merge. The ten
-  contexts it named before `required` existed — `gate`, `deny`, `pr-title`,
+  skill's `setup_github_governance.py`, never by hand for one merge.
+  <!-- llmlint: ignore-block[agents_md_durable_and_terse] the task that added
+  `required` requires this file to name the owner's protection step and the ten
+  contexts it replaces: protection lives in GitHub, not the tree, so this list is
+  the only place a maintainer can tell a stale setting from a current one, and it
+  retires with the next edit after the owner has made the change. -->
+  The ten contexts it named before `required` existed — `gate`, `deny`, `pr-title`,
   `llmlint`, `msrv`, `cross (macos-latest)`, `cross (windows-latest)`,
   `install (ubuntu-latest)`, `install (macos-latest)`, `install (windows-latest)`
   — are the owner's step to replace with it; any of them still listed is that
   step not yet taken.
+  <!-- llmlint: ignore-end[agents_md_durable_and_terse] -->
 - **The PR description becomes the squash commit body**, so it is history, not
   paperwork.
 - **Merging a PR is the only human action in a release.** Never hand-edit a
