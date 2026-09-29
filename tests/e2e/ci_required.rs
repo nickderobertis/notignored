@@ -54,8 +54,6 @@ fn crate_jobs() -> Vec<String> {
     jobs
 }
 
-/// A `toJSON(needs)` payload in which every job succeeded, with `changes`
-/// reporting `crate` as given.
 fn all_succeeded(crate_output: &str) -> Map<String, Value> {
     rules()
         .into_iter()
@@ -79,8 +77,6 @@ fn with_results(mut payload: Map<String, Value>, results: &[(&str, &str)]) -> Ma
     payload
 }
 
-/// The script's verdict over a raw payload and event, either of which may be
-/// left unset.
 fn verdict_raw(needs: Option<&str>, event: Option<&str>) -> Output {
     let mut command = Command::new(bash_program());
     command
@@ -407,4 +403,19 @@ fn a_host_without_node_is_told_so() {
         stderr.contains("node is not on PATH") && stderr.contains("ACTION: install Node.js"),
         "{stderr}"
     );
+}
+
+#[test]
+fn a_job_entry_that_is_not_an_object_fails_the_verdict() {
+    for entry in [json!(null), json!("success"), json!(["success"])] {
+        let mut payload = all_succeeded("true");
+        payload["gate"] = entry.clone();
+        let output = verdict(&payload, "push");
+        let stderr = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{entry} passed:\n{stderr}");
+        assert!(
+            stderr.contains("gate is ") && stderr.contains("rather than a job"),
+            "{stderr}"
+        );
+    }
 }

@@ -199,7 +199,6 @@ const VERDICT_INPUTS: [(&str, &str); 2] = [
     ("REQUIRED_EVENT", "${{ github.event_name }}"),
 ];
 
-/// The names a job's `needs:` lists, whether written as one name or a sequence.
 fn needs_of(job: &Node) -> Vec<String> {
     match job.find("needs") {
         None => Vec::new(),
@@ -228,7 +227,6 @@ fn verdict_rules(script: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every job the workflow defines that `required`'s `needs:` leaves out.
 fn uncovered_jobs(workflow: &Node) -> Vec<String> {
     let jobs = workflow.get("jobs");
     let covered = needs_of(jobs.get(REQUIRED));
@@ -245,7 +243,6 @@ fn uncovered_jobs(workflow: &Node) -> Vec<String> {
         .collect()
 }
 
-/// Every way `required` has stopped being a context protection can rely on.
 fn required_shape_problems(workflow: &Node) -> Vec<String> {
     let job = workflow.get("jobs").get(REQUIRED);
     let mut problems = Vec::new();
