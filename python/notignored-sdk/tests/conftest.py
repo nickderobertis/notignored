@@ -37,6 +37,14 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# This suite's own target directory, inside the clone's `target/` (which
+# `.cargo/config.toml` keeps per clone). Not `target/debug`: the crate's wheel
+# journey, running beside this suite in one Nx invocation, has maturin replace
+# `target/debug/notignored` and rename it out while it stages the wheel, and no
+# ordering in `.config/nextest.toml` reaches a separate Nx task. Nothing else
+# builds here, so the binary spawned below is only ever the one built below.
+SDK_TARGET_DIR = REPO_ROOT / "target" / "sdk-python"
+
 # The suppression the fixtures below carry, and what notignored reports for it.
 RUFF_LINE = "url = LONG_URL  # noqa: E501  # the vendor's documented endpoint\n"
 
@@ -49,7 +57,16 @@ def notignored_binary() -> Path:
     `target/debug` would report green for a contract that had already moved.
     """
     build = subprocess.run(
-        ["cargo", "build", "--locked", "--quiet", "--bin", "notignored"],
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "--quiet",
+            "--bin",
+            "notignored",
+            "--target-dir",
+            str(SDK_TARGET_DIR),
+        ],
         cwd=REPO_ROOT,
         env={**os.environ, "CARGO_TERM_QUIET": "true"},
         capture_output=True,
@@ -61,9 +78,7 @@ def notignored_binary() -> Path:
             "cannot build the notignored binary these journeys drive:\n"
             f"{build.stderr}\nACTION: run `just bootstrap` from the repository root"
         )
-    binary = (
-        REPO_ROOT / "target" / "debug" / ("notignored.exe" if os.name == "nt" else "notignored")
-    )
+    binary = SDK_TARGET_DIR / "debug" / ("notignored.exe" if os.name == "nt" else "notignored")
     assert binary.is_file(), f"cargo reported success but {binary} is missing"
     return binary
 
