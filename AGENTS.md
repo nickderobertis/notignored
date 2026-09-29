@@ -362,6 +362,10 @@ until the runner's platform package is installed.
   squash commit whose subject is the PR title. Queue with
   `gh pr merge --auto --squash`. Merged head branches auto-delete. Admins may
   bypass in a break-glass.
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] the context's in-tree
+source, the job id `required`, is held by tests/ci_contract.rs; its other copy is
+GitHub's protection setting, which no offline gate can read and which this bullet
+exists to tell the owner to keep in step by hand. -->
 - **Protection requires one context: `required`.** It needs every other
   `ci.yml` job and passes only when each succeeded or skipped for its own `if:`'s
   reason, so a new job is covered by adding it to `required`'s `needs:` —

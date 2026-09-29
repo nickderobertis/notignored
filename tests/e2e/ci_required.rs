@@ -114,6 +114,12 @@ fn assert_accepts(output: &Output) {
         output.status.code(),
         stderr(output)
     );
+    // Quiet on success: the one line the job's log shows, and nothing on stderr.
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ci-required: every covered job succeeded or was skipped for its own condition\n"
+    );
+    assert_eq!(stderr(output), "", "a passing verdict wrote to stderr");
 }
 
 /// The verdict failed, and its stderr names each of `named` on its own
