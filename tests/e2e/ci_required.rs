@@ -1,0 +1,427 @@
+//! CI's `required` verdict, executed — not read.
+//!
+//! Branch protection requires the one context `required`, and what that job
+//! reports is `scripts/ci-required.sh`'s exit status over `toJSON(needs)` and
+//! the event name. These journeys run that real script through the `bash` the
+//! workflow's step uses, over payloads in the shape GitHub hands it — each job an
+//! object with a `result` and an `outputs` map — and assert its verdict: that a
+//! job skipped for the reason its own `if:` gives passes, and that every other
+//! skip, failure, or malformed input fails naming what it refused.
+//!
+//! `tests/ci_contract.rs` is the other half: it holds the job's wiring and the
+//! script's rule table to `ci.yml`, so what is proven here is what runs there.
+//!
+//! Runs on every platform: the script needs only `bash` and `node`, which the
+//! `cross` legs carry for the rest of this suite.
+
+use std::process::{Command, Output};
+
+use serde_json::{json, Map, Value};
+
+use crate::support::{bash_program, repo_root};
+
+/// The script's rule table, as `(job, condition)` rows — read from the script
+/// rather than restated, so a job `tests/ci_contract.rs` makes it cover is a job
+/// these journeys drive without an edit here.
+fn rules() -> Vec<(String, String)> {
+    let script = std::fs::read_to_string(repo_root().join("scripts").join("ci-required.sh"))
+        .expect("read scripts/ci-required.sh");
+    let mut lines = script.lines();
+    lines
+        .find(|line| line.contains("<<'RULES'"))
+        .expect("scripts/ci-required.sh has a `<<'RULES'` table");
+    lines
+        .take_while(|line| *line != "RULES")
+        .map(|line| {
+            let (job, condition) = line.split_once(" | ").expect("a `<job> | <if>` row");
+            (job.to_string(), condition.to_string())
+        })
+        .collect()
+}
+
+/// The jobs whose `if:` is the crate condition — `cross`, `msrv`, `deny` and
+/// `install` today.
+fn crate_jobs() -> Vec<String> {
+    let jobs: Vec<String> = rules()
+        .into_iter()
+        .filter(|(_, condition)| condition == "needs.changes.outputs.crate == 'true'")
+        .map(|(job, _)| job)
+        .collect();
+    assert!(
+        jobs.len() >= 4,
+        "the rule table has lost its crate-conditioned jobs: {jobs:?}"
+    );
+    jobs
+}
+
+fn all_succeeded(crate_output: &str) -> Map<String, Value> {
+    rules()
+        .into_iter()
+        .map(|(job, _)| {
+            let outputs = if job == "changes" {
+                json!({ "crate": crate_output })
+            } else {
+                json!({})
+            };
+            (job, json!({ "result": "success", "outputs": outputs }))
+        })
+        .collect()
+}
+
+fn with_results(mut payload: Map<String, Value>, results: &[(&str, &str)]) -> Map<String, Value> {
+    for (job, result) in results {
+        payload
+            .entry((*job).to_string())
+            .or_insert_with(|| json!({ "outputs": {} }))["result"] = json!(result);
+    }
+    payload
+}
+
+fn verdict_raw(needs: Option<&str>, event: Option<&str>) -> Output {
+    let mut command = Command::new(bash_program());
+    command
+        .arg(repo_root().join("scripts").join("ci-required.sh"))
+        .current_dir(repo_root())
+        .env_remove("REQUIRED_NEEDS")
+        .env_remove("REQUIRED_EVENT");
+    if let Some(needs) = needs {
+        command.env("REQUIRED_NEEDS", needs);
+    }
+    if let Some(event) = event {
+        command.env("REQUIRED_EVENT", event);
+    }
+    command
+        .output()
+        .unwrap_or_else(|error| panic!("run scripts/ci-required.sh: {error}"))
+}
+
+fn verdict(payload: &Map<String, Value>, event: &str) -> Output {
+    verdict_raw(
+        Some(&Value::Object(payload.clone()).to_string()),
+        Some(event),
+    )
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[track_caller]
+fn assert_accepts(output: &Output) {
+    assert!(
+        output.status.success(),
+        "expected the verdict to pass; it exited {:?}:\n{}",
+        output.status.code(),
+        stderr(output)
+    );
+    // Quiet on success: the one line the job's log shows, and nothing on stderr.
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ci-required: every covered job succeeded or was skipped for its own condition\n"
+    );
+    assert_eq!(stderr(output), "", "a passing verdict wrote to stderr");
+}
+
+/// The verdict failed, and its stderr names each of `named` on its own
+/// `ci-required: <job>: ...` line — the form a reader scans for which check to
+/// open.
+#[track_caller]
+fn assert_rejects_naming(output: &Output, named: &[&str]) {
+    let stderr = stderr(output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected the verdict to fail; stderr:\n{stderr}"
+    );
+    for job in named {
+        assert!(
+            stderr.contains(&format!("ci-required: {job}: ")),
+            "the refusal does not name `{job}`:\n{stderr}"
+        );
+    }
+    assert!(stderr.contains("ACTION: "), "no next step in:\n{stderr}");
+}
+
+#[test]
+fn a_pull_request_reaching_the_crate_passes_with_only_the_push_job_skipped() {
+    let payload = with_results(all_succeeded("true"), &[("install-documented", "skipped")]);
+    assert_accepts(&verdict(&payload, "pull_request"));
+}
+
+/// notignored#63: an SDK-only pull request, whose matrices legitimately skip.
+#[test]
+fn a_pull_request_that_misses_the_crate_passes_with_the_crate_jobs_skipped() {
+    let payload = with_results(
+        all_succeeded("false"),
+        &[
+            ("cross", "skipped"),
+            ("msrv", "skipped"),
+            ("deny", "skipped"),
+            ("install", "skipped"),
+            ("install-documented", "skipped"),
+        ],
+    );
+    assert_accepts(&verdict(&payload, "pull_request"));
+}
+
+#[test]
+fn a_push_passes_with_the_pull_request_jobs_skipped() {
+    let payload = with_results(
+        all_succeeded("true"),
+        &[("pr-title", "skipped"), ("llmlint", "skipped")],
+    );
+    assert_accepts(&verdict(&payload, "push"));
+}
+
+#[test]
+fn a_job_with_no_condition_never_skips_legitimately() {
+    for job in ["gate", "changes"] {
+        let payload = with_results(
+            all_succeeded("true"),
+            &[(job, "skipped"), ("install-documented", "skipped")],
+        );
+        let output = verdict(&payload, "pull_request");
+        assert_rejects_naming(&output, &[job]);
+        assert!(stderr(&output).contains(&format!("ci-required: {job}: result skipped")));
+    }
+}
+
+#[test]
+fn the_pull_request_jobs_may_not_skip_on_a_pull_request() {
+    for job in ["llmlint", "pr-title"] {
+        let payload = with_results(
+            all_succeeded("true"),
+            &[(job, "skipped"), ("install-documented", "skipped")],
+        );
+        assert_rejects_naming(&verdict(&payload, "pull_request"), &[job]);
+    }
+}
+
+#[test]
+fn the_documented_install_may_not_skip_on_a_push() {
+    let payload = with_results(all_succeeded("true"), &[("install-documented", "skipped")]);
+    assert_rejects_naming(&verdict(&payload, "push"), &["install-documented"]);
+}
+
+#[test]
+fn a_crate_job_may_not_skip_when_the_crate_is_affected() {
+    let crate_jobs = crate_jobs();
+    for job in &crate_jobs {
+        let payload = with_results(all_succeeded("true"), &[(job, "skipped")]);
+        let output = verdict(&payload, "push");
+        assert_rejects_naming(&output, &[job]);
+        for other in crate_jobs.iter().filter(|other| *other != job) {
+            assert!(
+                !stderr(&output).contains(&format!("ci-required: {other}: ")),
+                "`{other}` succeeded but was named:\n{}",
+                stderr(&output)
+            );
+        }
+    }
+}
+
+/// `changes` fails closed to "affected", so an output it did not set cannot be
+/// read as "the crate was not reached".
+#[test]
+fn the_crate_jobs_may_not_skip_when_the_crate_output_is_missing_or_empty() {
+    let crate_jobs = crate_jobs();
+    let named: Vec<&str> = crate_jobs.iter().map(String::as_str).collect();
+    let skipped: Vec<(&str, &str)> = named.iter().map(|job| (*job, "skipped")).collect();
+    let mut missing = with_results(all_succeeded("false"), &skipped);
+    missing["changes"]["outputs"] = json!({});
+    let empty = with_results(all_succeeded(""), &skipped);
+    for payload in [missing, empty] {
+        assert_rejects_naming(&verdict(&payload, "push"), &named);
+    }
+}
+
+/// `install` also needs `gate`, and every crate job needs `changes`: when either
+/// fails, GitHub skips the dependants. Those skips are refused alongside the
+/// failure itself — a `crate` of "false" from a `changes` that did not succeed
+/// is not an answer.
+#[test]
+fn the_crate_jobs_may_not_skip_when_changes_did_not_succeed() {
+    let crate_jobs = crate_jobs();
+    let named: Vec<&str> = crate_jobs.iter().map(String::as_str).collect();
+    let mut results: Vec<(&str, &str)> = named.iter().map(|job| (*job, "skipped")).collect();
+    results.push(("changes", "failure"));
+    let output = verdict(&with_results(all_succeeded("false"), &results), "push");
+    let mut expected = named.clone();
+    expected.push("changes");
+    assert_rejects_naming(&output, &expected);
+}
+
+#[test]
+fn a_failed_or_cancelled_job_fails_the_verdict() {
+    for (job, result) in [
+        ("deny", "failure"),
+        ("gate", "cancelled"),
+        ("msrv", "neutral"),
+    ] {
+        let payload = with_results(all_succeeded("true"), &[(job, result)]);
+        let output = verdict(&payload, "push");
+        assert_rejects_naming(&output, &[job]);
+        assert!(
+            stderr(&output).contains(&format!("ci-required: {job}: result {result}")),
+            "the refusal does not give `{job}`'s result:\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_job_the_rules_do_not_know_fails_the_verdict() {
+    let payload = with_results(all_succeeded("true"), &[("audit", "success")]);
+    let output = verdict(&payload, "push");
+    assert_rejects_naming(&output, &["audit"]);
+    assert!(stderr(&output).contains("no rule"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_job_the_rules_require_missing_from_the_payload_fails_the_verdict() {
+    let mut payload = all_succeeded("true");
+    payload.remove("llmlint");
+    let output = verdict(&payload, "push");
+    assert_rejects_naming(&output, &["llmlint"]);
+    assert!(
+        stderr(&output).contains("absent from the needs payload"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_job_without_a_result_fails_the_verdict() {
+    let mut payload = all_succeeded("true");
+    payload["gate"] = json!({ "outputs": {} });
+    let output = verdict(&payload, "push");
+    assert_rejects_naming(&output, &["gate"]);
+    assert!(
+        stderr(&output).contains("has no result"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_empty_or_malformed_payload_fails_the_verdict() {
+    let full = Value::Object(all_succeeded("true")).to_string();
+    let truncated = &full[..full.len() / 2];
+    for needs in [None, Some(""), Some(truncated), Some("[]"), Some("null")] {
+        let output = verdict_raw(needs, Some("push"));
+        let stderr = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{needs:?} passed:\n{stderr}");
+        assert!(
+            stderr.contains("ci-required: ") && stderr.contains("ACTION: "),
+            "{needs:?} was refused without saying why:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn a_missing_event_fails_the_verdict() {
+    let needs = Value::Object(all_succeeded("true")).to_string();
+    for event in [None, Some("")] {
+        let output = verdict_raw(Some(&needs), event);
+        let stderr = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{event:?} passed:\n{stderr}");
+        assert!(stderr.contains("REQUIRED_EVENT"), "{stderr}");
+    }
+}
+
+/// A result is only ever a word; one carrying the verdict's own row delimiters
+/// could otherwise forge a row for a job that never ran.
+#[test]
+fn a_result_that_is_not_a_word_fails_the_verdict() {
+    let payload = with_results(
+        all_succeeded("true"),
+        &[("gate", "failure\nllmlint\tsuccess")],
+    );
+    let output = verdict(&payload, "push");
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("gate has result"), "{stderr}");
+}
+
+/// The event-conditioned rules were reasoned for the events ci.yml runs on;
+/// under any other, "not `push`" and "not `pull_request`" would both hold and
+/// every event-conditioned skip would pass unexamined.
+#[test]
+fn an_event_ci_does_not_run_on_fails_the_verdict() {
+    let payload = with_results(
+        all_succeeded("true"),
+        &[
+            ("install-documented", "skipped"),
+            ("pr-title", "skipped"),
+            ("llmlint", "skipped"),
+        ],
+    );
+    for event in ["schedule", "pull_request push"] {
+        let output = verdict(&payload, event);
+        let stderr = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{event:?} passed:\n{stderr}");
+        assert!(
+            stderr.contains("ci.yml does not run on"),
+            "{event:?}:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn a_payload_key_that_is_not_a_job_id_fails_the_verdict() {
+    let payload = with_results(all_succeeded("true"), &[("gate\tsuccess", "success")]);
+    let output = verdict(&payload, "push");
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("which is not a job id"), "{stderr}");
+}
+
+#[test]
+fn a_job_whose_outputs_are_not_a_map_fails_the_verdict() {
+    let mut payload = all_succeeded("false");
+    payload["changes"]["outputs"] = json!(["crate", "false"]);
+    let output = verdict(&payload, "push");
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("changes has outputs"), "{stderr}");
+}
+
+/// Without `node` the payload cannot be read at all; the refusal has to say
+/// so rather than fail on whatever command runs next. `PATH` is an empty
+/// directory and `bash` is resolved absolutely, so nothing else is removed.
+#[test]
+fn a_host_without_node_is_told_so() {
+    let empty = tempfile::tempdir().expect("an empty PATH directory");
+    let output = Command::new(bash_program())
+        .arg(repo_root().join("scripts").join("ci-required.sh"))
+        .current_dir(repo_root())
+        .env("PATH", empty.path())
+        .env(
+            "REQUIRED_NEEDS",
+            Value::Object(all_succeeded("true")).to_string(),
+        )
+        .env("REQUIRED_EVENT", "push")
+        .output()
+        .expect("run scripts/ci-required.sh");
+    let stderr = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("node is not on PATH") && stderr.contains("ACTION: install Node.js"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_job_entry_that_is_not_an_object_fails_the_verdict() {
+    for entry in [json!(null), json!("success"), json!(["success"])] {
+        let mut payload = all_succeeded("true");
+        payload["gate"] = entry.clone();
+        let output = verdict(&payload, "push");
+        let stderr = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{entry} passed:\n{stderr}");
+        assert!(
+            stderr.contains("gate is ") && stderr.contains("rather than a job"),
+            "{stderr}"
+        );
+    }
+}
