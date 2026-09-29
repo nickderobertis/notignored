@@ -80,7 +80,7 @@ command -v node >/dev/null 2>&1 || die "node is not on PATH; it is what reads th
 # only output a rule reads) as JSON, or `absent`. Its shape is checked here, so a
 # truncated or reshaped payload is a named failure rather than zero jobs.
 if ! table="$(
-  # shellcheck disable=SC2016 # JavaScript, whose `${...}` templates are node's to expand
+  # shellcheck disable=SC2016 # JavaScript, whose `${...}` templates are for node to expand
   node -e '
     let payload;
     try {
