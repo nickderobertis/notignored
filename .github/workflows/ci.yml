@@ -9,22 +9,27 @@ on:
 permissions:
   contents: read
 
+# A pull request's superseded run is cancelled; a push's never is. A push to main
+# gates only its own range (`github.event.before`..the merge), so a cancelled one
+# would leave that merge gated by nothing on main.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Which projects this pull request's diff can reach, derived once so every
+  # Which projects this event's diff can reach, derived once so every
   # Rust-artifact job below can skip on an SDK-only change instead of paying the
-  # full matrix. On a push to main it answers `true` for everything.
+  # full matrix: a pull request against its merge base, a push to main against
+  # the pushed range's base. The release pull request is the full sweep, so it
+  # answers `true`.
   #
-  # `just affected-crate` fails closed: with no derivable merge base — a shallow
-  # clone, a missing base branch — it says the crate is affected and the matrices
-  # run. Affected selection is a speed optimisation, and one that can silently
-  # skip a check is a correctness hole.
+  # `just affected-crate` fails closed: with no derivable base — a shallow clone,
+  # a missing base branch, a pushed base this checkout lacks — it says the crate
+  # is affected and the matrices run. Affected selection is a speed optimisation,
+  # and one that can silently skip a check is a correctness hole.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -39,15 +44,31 @@ jobs:
         with:
           node-version: "22"
       - uses: extractions/setup-just@v3
+      - name: Which tier this event gates on
+        id: tier
+        env:
+          GATE_EVENT: ${{ github.event_name }}
+          GATE_HEAD_REF: ${{ github.head_ref }}
+          GATE_BEFORE: ${{ github.event.before }}
+        run: bash scripts/ci-gate-tier.sh >> "$GITHUB_OUTPUT"
       - name: Which projects the diff reaches
         id: affected
-        run: echo "crate=$(just affected-crate)" >> "$GITHUB_OUTPUT"
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          NOTIGNORED_NX_BASE_SHA: ${{ steps.tier.outputs.base }}
+        run: |
+          if [ "$TIER" = full ]; then
+            echo "crate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "crate=$(just affected-crate)" >> "$GITHUB_OUTPUT"
+          fi
 
-  # The full gate on a clean checkout: bootstrap from scratch, then the quality
-  # gate (format, clippy, tests incl. e2e with the coverage threshold, docs) over
-  # every project. A pull request runs it over the affected projects only; main
-  # runs the whole graph, so nothing affected-detection or a stale cache could
-  # miss survives past the merge.
+  # The gate on a clean checkout: bootstrap from scratch, then the quality gate
+  # (format, clippy, every test tier incl. e2e, the coverage threshold, docs).
+  # Staged (scripts/ci-gate-tier.sh): a pull request and a push to main run it
+  # over the projects their diff can reach, against an explicit base; release-plz's
+  # release pull request runs the whole graph — the one broader sweep, at
+  # release-prep, because releases batch every merge since the last tag.
   # Linux-only because coverage is measured here; macOS/Windows prove the
   # artifact via the `cross` job below.
   gate:
@@ -66,11 +87,20 @@ jobs:
           tool: just,nextest,cargo-llvm-cov
       - name: Bootstrap
         run: just bootstrap
+      - name: Which tier this event gates on
+        id: tier
+        env:
+          GATE_EVENT: ${{ github.event_name }}
+          GATE_HEAD_REF: ${{ github.head_ref }}
+          GATE_BEFORE: ${{ github.event.before }}
+        run: bash scripts/ci-gate-tier.sh >> "$GITHUB_OUTPUT"
       - name: Quality gate (affected projects)
-        if: github.event_name == 'pull_request'
+        if: steps.tier.outputs.tier == 'affected'
+        env:
+          NOTIGNORED_NX_BASE_SHA: ${{ steps.tier.outputs.base }}
         run: just check-affected
       - name: Quality gate (every project)
-        if: github.event_name != 'pull_request'
+        if: steps.tier.outputs.tier == 'full'
         run: just check
       # A committed lockfile that `just bootstrap`/`just check` had to change is
       # a stale generated file; fail rather than let it drift.
