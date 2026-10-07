@@ -11,7 +11,6 @@ mod action_comment;
 mod action_install;
 mod action_scan;
 mod biome_parity;
-mod ci_gate_tier;
 mod ci_required;
 mod cli;
 mod color;

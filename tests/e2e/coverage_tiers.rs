@@ -237,7 +237,6 @@ fn tiers_combine_into_one_report_that_enforces_the_floor() {
     );
 }
 
-/// Poll until `done` holds, or fail naming what never happened.
 fn wait_until(what: &str, done: impl Fn() -> bool) {
     let start = std::time::Instant::now();
     while !done() {

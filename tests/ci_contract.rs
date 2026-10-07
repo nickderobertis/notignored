@@ -438,7 +438,7 @@ const TIER_INPUTS: [(&str, &str); 3] = [
 ];
 
 /// Every way a job's tier step (`id: tier`) differs from the one
-/// `scripts/ci-gate-tier.sh` is driven through in `tests/e2e/ci_gate_tier.rs`.
+/// `scripts/ci-gate-tier.sh` is driven through in `tests/ci_gate_tier.rs`.
 fn tier_step_problems(workflow: &Node, job: &str) -> Vec<String> {
     let steps = workflow.get("jobs").get(job).get("steps").list();
     let Some(step) = steps

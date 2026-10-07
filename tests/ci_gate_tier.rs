@@ -11,8 +11,15 @@
 //!
 //! `tests/ci_contract.rs` is the other half: it holds the tier step's inputs to
 //! the event values they must come from.
+//!
+//! Offline — `bash` and the workflow file, nothing else — so it is a contract
+//! suite rather than a journey. Unix only: the script runs on the gate's
+//! `ubuntu-latest` runner alone, and a Windows `bash` on PATH can be the WSL
+//! launcher rather than a shell.
 
-#[path = "../support/workflow_yaml.rs"]
+#![cfg(unix)]
+
+#[path = "support/workflow_yaml.rs"]
 mod workflow_yaml;
 
 use std::collections::BTreeMap;
@@ -20,14 +27,12 @@ use std::process::Command;
 
 use workflow_yaml::{parse, read, repo_root, run_steps, Node};
 
-use crate::support::bash_program;
-
 const BEFORE: &str = "4f9c0d8e2b7a6c5d4e3f2a1b0c9d8e7f6a5b4c3d";
 
 /// The script's verdict for one event: its exit status, the `$GITHUB_OUTPUT`
 /// lines it printed, and what it said on stderr.
 fn tier(event: &[(&str, &str)]) -> (bool, BTreeMap<String, String>, String) {
-    let mut command = Command::new(bash_program());
+    let mut command = Command::new("bash");
     command
         .arg("scripts/ci-gate-tier.sh")
         .current_dir(repo_root())

@@ -58,7 +58,6 @@ case "$LOCK_WAIT_SECONDS" in
   ;;
 esac
 
-# A filesystem step that must succeed; its failure names the step and the fix.
 must() {
   local what="$1"
   shift

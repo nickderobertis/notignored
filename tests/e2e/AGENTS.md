@@ -12,7 +12,8 @@ expensive tier, so it sits behind its own edge.
   `deny.toml` does not run it. Each glob there is also what selects it, so **a
   journey that starts reading a root file outside that list adds it there in the
   same change**, or a cached green from before that file moved is replayed.
-  `e2eSharedTests` names what it reads from the integration project's tree.
+  `e2eSharedTests` names the fixtures and goldens it reads from the
+  integration project's tree.
 - **The binary it drives is built by its own run.** The journeys are an
   integration-test target of the crate's package, so cargo builds the
   `notignored` binary for them; there is no separate `build` task to wait on.
@@ -27,9 +28,7 @@ expensive tier, so it sits behind its own edge.
   `support` module, and a separate project needs its own directory root —
   moving nine journeys whose paths AGENTS.md, the workflows and the scripts
   cite. Split them out when the tier's measured time makes it worth that.
-- **Graph journeys run Nx read-only, or in a scratch copy.** `nx_workspace.rs`
-  runs inside an Nx task; a nested command that wrote this workspace's cache
-  would race its parent. The `just affected-crate` journey makes its commits in
-  a scratch repository holding the graph's real files, with every `NX_*`
-  variable of the enclosing task cleared; `coverage_tiers.rs` likewise clears
-  the enclosing instrumented run's variables before driving its own.
+- **A journey never writes to the run that contains it.** This tier runs inside
+  an Nx task and an instrumented cargo run, so a journey that needs Nx or
+  `cargo llvm-cov` to write works in a scratch copy, without the enclosing run's
+  environment.

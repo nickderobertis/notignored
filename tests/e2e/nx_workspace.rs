@@ -309,6 +309,95 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
     }
 }
 
+/// Whether a `{workspaceRoot}` input pattern from nx.json covers `path`: a
+/// `dir/**/*` pattern covers that tree, a `*` matches within one name, and
+/// anything else is the path itself.
+fn input_covers(pattern: &str, path: &str) -> bool {
+    if let Some(tree) = pattern.strip_suffix("**/*") {
+        return path.starts_with(tree) || format!("{path}/") == tree;
+    }
+    match pattern.split_once('*') {
+        Some((head, tail)) => {
+            path.starts_with(head)
+                && path.ends_with(tail)
+                && !path[head.len()..path.len() - tail.len()].contains('/')
+        }
+        None => pattern == path,
+    }
+}
+
+/// The e2e tier names the root files it reads instead of depending on the root
+/// project, so the list can fall behind the journeys silently: a script a
+/// journey starts running, missing from it, neither selects the tier when it
+/// changes nor invalidates a cached green. Every repository script a journey
+/// names is held to the list here; the scripts those source are listed beside
+/// them by hand.
+#[test]
+fn every_script_a_journey_runs_is_an_e2e_input() {
+    let root = repo_root();
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("nx.json")).expect("read nx.json"))
+            .expect("nx.json is JSON");
+    // Named inputs nest (`e2eRootInputs` takes in `crateSource`), so expand them.
+    fn expand(config: &serde_json::Value, input: &str, patterns: &mut Vec<String>) {
+        match input.strip_prefix("{workspaceRoot}/") {
+            Some(pattern) => patterns.push(pattern.to_string()),
+            None => {
+                for nested in config["namedInputs"][input]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("nx.json names no `{input}` input"))
+                {
+                    expand(config, nested.as_str().expect("a string input"), patterns);
+                }
+            }
+        }
+    }
+    let mut patterns = Vec::new();
+    expand(&config, "e2eRootInputs", &mut patterns);
+    let mut named = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(root.join("tests/e2e")).expect("read tests/e2e") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read a journey");
+        for (start, _) in source.match_indices("scripts/") {
+            let script: String = source[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || "_./-".contains(*c))
+                .collect();
+            let script = script.trim_end_matches(['/', '.']).to_string();
+            // Journeys also name scripts inside the scratch repositories they
+            // build; only the repository's own files are inputs.
+            if script != "scripts" && root.join(&script).is_file() {
+                named.insert(script);
+            }
+        }
+    }
+    assert!(
+        named.contains("scripts/install.sh"),
+        "the scan found none of the scripts the journeys are known to run: {named:?}"
+    );
+    let missing: Vec<&String> = named
+        .iter()
+        .filter(|script| !patterns.iter().any(|pattern| input_covers(pattern, script)))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the journeys run {missing:?}, which nx.json's e2eRootInputs does not name, so \
+         a change to them neither selects nor re-runs the e2e tier\n\
+         ACTION: add each to e2eRootInputs"
+    );
+    assert!(
+        !input_covers("bin/setup-*.sh", "bin/session-setup.sh")
+            && !input_covers("bin/setup-*.sh", "bin/setup-x/y.sh")
+            && input_covers("bin/setup-*.sh", "bin/setup-js.sh")
+            && input_covers("bin/action/**/*", "bin/action/comment.sh")
+            && !input_covers("bin/action/**/*", "bin/actions.sh"),
+        "input_covers no longer reads nx.json's patterns the way Nx does"
+    );
+}
+
 /// The layering every dependency in the graph has to respect, as
 /// `scope` -> the scopes it may depend on.
 ///

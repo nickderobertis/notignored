@@ -13,7 +13,7 @@ is its longest prefix, so a change to a contract suite selects only this one.
   `test` selects its binaries with a nextest filter
   (`kind(test) and not binary(e2e)`), not with `-p`, and a new suite needs no
   graph edit.
-- **`fixtures/`, `golden/` and `support/` live here but serve the journeys too.**
+- **`fixtures/` and `golden/` live here but serve the journeys too.**
   The e2e project names them as inputs (`e2eSharedTests` in `nx.json`), so a
   change to one re-runs both tiers. A new directory the journeys read belongs in
   that list in the same change.

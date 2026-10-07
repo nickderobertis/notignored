@@ -23,9 +23,25 @@
     "e2eRootInputs": [
       "crateSource",
       "sharedGlobals",
-      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/scripts/action/**/*",
+      "{workspaceRoot}/scripts/comment-render/**/*",
+      "{workspaceRoot}/scripts/ci-required.sh",
+      "{workspaceRoot}/scripts/coverage.sh",
+      "{workspaceRoot}/scripts/github-release.sh",
+      "{workspaceRoot}/scripts/install.sh",
+      "{workspaceRoot}/scripts/npm-build.mjs",
+      "{workspaceRoot}/scripts/npm-install-probe.sh",
+      "{workspaceRoot}/scripts/nx.sh",
+      "{workspaceRoot}/scripts/nx-affected.sh",
+      "{workspaceRoot}/scripts/pr-comment-body.sh",
+      "{workspaceRoot}/scripts/preserved-log.sh",
+      "{workspaceRoot}/scripts/publish-npm.sh",
+      "{workspaceRoot}/scripts/retry-install.sh",
+      "{workspaceRoot}/scripts/screenshots.sh",
+      "{workspaceRoot}/scripts/setup-*.sh",
+      "{workspaceRoot}/scripts/smoke-published.sh",
+      "{workspaceRoot}/scripts/update-major-tag.sh",
       "{workspaceRoot}/action.yml",
-      "{workspaceRoot}/.github/workflows/**/*",
       "{workspaceRoot}/npm/notignored/**/*",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/README.md",
@@ -40,8 +56,7 @@
     ],
     "e2eSharedTests": [
       "{workspaceRoot}/tests/fixtures/**/*",
-      "{workspaceRoot}/tests/golden/**/*",
-      "{workspaceRoot}/tests/support/**/*"
+      "{workspaceRoot}/tests/golden/**/*"
     ],
     "jsToolchain": [
       "{workspaceRoot}/tests/js-toolchain/package.json",
