@@ -9,10 +9,13 @@
 
 # The Rust CLI — the published artifact and the versioned report contract.
 /src/                    @nickderobertis
-/tests/                  @nickderobertis
 /npm/notignored/         @nickderobertis
 /action.yml              @nickderobertis
 /Cargo.toml              @nickderobertis
+
+# The crate's test tiers: the contract suites, and the end-to-end journeys.
+/tests/                  @nickderobertis
+/tests/e2e/              @nickderobertis
 
 # The SDKs.
 /python/notignored-sdk/  @nickderobertis

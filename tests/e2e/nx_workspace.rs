@@ -16,10 +16,21 @@ use crate::support::{bash_program, repo_root};
 
 /// Every project in the graph, and the uniform targets each one owes.
 ///
-/// The names are the *repo's deliverables*: the CLI crate and the two SDKs. A
-/// fourth project added without a line here is not a failure — a project that
-/// disappeared is.
-const PROJECTS: [&str; 3] = ["notignored", "notignored-sdk-python", "notignored-sdk-npm"];
+/// The names are the repo's three deliverables — the CLI crate and the two SDKs
+/// — and the crate's two test tiers that are projects of their own so a change
+/// pays only for the tiers it reaches: the `tests/*.rs` contract suites and the
+/// `tests/e2e/` journeys. The crate's unit tests stay in the crate's project.
+const PROJECTS: [&str; 5] = [
+    "notignored",
+    "notignored-integration",
+    "notignored-e2e",
+    "notignored-sdk-python",
+    "notignored-sdk-npm",
+];
+
+/// The crate's own projects: the crate and its test tiers. What CI's
+/// cross-platform legs run, so `just affected-crate` asks after every one.
+const CRATE_PROJECTS: [&str; 3] = ["notignored", "notignored-integration", "notignored-e2e"];
 
 /// `run-many`/`affected` fan out by target *name*, so one root command only
 /// covers the whole repo while these mean the same thing in every project.
@@ -126,11 +137,62 @@ fn the_crates_check_aggregates_its_docs_tier() {
     let depends_on = config["targets"]["check"]["dependsOn"]
         .as_array()
         .expect("the crate's `check` declares dependsOn");
-    for tier in ["format-check", "lint", "test", "doc"] {
+    for tier in ["format-check", "lint", "test", "doc", "coverage"] {
         assert!(
             depends_on.iter().any(|entry| entry == tier),
             "the crate's `check` no longer depends on `{tier}`, so `just check` \
              stopped running it\nACTION: restore it in project.json"
+        );
+    }
+}
+
+/// The coverage floor is a property of `src/` as every tier exercises it, so the
+/// one report that enforces it has to wait on, and combine, every tier's
+/// profiles. A tier missing from either list would let the floor be measured
+/// over less of the suite than the e2e-inclusive run it replaced — silently,
+/// since a smaller suite can still clear 95% on the lines it happens to reach.
+#[test]
+fn the_crates_coverage_combines_every_test_tier() {
+    let config: serde_json::Value =
+        serde_json::from_str(nx(&["show", "project", "notignored", "--json"]).trim())
+            .expect("`nx show project notignored` is JSON");
+    let coverage = &config["targets"]["coverage"];
+    let depends_on = coverage["dependsOn"]
+        .as_array()
+        .expect("the crate's `coverage` declares dependsOn");
+    let waits_on = |project: &str| {
+        depends_on.iter().any(|entry| {
+            (project == "notignored" && entry == "test")
+                || (entry["target"] == "test"
+                    && entry["projects"]
+                        .as_array()
+                        .is_some_and(|projects| projects.iter().any(|name| name == project)))
+        })
+    };
+    let command = coverage["options"]["command"]
+        .as_str()
+        .or_else(|| coverage["command"].as_str())
+        .expect("the crate's `coverage` runs a command");
+    let recipe = std::fs::read_to_string(repo_root().join("justfile")).expect("read justfile");
+    let report = recipe
+        .lines()
+        .find(|line| line.contains("scripts/coverage.sh report"))
+        .expect("a justfile recipe runs scripts/coverage.sh report");
+    assert_eq!(
+        command, "just _crate-coverage",
+        "the crate's coverage target no longer runs the recipe this test reads"
+    );
+    for project in CRATE_PROJECTS {
+        assert!(
+            waits_on(project),
+            "`notignored:coverage` does not depend on {project}:test, so it can \
+             report before that tier's profiles exist\n\
+             ACTION: add it to the coverage target's dependsOn in project.json"
+        );
+        assert!(
+            report.split_whitespace().any(|word| word == project),
+            "`just _crate-coverage` does not combine {project}'s profiles:\n{report}\n\
+             ACTION: name it in the recipe's `scripts/coverage.sh report` list"
         );
     }
 }
@@ -146,23 +208,51 @@ fn the_crates_check_aggregates_its_docs_tier() {
 /// asserts on it rather than replay a cached green from before the move. It is
 /// scoped to `src/` and the manifests deliberately, because the crate's project
 /// root *is* the repository root: depending on the project would make every file
-/// outside the SDK trees affect it. And it changes nothing about
-/// `just affected-crate`, which asks only whether `notignored` is in the set.
+/// outside the SDK trees affect it.
+///
+/// The crate's test tiers are the other direction: each depends on the crate, so
+/// a change the crate owns selects all three, while a change to one tier's own
+/// tests selects that tier alone. The fixtures and goldens live beside the
+/// contract suites but are read by the journeys too, which name them as inputs.
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
-    let cases: [(&str, &[&str]); 5] = [
+    const CRATE_AND_TIERS: &[&str] = &CRATE_PROJECTS;
+    let cases: [(&str, &[&str]); 10] = [
         (
             "src/lib.rs",
-            &["notignored", "notignored-sdk-npm", "notignored-sdk-python"],
+            &[
+                "notignored",
+                "notignored-integration",
+                "notignored-e2e",
+                "notignored-sdk-npm",
+                "notignored-sdk-python",
+            ],
         ),
-        ("npm/notignored/package.json", &["notignored"]),
+        (
+            "Cargo.toml",
+            &[
+                "notignored",
+                "notignored-integration",
+                "notignored-e2e",
+                "notignored-sdk-npm",
+                "notignored-sdk-python",
+            ],
+        ),
+        ("npm/notignored/package.json", CRATE_AND_TIERS),
+        ("scripts/install.sh", CRATE_AND_TIERS),
+        ("tests/ci_contract.rs", &["notignored-integration"]),
+        ("tests/e2e/cli.rs", &["notignored-e2e"]),
+        (
+            "tests/fixtures/polyglot/api/service.py",
+            &["notignored-integration", "notignored-e2e"],
+        ),
         (
             "python/notignored-sdk/README.md",
             &["notignored-sdk-python"],
         ),
         ("npm/notignored-sdk/README.md", &["notignored-sdk-npm"]),
         // The orchestrator's own config changes what every target *is*, so it
-        // has to reach all three — the one case where scoping would be wrong.
+        // has to reach every project — the one case where scoping would be wrong.
         ("nx.json", &PROJECTS),
     ];
     for (file, expected) in cases {
@@ -193,7 +283,15 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
 /// rule, which is ESLint's and so can only see the one TypeScript project — a
 /// rule that cannot reach the Rust or Python project is not enforcing this
 /// graph's boundaries. The tags it keys on are the same ones that rule would use.
-const LAYERS: [(&str, &[&str]); 2] = [("scope:cli", &[]), ("scope:sdk", &["scope:cli"])];
+///
+/// The crate's test tiers (`scope:cli-tests`) sit on the CLI the same way: they
+/// drive it, and nothing may depend on them, so no tier can end up on the path
+/// of a change that does not reach it.
+const LAYERS: [(&str, &[&str]); 3] = [
+    ("scope:cli", &[]),
+    ("scope:cli-tests", &["scope:cli"]),
+    ("scope:sdk", &["scope:cli"]),
+];
 
 /// Whether a project in `source_scope` may depend on one in `target_scope`.
 fn may_depend_on(source_scope: &str, target_scope: &str) -> bool {
@@ -328,6 +426,17 @@ fn the_layering_rejects_an_edge_that_inverts_it() {
         !may_depend_on("scope:cli", "scope:cli"),
         "a scope must not depend on itself, which is where a cycle starts"
     );
+    assert!(
+        may_depend_on("scope:cli-tests", "scope:cli"),
+        "a test tier depending on the crate it drives is the edge that selects it"
+    );
+    for dependent in ["scope:cli", "scope:sdk", "scope:cli-tests"] {
+        assert!(
+            !may_depend_on(dependent, "scope:cli-tests"),
+            "{dependent} must not depend on a test tier: the tier would then run \
+             for every change that reaches {dependent}"
+        );
+    }
 }
 
 /// Layering keeps the graph acyclic only while it is actually acyclic — an Nx
@@ -370,27 +479,35 @@ fn the_project_graph_is_acyclic() {
     }
 }
 
-/// `scripts/nx-affected.sh --affects <project>` — its verdict and its reasoning —
-/// with the environment a CI leg hands it.
-fn affects(project: &str, base_ref: Option<&str>) -> (String, String) {
+/// The variables that choose nx-affected.sh's base, cleared on every journey so
+/// a developer's own shell cannot decide one.
+const BASE_VARIABLES: [&str; 3] = [
+    "NOTIGNORED_NX_BASE_SHA",
+    "NOTIGNORED_NX_BASE_REF",
+    "GITHUB_BASE_REF",
+];
+
+/// `scripts/nx-affected.sh --affects <projects>` — its verdict and its
+/// reasoning — with the environment a CI leg hands it plus `base`, the base
+/// variables this case sets.
+fn affects(projects: &[&str], base: &[(&str, &str)]) -> (String, String) {
     let mut command = Command::new(bash_program());
     command
         .arg("scripts/nx-affected.sh")
         .arg("--affects")
-        .arg(project)
+        .args(projects)
         .current_dir(repo_root())
-        .env("CI", "1")
-        .env_remove("NOTIGNORED_NX_BASE_REF")
-        .env_remove("GITHUB_BASE_REF");
-    if let Some(base_ref) = base_ref {
-        command.env("GITHUB_BASE_REF", base_ref);
+        .env("CI", "1");
+    for variable in BASE_VARIABLES {
+        command.env_remove(variable);
     }
+    command.envs(base.iter().copied());
     let output = command
         .output()
         .unwrap_or_else(|error| panic!("run scripts/nx-affected.sh: {error}"));
     assert!(
         output.status.success(),
-        "`nx-affected.sh --affects {project}` failed:\n{}",
+        "`nx-affected.sh --affects {projects:?}` failed:\n{}",
         String::from_utf8_lossy(&output.stderr),
     );
     (
@@ -414,15 +531,18 @@ fn affects(project: &str, base_ref: Option<&str>) -> (String, String) {
 /// everything, rather than having scoped and happened to agree.
 #[test]
 fn a_missing_merge_base_selects_the_crate_rather_than_skipping_it() {
-    for (case, base_ref) in [
-        ("a push build, which is on the base branch already", None),
-        ("a base branch that does not exist", Some("no-such-branch")),
+    for (case, base) in [
+        ("a push build, which is on the base branch already", &[][..]),
+        (
+            "a base branch that does not exist",
+            &[("GITHUB_BASE_REF", "no-such-branch")][..],
+        ),
         (
             "a base ref that is not a usable branch name",
-            Some("../evil"),
+            &[("GITHUB_BASE_REF", "../evil")][..],
         ),
     ] {
-        let (verdict, reasoning) = affects("notignored", base_ref);
+        let (verdict, reasoning) = affects(&["notignored"], base);
         assert_eq!(
             verdict, "true",
             "with {case}, CI would skip the Rust matrices\n\
@@ -439,16 +559,87 @@ fn a_missing_merge_base_selects_the_crate_rather_than_skipping_it() {
     }
 }
 
+/// `NOTIGNORED_NX_BASE_SHA` is how a push build names its base — the pushed
+/// range's, since it has no base branch to fork from — and it is an instruction,
+/// not a hint: it wins over any base ref the environment also carries.
+///
+/// HEAD against itself has nothing changed, so `false` is an answer only a
+/// comparison against that exact commit can give; the conflicting ref, had it
+/// been used, names a branch that does not exist and would have selected
+/// everything instead.
+#[test]
+fn an_explicit_base_commit_wins_over_a_base_ref() {
+    let head = crate::support::git_stdout(&repo_root(), &["rev-parse", "HEAD"]);
+    let (verdict, reasoning) = affects(
+        &CRATE_PROJECTS,
+        &[
+            ("NOTIGNORED_NX_BASE_SHA", head.trim()),
+            ("NOTIGNORED_NX_BASE_REF", "no-such-branch"),
+            ("GITHUB_BASE_REF", "no-such-branch"),
+        ],
+    );
+    assert_eq!(
+        (verdict.as_str(), reasoning.contains("no merge base")),
+        ("false", false),
+        "with NOTIGNORED_NX_BASE_SHA at HEAD the script still consulted the base \
+         ref; it said:\n{reasoning}\n\
+         ACTION: an explicit base commit must take precedence over every base ref"
+    );
+}
+
+/// A base commit that does not resolve is never "close enough" to another: the
+/// script must select everything and say which variable it could not use, rather
+/// than quietly scope against some other base.
+#[test]
+fn an_unresolvable_base_commit_fails_closed_naming_the_variable() {
+    for (case, sha) in [
+        (
+            "a commit this checkout does not have",
+            "0000000000000000000000000000000000000000",
+        ),
+        ("a revision that is not a commit id", "HEAD~1"),
+        ("shell text", "$(touch pwned)"),
+    ] {
+        let (verdict, reasoning) = affects(
+            &["notignored"],
+            &[("NOTIGNORED_NX_BASE_SHA", sha), ("GITHUB_BASE_REF", "main")],
+        );
+        assert_eq!(
+            verdict, "true",
+            "with {case} as the base commit, CI would skip the Rust matrices\n\
+             ACTION: scripts/nx-affected.sh must fail closed on a base it cannot resolve"
+        );
+        assert!(
+            reasoning.contains("NOTIGNORED_NX_BASE_SHA") && reasoning.contains("no merge base"),
+            "with {case}, the script did not refuse the base by name; it said:\n{reasoning}"
+        );
+    }
+}
+
 /// A pinned tool is shared: the crate's parity suites drive it *and* an SDK's
 /// gate runs it. Both projects have to re-run when the pin moves, which only
 /// happens while each names the pin among its inputs.
 #[test]
 fn a_shared_toolchain_pin_reaches_both_projects_that_use_it() {
     for (pin, expected) in [
-        (".ruff-version", ["notignored", "notignored-sdk-python"]),
+        (
+            ".ruff-version",
+            [
+                "notignored",
+                "notignored-integration",
+                "notignored-e2e",
+                "notignored-sdk-python",
+            ]
+            .as_slice(),
+        ),
         (
             "tests/js-toolchain/package.json",
-            ["notignored", "notignored-sdk-npm"],
+            [
+                "notignored-integration",
+                "notignored-e2e",
+                "notignored-sdk-npm",
+            ]
+            .as_slice(),
         ),
     ] {
         assert_eq!(
@@ -459,10 +650,149 @@ fn a_shared_toolchain_pin_reaches_both_projects_that_use_it() {
                 &format!("--files={pin}"),
                 "--json",
             ]),
-            sorted(&expected),
+            sorted(expected),
             "moving the {pin} pin no longer re-runs every project that uses it\n\
              ACTION: name it in that project's target inputs (nx.json's \
              pythonToolchain / jsToolchain)"
         );
     }
+}
+
+/// The files the project graph and `just affected-crate` are made of, beyond each
+/// project's own `project.json`.
+#[cfg(unix)]
+const GRAPH_FILES: [&str; 9] = [
+    "nx.json",
+    "package.json",
+    "package-lock.json",
+    ".gitignore",
+    "justfile",
+    "Cargo.toml",
+    "scripts/nx.sh",
+    "scripts/nx-affected.sh",
+    "scripts/preserved-log.sh",
+];
+
+/// A scratch repository holding this workspace's real graph — every project's
+/// definition, the Nx config and lockfile, the recipes and the scripts they run —
+/// committed once as a base, so a journey can make a real commit on top and ask
+/// the real recipe about it. The orchestrator's install is linked rather than
+/// reinstalled. Returns the repository and its base commit.
+///
+/// Unix only for the link; the cross-platform legs still run it on macOS.
+#[cfg(unix)]
+fn scratch_workspace() -> (tempfile::TempDir, String) {
+    use crate::support::{commit, git_repo, git_stdout};
+    let root = repo_root();
+    let dir = git_repo();
+    let roots = PROJECTS.map(|project| {
+        let config: serde_json::Value =
+            serde_json::from_str(nx(&["show", "project", project, "--json"]).trim())
+                .unwrap_or_else(|error| panic!("`nx show project {project}` is not JSON: {error}"));
+        let root = config["root"].as_str().expect("a project root").to_string();
+        if root == "." {
+            "project.json".to_string()
+        } else {
+            format!("{root}/project.json")
+        }
+    });
+    for file in GRAPH_FILES
+        .iter()
+        .copied()
+        .chain(roots.iter().map(String::as_str))
+    {
+        let target = dir.path().join(file);
+        std::fs::create_dir_all(target.parent().expect("a parent")).expect("create parent");
+        std::fs::copy(root.join(file), &target)
+            .unwrap_or_else(|error| panic!("copy {file} into the scratch workspace: {error}"));
+    }
+    std::os::unix::fs::symlink(root.join("node_modules"), dir.path().join("node_modules"))
+        .expect("link node_modules");
+    commit(dir.path(), "base");
+    let base = git_stdout(dir.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    (dir, base)
+}
+
+/// `just affected-crate` in `dir`, as a push build hands it a base commit.
+#[cfg(unix)]
+fn affected_crate(dir: &std::path::Path, base_sha: &str) -> (String, String) {
+    let just = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|entry| entry.join("just"))
+        .find(|candidate| candidate.is_file())
+        .expect("`just` on PATH — it is this repository's command surface");
+    let mut command = Command::new(just);
+    command
+        .arg("affected-crate")
+        .current_dir(dir)
+        .env("CI", "1")
+        .env("NOTIGNORED_NX_BASE_SHA", base_sha);
+    for variable in BASE_VARIABLES.iter().skip(1) {
+        command.env_remove(variable);
+    }
+    // An enclosing Nx task's own variables describe *this* workspace, not the
+    // scratch one; the nested Nx must find its root from its working directory.
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NX_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command.output().expect("run just affected-crate");
+    assert!(
+        output.status.success(),
+        "`just affected-crate` failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// What CI skips the cross-platform, MSRV, audit, and install matrices on, asked
+/// the way a push to main asks it: the recipe, real commits, an explicit base.
+/// Anything that reaches the crate artifact — or a test tier the cross-platform
+/// legs run — must answer `true`; an SDK-only change is the one that may skip.
+#[cfg(unix)]
+#[test]
+fn affected_crate_answers_for_real_commits_against_an_explicit_base() {
+    use crate::support::{commit, write};
+    for (file, expected) in [
+        ("src/lib.rs", "true"),
+        ("Cargo.toml", "true"),
+        ("tests/e2e/cli.rs", "true"),
+        ("tests/ci_contract.rs", "true"),
+        ("python/notignored-sdk/README.md", "false"),
+    ] {
+        let (dir, base) = scratch_workspace();
+        let path = dir.path().join(file);
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        write(dir.path(), file, &format!("{existing}\n# changed\n"));
+        commit(dir.path(), &format!("change {file}"));
+        let (verdict, reasoning) = affected_crate(dir.path(), &base);
+        assert_eq!(
+            verdict, expected,
+            "a commit changing {file} answered `{verdict}` from `just affected-crate`; \
+             it said:\n{reasoning}\n\
+             ACTION: CI skips the Rust matrices on this answer — fix the project \
+             roots or the recipe's project list"
+        );
+        assert!(
+            !reasoning.contains("no merge base"),
+            "for {file} the recipe failed closed instead of scoping:\n{reasoning}"
+        );
+    }
+
+    let (dir, _) = scratch_workspace();
+    let (verdict, reasoning) =
+        affected_crate(dir.path(), "1111111111111111111111111111111111111111");
+    assert_eq!(
+        verdict, "true",
+        "an unresolvable base let `just affected-crate` skip the Rust matrices"
+    );
+    assert!(
+        reasoning.contains("NOTIGNORED_NX_BASE_SHA"),
+        "the recipe failed closed without naming the variable it could not use:\n{reasoning}"
+    );
 }

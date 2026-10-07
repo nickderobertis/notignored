@@ -20,6 +20,11 @@
       "{workspaceRoot}/Cargo.toml",
       "{workspaceRoot}/Cargo.lock"
     ],
+    "e2eSharedTests": [
+      "{workspaceRoot}/tests/fixtures/**/*",
+      "{workspaceRoot}/tests/golden/**/*",
+      "{workspaceRoot}/tests/support/**/*"
+    ],
     "jsToolchain": [
       "{workspaceRoot}/tests/js-toolchain/package.json",
       "{workspaceRoot}/tests/js-toolchain/package-lock.json",
