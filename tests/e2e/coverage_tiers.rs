@@ -303,7 +303,7 @@ fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
         "the refused run removed a lock it never held"
     );
 
-    // An unbounded wait queues, and runs once the holder finishes.
+    // The default wait, an hour, queues, and runs once the holder finishes.
     let queued_log = dir.join("queued.log");
     let mut queued = isolated(Command::new(bash_program()), dir)
         .args(["scripts/coverage.sh", "tier", "unit", "--lib"])
@@ -367,7 +367,8 @@ fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
     assert!(!lock.exists(), "the run did not release the lock it took");
 }
 
-/// How many contenders race for one abandoned lock.
+/// Enough that the race the reclaim mutex closes fires on most runs of the
+/// script without it; fewer let it slip through about half the time.
 const CONTENDERS: usize = 16;
 
 /// Releases every hold when a journey ends, passing or not, and waits for the
