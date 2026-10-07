@@ -92,6 +92,7 @@ case "${1:-}" in
   shift
   [ "$#" -gt 0 ] && [ -n "$1" ] || {
     echo "nx-affected: --affects needs a project name" >&2
+    echo "ACTION: name one or more, e.g. 'scripts/nx-affected.sh --affects notignored'" >&2
     exit 2
   }
   wanted="$*"
@@ -108,12 +109,34 @@ case "${1:-}" in
   fi
   # Matched as a parsed JSON array element rather than by grepping the text: a
   # project whose name is a substring of another's would otherwise answer for it.
-  if printf '%s' "$projects" |
-    node -e 'const fs=require("node:fs");const affected=JSON.parse(fs.readFileSync(0,"utf8"));process.exit(process.argv.slice(1).some((name)=>affected.includes(name))?0:1)' "$@"; then
+  # Exit 0 is "affected", 1 is "not"; anything else — output that is not an array
+  # of names, a node that would not run — is an answer nobody read, so it selects.
+  verdict=0
+  # shellcheck disable=SC2016 # JavaScript, whose `${...}` templates are for node to expand
+  printf '%s' "$projects" | node -e '
+    const fs = require("node:fs");
+    let affected;
+    try {
+      affected = JSON.parse(fs.readFileSync(0, "utf8"));
+    } catch (error) {
+      console.error(`nx-affected: Nx printed no JSON: ${error.message}`);
+      process.exit(2);
+    }
+    if (!Array.isArray(affected) || !affected.every((name) => typeof name === "string")) {
+      console.error("nx-affected: Nx printed something other than an array of project names");
+      process.exit(2);
+    }
+    process.exit(process.argv.slice(1).some((name) => affected.includes(name)) ? 0 : 1);
+  ' "$@" || verdict=$?
+  case "$verdict" in
+  0) printf 'true\n' ;;
+  1) printf 'false\n' ;;
+  *)
+    echo "nx-affected: could not read Nx's affected list — treating '$wanted' as affected" >&2
+    echo "ACTION: run 'just nx show projects --affected --json' to see what Nx printed" >&2
     printf 'true\n'
-  else
-    printf 'false\n'
-  fi
+    ;;
+  esac
   ;;
 *)
   [ "$#" -gt 0 ] || {

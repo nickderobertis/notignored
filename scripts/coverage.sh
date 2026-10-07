@@ -23,9 +23,14 @@
 # once queues the second rather than letting it sweep up the first's profiles.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || {
+  echo "coverage: cannot resolve the repository root from ${BASH_SOURCE[0]}" >&2
+  echo "ACTION: run it as 'bash scripts/coverage.sh' from a readable checkout" >&2
+  exit 1
+}
 cd "$ROOT" || {
   echo "coverage: cannot enter the repository root $ROOT" >&2
+  echo "ACTION: run this from a checkout whose directories are readable" >&2
   exit 1
 }
 
@@ -33,8 +38,12 @@ readonly FLOOR=95
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 case "$TARGET_DIR" in /*) ;; *) TARGET_DIR="$ROOT/$TARGET_DIR" ;; esac
 readonly COV_DIR="$TARGET_DIR/llvm-cov-target"
+# Each tier's directory under this is its Nx `test` target's declared output;
+# tests/e2e/nx_workspace.rs holds the two to the same path.
 readonly STORE="$ROOT/target/coverage-profiles"
 readonly LOCK="$STORE/.lock"
+# Long enough for the slowest tier to finish ahead of a queued one.
+readonly LOCK_WAIT_SECONDS="${NOTIGNORED_COVERAGE_LOCK_WAIT:-3600}"
 
 die() {
   printf 'coverage: %s\n' "$1" >&2
@@ -42,43 +51,79 @@ die() {
   exit 1
 }
 
+case "$LOCK_WAIT_SECONDS" in
+"" | *[!0-9]*)
+  die "NOTIGNORED_COVERAGE_LOCK_WAIT is '$LOCK_WAIT_SECONDS', not a number of seconds" \
+    "unset it, or set it to a whole number of seconds"
+  ;;
+esac
+
+# A filesystem step that must succeed; its failure names the step and the fix.
+must() {
+  local what="$1"
+  shift
+  "$@" || die "could not $what" \
+    "check that $STORE and $COV_DIR are writable by you, or delete them, then re-run"
+}
+
 # A project name becomes a directory name, so it is held to what Nx names are.
 valid_project() {
-  printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9-]*$'
+  case "$1" in
+  "" | -* | *[!a-z0-9-]*) return 1 ;;
+  *) return 0 ;;
+  esac
+}
+
+write_pid() {
+  echo "$$" >"$LOCK/pid"
 }
 
 # mkdir is the one atomic test-and-set every platform's shell has. A lock whose
-# holder is gone — a run killed before its trap — is taken over, not waited on.
+# holder is gone — a run killed before its trap — is taken over, not waited on;
+# one whose holder is alive is waited on, for a bounded time.
 lock() {
-  mkdir -p "$STORE"
+  must "create $STORE" mkdir -p "$STORE"
   local waited=0 holder
   until mkdir "$LOCK" 2>/dev/null; do
+    [ -d "$LOCK" ] || die "cannot create the lock $LOCK" \
+      "check that $STORE is writable by you, then re-run"
     holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
     if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-      rm -rf "$LOCK"
+      echo "coverage: taking over a lock left by pid $holder, which has exited" >&2
+      must "remove the stale lock $LOCK" rm -rf "$LOCK"
       continue
     fi
     if [ "$waited" -eq 0 ]; then
       echo "coverage: waiting for another tier's run (pid ${holder:-unknown}) to finish" >&2
     fi
-    waited=1
+    if [ "$waited" -ge "$LOCK_WAIT_SECONDS" ]; then
+      die "pid ${holder:-unknown} has held $LOCK for over ${LOCK_WAIT_SECONDS}s" \
+        "if no coverage run is in progress, delete $LOCK and re-run"
+    fi
+    waited=$((waited + 1))
     sleep 1
   done
-  echo "$$" >"$LOCK/pid"
-  trap 'rm -rf "$LOCK"' EXIT
+  trap 'rm -rf "$LOCK" || echo "coverage: could not remove $LOCK; delete it before the next run" >&2' EXIT
+  must "record this run in $LOCK" write_pid
 }
 
 # The raw profiles at the top of cargo-llvm-cov's directory — the only place it
 # reads them from, and the only place it writes them.
 loose_profiles() {
   [ -d "$COV_DIR" ] || return 0
-  find "$COV_DIR" -maxdepth 1 -type f -name '*.profraw'
+  must "list the profiles in $COV_DIR" find "$COV_DIR" -maxdepth 1 -type f -name '*.profraw'
 }
 
 clear_loose_profiles() {
   [ -d "$COV_DIR" ] || return 0
-  find "$COV_DIR" -maxdepth 1 -type f \
+  must "clear earlier profiles from $COV_DIR" find "$COV_DIR" -maxdepth 1 -type f \
     \( -name '*.profraw' -o -name '*.profdata' -o -name '*-profraw-list' \) -delete
+}
+
+# The profiles one tier has stored, or nothing when it has none.
+stored_profiles() {
+  [ -d "$STORE/$1" ] || return 0
+  must "list $1's stored profiles" find "$STORE/$1" -maxdepth 1 -type f -name '*.profraw'
 }
 
 tier() {
@@ -88,14 +133,20 @@ tier() {
   shift
   lock
   local profiles="$STORE/$project"
-  rm -rf "$profiles"
+  must "remove $project's previous profiles" rm -rf "$profiles"
   # Leftovers from a run killed mid-way would otherwise be filed as this one's.
   clear_loose_profiles
   local status=0
   cargo llvm-cov --no-report nextest --locked \
     --status-level fail --final-status-level fail "$@" || status=$?
-  mkdir -p "$profiles"
-  loose_profiles | while IFS= read -r file; do mv "$file" "$profiles/"; done
+  must "create $profiles" mkdir -p "$profiles"
+  local found file
+  found="$(loose_profiles)"
+  while IFS= read -r file; do
+    [ -z "$file" ] || must "move $file into $profiles" mv "$file" "$profiles/"
+  done <<EOF
+$found
+EOF
   if [ "$status" -ne 0 ]; then
     echo "coverage: $project's tests failed — fix what the summary above names" >&2
     exit "$status"
@@ -105,26 +156,30 @@ tier() {
 report() {
   [ "$#" -gt 0 ] || die "report needs the tiers to combine" \
     "call it as: scripts/coverage.sh report <project>..."
-  local project count
+  local project
   # Refused before the lock is taken: a caller that already holds it — a test
   # inside a running tier — gets its answer instead of waiting on itself.
   for project in "$@"; do
     valid_project "$project" || die "'$project' is not a project name" \
       "pass the Nx project names whose tiers this report combines"
-    count="$(find "$STORE/$project" -maxdepth 1 -type f -name '*.profraw' 2>/dev/null | wc -l)"
-    [ "$count" -gt 0 ] || die "$project has no recorded profiles, so the report would cover less than the suite" \
-      "run its tier first: just nx run $project:test"
+    [ -n "$(stored_profiles "$project")" ] ||
+      die "$project has no recorded profiles, so the report would cover less than the suite" \
+        "run its tier first: just nx run $project:test"
   done
   lock
   clear_loose_profiles
-  mkdir -p "$COV_DIR"
+  must "create $COV_DIR" mkdir -p "$COV_DIR"
+  local found file
   for project in "$@"; do
+    found="$(stored_profiles "$project")"
     # Linked, or copied across filesystems: the store is the cache's copy and
     # must survive the report.
-    find "$STORE/$project" -maxdepth 1 -type f -name '*.profraw' |
-      while IFS= read -r file; do
-        ln -f "$file" "$COV_DIR/" 2>/dev/null || cp "$file" "$COV_DIR/"
-      done
+    while IFS= read -r file; do
+      [ -z "$file" ] || ln -f "$file" "$COV_DIR/" 2>/dev/null ||
+        must "stage $file for the report" cp "$file" "$COV_DIR/"
+    done <<EOF
+$found
+EOF
   done
   local status=0
   cargo llvm-cov report --fail-under-lines "$FLOOR" || status=$?

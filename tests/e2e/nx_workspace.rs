@@ -182,7 +182,26 @@ fn the_crates_coverage_combines_every_test_tier() {
         command, "just _crate-coverage",
         "the crate's coverage target no longer runs the recipe this test reads"
     );
+    let script =
+        std::fs::read_to_string(repo_root().join("scripts/coverage.sh")).expect("read coverage.sh");
+    assert!(
+        script.contains(r#"readonly STORE="$ROOT/target/coverage-profiles""#),
+        "scripts/coverage.sh no longer stores profiles under target/coverage-profiles, \
+         the directory every tier's `test` declares as its output"
+    );
     for project in CRATE_PROJECTS {
+        let tier: serde_json::Value =
+            serde_json::from_str(nx(&["show", "project", project, "--json"]).trim())
+                .unwrap_or_else(|error| panic!("`nx show project {project}` is not JSON: {error}"));
+        assert_eq!(
+            tier["targets"]["test"]["outputs"],
+            serde_json::json!([format!(
+                "{{workspaceRoot}}/target/coverage-profiles/{project}"
+            )]),
+            "{project}:test does not declare the directory scripts/coverage.sh files its \
+             profiles in, so a cached run would replay without them\n\
+             ACTION: set its outputs to that directory"
+        );
         assert!(
             waits_on(project),
             "`notignored:coverage` does not depend on {project}:test, so it can \
@@ -210,14 +229,17 @@ fn the_crates_coverage_combines_every_test_tier() {
 /// root *is* the repository root: depending on the project would make every file
 /// outside the SDK trees affect it.
 ///
-/// The crate's test tiers are the other direction: each depends on the crate, so
-/// a change the crate owns selects all three, while a change to one tier's own
-/// tests selects that tier alone. The fixtures and goldens live beside the
-/// contract suites but are read by the journeys too, which name them as inputs.
+/// The crate's test tiers are the other direction. The contract suites depend on
+/// the crate project, since they read nearly every file it owns. The journeys are
+/// the expensive tier, so like the SDKs they name what they read — the crate's
+/// sources and the root files they drive (`e2eRootInputs`) — rather than the
+/// whole root: a change to `AGENTS.md` or `docs/` does not run them. A change to
+/// one tier's own tests selects that tier alone; the fixtures and goldens live
+/// beside the contract suites but are read by the journeys too.
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
     const CRATE_AND_TIERS: &[&str] = &CRATE_PROJECTS;
-    let cases: [(&str, &[&str]); 10] = [
+    let cases: [(&str, &[&str]); 12] = [
         (
             "src/lib.rs",
             &[
@@ -240,6 +262,8 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
         ),
         ("npm/notignored/package.json", CRATE_AND_TIERS),
         ("scripts/install.sh", CRATE_AND_TIERS),
+        ("README.md", CRATE_AND_TIERS),
+        ("AGENTS.md", &["notignored", "notignored-integration"]),
         ("tests/ci_contract.rs", &["notignored-integration"]),
         ("tests/e2e/cli.rs", &["notignored-e2e"]),
         (
@@ -285,8 +309,8 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
 /// graph's boundaries. The tags it keys on are the same ones that rule would use.
 ///
 /// The crate's test tiers (`scope:cli-tests`) sit on the CLI the same way: they
-/// drive it, and nothing may depend on them, so no tier can end up on the path
-/// of a change that does not reach it.
+/// may depend on it, and nothing may depend on them, so no tier can end up on
+/// the path of a change that does not reach it.
 const LAYERS: [(&str, &[&str]); 3] = [
     ("scope:cli", &[]),
     ("scope:cli-tests", &["scope:cli"]),

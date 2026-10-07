@@ -62,13 +62,10 @@ follow-ups.
 
 ## The project graph
 
-Five projects, one graph. Three are deliverables: `notignored` (the crate,
-rooted at the repo root), `notignored-sdk-python` and `notignored-sdk-npm`, which
-publish `notignored-sdk` to PyPI and to npm (see "The registry packages"). Two
-are the crate's test tiers, split out so a change pays only for the tiers it
-reaches: `notignored-integration` (`tests/`, the contract suites) and
-`notignored-e2e` (`tests/e2e/`, the journeys). The crate's own `test` is its unit
-tier. Each project has a nested `AGENTS.md` and a `.github/CODEOWNERS` line.
+The crate's suite is split by tier so a change pays only for the tiers it
+reaches: the crate's own `test` is its unit tier, and the contract suites and
+the journeys are projects of their own. The e2e tier is the expensive one, so it
+depends on no project and names only the root files it reads (`e2eRootInputs`).
 
 **Coverage is measured per tier and enforced once.** Each tier's `test` runs
 `cargo llvm-cov --no-report` through `scripts/coverage.sh`, which files its

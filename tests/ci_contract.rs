@@ -480,6 +480,30 @@ fn the_gate_and_the_changes_job_read_the_tier_from_the_event() {
     }
 }
 
+/// The prefix the tier script recognises release-plz's pull request by. It is
+/// restated in release-plz.yml, which finds its own pull request by the same
+/// prefix; if the two drifted, the release pull request would quietly lose the
+/// full sweep while release-plz.yml still found it.
+#[test]
+fn the_release_branch_prefix_matches_release_plz_yml() {
+    let script = read("scripts/ci-gate-tier.sh");
+    let prefix = script
+        .lines()
+        .find_map(|line| line.strip_prefix("readonly RELEASE_BRANCH_PREFIX="))
+        .expect("scripts/ci-gate-tier.sh declares RELEASE_BRANCH_PREFIX")
+        .trim_matches('"');
+    assert!(
+        !prefix.is_empty(),
+        "scripts/ci-gate-tier.sh's RELEASE_BRANCH_PREFIX is empty"
+    );
+    let release_plz = read(".github/workflows/release-plz.yml");
+    assert!(
+        release_plz.contains(&format!(r#"startswith("{prefix}")"#)),
+        "release-plz.yml no longer finds its pull request by `{prefix}`, the prefix \
+         scripts/ci-gate-tier.sh runs the full sweep on — make the two agree"
+    );
+}
+
 /// A push to main gates only its own range, so a run cancelled by the next push
 /// would leave that range gated by nothing on main. Pull requests may still
 /// cancel a superseded run: the next one covers the whole branch.

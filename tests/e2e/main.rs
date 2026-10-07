@@ -15,6 +15,7 @@ mod ci_gate_tier;
 mod ci_required;
 mod cli;
 mod color;
+mod coverage_tiers;
 mod diff;
 mod eslint_parity;
 mod examples;

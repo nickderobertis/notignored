@@ -11,11 +11,11 @@ is its longest prefix, so nothing here selects the journeys.
   `cargo_bin`, which only resolves inside the package that builds it, and the
   `[package] include` set release-plz reads must stay whole. So this project's
   `test` selects its binaries with a nextest filter
-  (`kind(test) and not binary(e2e)`), not with `-p`.
+  (`kind(test) and not binary(e2e)`), not with `-p`, and a new suite needs no
+  graph edit.
 - **Its coverage counts towards the crate's floor, but it never reports.** `test`
   records its profiles under `target/coverage-profiles/notignored-integration`
   (`scripts/coverage.sh tier`), and `notignored:coverage` combines every tier's.
-  A suite added here is in that union with no further edit.
 - **`fixtures/`, `golden/` and `support/` live here but serve the journeys too.**
   The e2e project names them as inputs (`e2eSharedTests` in `nx.json`), so a
   change to one re-runs both tiers. A new directory the journeys read belongs in
@@ -23,5 +23,3 @@ is its longest prefix, so nothing here selects the journeys.
 - **`format` is the crate's.** `cargo fmt` formats the package as one unit, so
   this project's `format` waits on `notignored:format` rather than running a
   second formatter over the same files at once.
-- **Adding a suite needs no graph edit.** A new `tests/<name>.rs` is a new
-  integration binary, picked up by the filter above.

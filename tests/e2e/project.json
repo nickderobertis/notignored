@@ -3,7 +3,6 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
   "tags": ["scope:cli-tests", "lang:rust"],
-  "implicitDependencies": ["notignored"],
   "targets": {
     "bootstrap": {
       "command": "just _crate-e2e-bootstrap",
@@ -16,11 +15,17 @@
     "format-check": { "command": "just _crate-fmt-check" },
     "lint": {
       "command": "just _crate-lint-targets --test e2e",
-      "inputs": ["default", "^default"]
+      "inputs": ["default", "crateSource", "e2eSharedTests"]
     },
     "test": {
       "command": "just _crate-test-e2e",
-      "inputs": ["default", "^default", "e2eSharedTests", "pythonToolchain", "jsToolchain"],
+      "inputs": [
+        "default",
+        "e2eRootInputs",
+        "e2eSharedTests",
+        "pythonToolchain",
+        "jsToolchain"
+      ],
       "outputs": ["{workspaceRoot}/target/coverage-profiles/notignored-e2e"]
     },
     "check": {

@@ -20,6 +20,24 @@
       "{workspaceRoot}/Cargo.toml",
       "{workspaceRoot}/Cargo.lock"
     ],
+    "e2eRootInputs": [
+      "crateSource",
+      "sharedGlobals",
+      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/action.yml",
+      "{workspaceRoot}/.github/workflows/**/*",
+      "{workspaceRoot}/npm/notignored/**/*",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/README.md",
+      "{workspaceRoot}/LICENSE",
+      "{workspaceRoot}/examples/**/*",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/llmlint.yml",
+      "{workspaceRoot}/rust-toolchain.toml",
+      "{workspaceRoot}/.cargo/**/*",
+      "{workspaceRoot}/.*-version",
+      "{workspaceRoot}/**/project.json"
+    ],
     "e2eSharedTests": [
       "{workspaceRoot}/tests/fixtures/**/*",
       "{workspaceRoot}/tests/golden/**/*",
