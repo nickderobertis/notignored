@@ -127,9 +127,14 @@ fn scratch_package() -> tempfile::TempDir {
 }
 
 fn coverage(dir: &Path, args: &[&str]) -> Output {
+    coverage_with(dir, args, &[])
+}
+
+fn coverage_with(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Output {
     isolated(Command::new(bash_program()), dir)
         .arg("scripts/coverage.sh")
         .args(args)
+        .envs(env.iter().copied())
         .output()
         .expect("run scripts/coverage.sh")
 }
@@ -234,28 +239,6 @@ fn tiers_combine_into_one_report_that_enforces_the_floor() {
         profiles_in(&store.join("unit")).len(),
         before.0,
         "the report consumed the stored profiles a cached tier would replay"
-    );
-
-    // What Nx does on a cache hit: the sources are back where a tier's last run
-    // saw them and its profiles are restored, but the binaries on disk were
-    // built since, from other sources. The report still has to be exact.
-    let cached = dir.join("cached-unit");
-    std::fs::rename(store.join("unit"), &cached).expect("set the unit tier's profiles aside");
-    write(
-        dir,
-        "src/lib.rs",
-        &format!("{LIB}\npub fn added_since(x: u32) -> u32 {{\n    x + 7\n}}\n"),
-    );
-    let rebuilt = coverage(dir, &["tier", "unit", "--lib"]);
-    assert!(rebuilt.status.success(), "{}", text(&rebuilt));
-    write(dir, "src/lib.rs", LIB);
-    std::fs::remove_dir_all(store.join("unit")).expect("drop the newer run's profiles");
-    std::fs::rename(&cached, store.join("unit")).expect("replay the cached profiles");
-    let replayed = coverage(dir, &["report", "unit", "integration"]);
-    assert!(
-        replayed.status.success() && String::from_utf8_lossy(&replayed.stdout).contains("100.00%"),
-        "a report over replayed profiles measured binaries built from other sources:\n{}",
-        text(&replayed)
     );
 }
 
@@ -419,5 +402,174 @@ fn the_script_refuses_what_it_cannot_measure() {
     assert!(
         !dir.join("target/coverage-profiles/.lock").exists(),
         "a refused run left a lock behind"
+    );
+}
+
+/// The scratch package as an Nx workspace: the unit tier is the root project and
+/// the integration tier `tests/`, each `test` declaring its profile directory as
+/// its output — the shape this repository's own tiers have — and the unit
+/// project's `coverage` combining both. Nx is this repository's own install.
+fn scratch_workspace(dir: &Path) {
+    write(dir, ".gitignore", "/target\n/.nx\n/node_modules\n");
+    write(
+        dir,
+        "package.json",
+        r#"{ "name": "scratch", "private": true }"#,
+    );
+    write(
+        dir,
+        "nx.json",
+        r#"{
+  "namedInputs": { "default": ["{projectRoot}/**/*"] },
+  "targetDefaults": {
+    "test": { "cache": true, "inputs": ["default", "{workspaceRoot}/src/**/*"] }
+  }
+}"#,
+    );
+    write(
+        dir,
+        "project.json",
+        r#"{
+  "name": "unit",
+  "targets": {
+    "test": {
+      "command": "bash scripts/coverage.sh tier unit --lib",
+      "outputs": ["{workspaceRoot}/target/coverage-profiles/unit"]
+    },
+    "coverage": {
+      "command": "bash scripts/coverage.sh report unit integration",
+      "cache": false,
+      "dependsOn": ["test", { "projects": ["integration"], "target": "test" }]
+    }
+  }
+}"#,
+    );
+    write(
+        dir,
+        "tests/project.json",
+        r#"{
+  "name": "integration",
+  "targets": {
+    "test": {
+      "command": "bash scripts/coverage.sh tier integration --test integration",
+      "outputs": ["{workspaceRoot}/target/coverage-profiles/integration"]
+    }
+  }
+}"#,
+    );
+    std::os::unix::fs::symlink(repo_root().join("node_modules"), dir.join("node_modules"))
+        .expect("link node_modules");
+    for args in [
+        &["init", "-q"][..],
+        &["add", "-A"],
+        &["commit", "-qm", "base"],
+    ] {
+        let git = isolated(Command::new("git"), dir)
+            .args([
+                "-c",
+                "user.email=tester@example.com",
+                "-c",
+                "user.name=Tester",
+            ])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(git.status.success(), "{}", text(&git));
+    }
+}
+
+/// `nx run <target>` in the scratch workspace, with none of the enclosing Nx
+/// task's variables.
+fn nx_run(dir: &Path, target: &str) -> Output {
+    let mut command = isolated(Command::new(dir.join("node_modules/.bin/nx")), dir);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NX_") {
+            command.env_remove(name);
+        }
+    }
+    command
+        .args(["run", target, "--outputStyle=static"])
+        .env("NX_DAEMON", "false")
+        .env("NX_USE_LOCAL", "true")
+        .output()
+        .expect("run nx")
+}
+
+/// A cache hit brings a tier's profiles back but not the binaries they count:
+/// after a change is made, run and reverted, the binaries on disk were built
+/// from the changed sources. The report over the replayed profiles still has to
+/// measure the sources as they are.
+#[test]
+fn a_tier_replayed_from_the_nx_cache_is_measured_against_the_current_sources() {
+    let package = scratch_package();
+    let dir = package.path();
+    scratch_workspace(dir);
+
+    let first = nx_run(dir, "unit:coverage");
+    assert!(
+        first.status.success() && text(&first).contains("100.00%"),
+        "{}",
+        text(&first)
+    );
+
+    write(
+        dir,
+        "src/lib.rs",
+        &format!("{LIB}\npub fn added_since(x: u32) -> u32 {{\n    x + 7\n}}\n"),
+    );
+    let changed = nx_run(dir, "unit:test");
+    assert!(
+        changed.status.success() && !text(&changed).contains("[local cache]"),
+        "the changed sources did not rebuild the unit tier:\n{}",
+        text(&changed)
+    );
+
+    write(dir, "src/lib.rs", LIB);
+    let replayed = nx_run(dir, "unit:coverage");
+    let said = text(&replayed);
+    assert!(
+        said.contains("nx run unit:test  [local cache]")
+            && said.contains("nx run integration:test  [local cache]"),
+        "the reverted sources did not replay both tiers from Nx's cache:\n{said}"
+    );
+    assert!(
+        replayed.status.success() && said.contains("100.00%"),
+        "a report over replayed profiles measured binaries built from other sources:\n{said}"
+    );
+}
+
+/// Profiles are linked into place for the report, and copied when the target
+/// directory is on another filesystem than the profile store, where no link can
+/// reach.
+#[test]
+fn profiles_cross_filesystems_when_the_target_directory_is_elsewhere() {
+    use std::os::unix::fs::MetadataExt;
+    let package = scratch_package();
+    let dir = package.path();
+    let elsewhere = tempfile::tempdir_in("/dev/shm").expect("a directory on tmpfs");
+    let device = |path: &Path| std::fs::metadata(path).expect("stat").dev();
+    assert_ne!(
+        device(dir),
+        device(elsewhere.path()),
+        "this journey needs /dev/shm on a filesystem of its own"
+    );
+    let target = [("CARGO_TARGET_DIR", elsewhere.path())];
+    for args in [
+        &["tier", "unit", "--lib"][..],
+        &["tier", "integration", "--test", "integration"],
+    ] {
+        let run = coverage_with(dir, args, &target);
+        assert!(run.status.success(), "{}", text(&run));
+    }
+    let report = coverage_with(dir, &["report", "unit", "integration"], &target);
+    assert!(
+        report.status.success() && text(&report).contains("100.00%"),
+        "the report could not stage profiles across filesystems:\n{}",
+        text(&report)
+    );
+    assert!(
+        !profiles_in(&dir.join("target/coverage-profiles/unit")).is_empty(),
+        "staging moved the stored profiles instead of copying them"
     );
 }

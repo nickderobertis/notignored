@@ -805,9 +805,13 @@ const GRAPH_FILES: [&str; 9] = [
 /// the real recipe about it. The orchestrator's install is linked rather than
 /// reinstalled. Returns the repository and its base commit.
 ///
+/// With `probe`, every project also gets a `probe` target that records its own
+/// name in `probe.log` — the one addition to the real graph, so a journey can
+/// see which projects a run executed without running their real targets.
+///
 /// Unix only for the link; the cross-platform legs still run it on macOS.
 #[cfg(unix)]
-fn scratch_workspace() -> (tempfile::TempDir, String) {
+fn scratch_workspace_with(probe: bool) -> (tempfile::TempDir, String) {
     use crate::support::{commit, git_repo, git_stdout};
     let root = repo_root();
     let dir = git_repo();
@@ -832,6 +836,22 @@ fn scratch_workspace() -> (tempfile::TempDir, String) {
         std::fs::copy(root.join(file), &target)
             .unwrap_or_else(|error| panic!("copy {file} into the scratch workspace: {error}"));
     }
+    if probe {
+        for file in &roots {
+            let path = dir.path().join(file);
+            let mut config: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("read project.json"))
+                    .expect("project.json is JSON");
+            config["targets"]["probe"] =
+                serde_json::json!({ "command": "echo {projectName} >> probe.log" });
+            std::fs::write(&path, config.to_string()).expect("write project.json");
+        }
+        crate::support::write(
+            dir.path(),
+            ".gitignore",
+            "/node_modules\n/.nx\n/.logs\n/probe.log\n",
+        );
+    }
     std::os::unix::fs::symlink(root.join("node_modules"), dir.path().join("node_modules"))
         .expect("link node_modules");
     commit(dir.path(), "base");
@@ -839,6 +859,11 @@ fn scratch_workspace() -> (tempfile::TempDir, String) {
         .trim()
         .to_string();
     (dir, base)
+}
+
+#[cfg(unix)]
+fn scratch_workspace() -> (tempfile::TempDir, String) {
+    scratch_workspace_with(false)
 }
 
 /// `just affected-crate` in `dir`, as a push build hands it a base commit.
@@ -920,5 +945,75 @@ fn affected_crate_answers_for_real_commits_against_an_explicit_base() {
     assert!(
         reasoning.contains("NOTIGNORED_NX_BASE_SHA"),
         "the recipe failed closed without naming the variable it could not use:\n{reasoning}"
+    );
+}
+
+/// `scripts/nx-affected.sh -t probe` in `dir` with `base_sha` as a push build's
+/// base: which projects it ran, and what it said.
+#[cfg(unix)]
+fn affected_run(dir: &std::path::Path, base_sha: &str) -> (Vec<String>, String) {
+    let mut command = Command::new(bash_program());
+    command
+        .args(["scripts/nx-affected.sh", "-t", "probe"])
+        .current_dir(dir)
+        .env("CI", "1")
+        .env("NOTIGNORED_NX_BASE_SHA", base_sha);
+    for variable in BASE_VARIABLES.iter().skip(1) {
+        command.env_remove(variable);
+    }
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NX_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command.output().expect("run scripts/nx-affected.sh");
+    assert!(
+        output.status.success(),
+        "`nx-affected.sh -t probe` failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut ran: Vec<String> = std::fs::read_to_string(dir.join("probe.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    ran.sort();
+    (ran, String::from_utf8_lossy(&output.stderr).into_owned())
+}
+
+/// The push-to-main gate itself: `just check-affected` is `nx-affected.sh -t
+/// check`, and with an explicit base it must execute the targets of exactly the
+/// projects the pushed range reaches — and of every project when that base
+/// does not resolve, saying which variable it could not use.
+#[cfg(unix)]
+#[test]
+fn an_affected_run_executes_against_an_explicit_base() {
+    use crate::support::{commit, write};
+    for (file, expected) in [
+        ("tests/e2e/cli.rs", &["notignored-e2e"][..]),
+        ("tests/ci_contract.rs", &["notignored-integration"][..]),
+        ("src/lib.rs", &PROJECTS[..]),
+    ] {
+        let (dir, base) = scratch_workspace_with(true);
+        write(dir.path(), file, "// changed\n");
+        commit(dir.path(), &format!("change {file}"));
+        let (ran, said) = affected_run(dir.path(), &base);
+        assert_eq!(
+            ran,
+            sorted(expected),
+            "a pushed change to {file} ran the wrong projects; the script said:\n{said}"
+        );
+    }
+
+    let (dir, _) = scratch_workspace_with(true);
+    let (ran, said) = affected_run(dir.path(), "2222222222222222222222222222222222222222");
+    assert_eq!(
+        ran,
+        sorted(&PROJECTS),
+        "an unresolvable base ran less than every project:\n{said}"
+    );
+    assert!(
+        said.contains("NOTIGNORED_NX_BASE_SHA") && said.contains("running every project"),
+        "the full run did not say which base it could not use:\n{said}"
     );
 }
