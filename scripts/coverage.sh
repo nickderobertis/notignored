@@ -265,7 +265,9 @@ EOF
   if [ "$status" -ne 0 ]; then
     {
       echo "coverage: below ${FLOOR}% lines over the tiers $*, or the report could not be built"
-      echo "ACTION: cover the lines the table above counts as missed"
+      echo "ACTION: if a coverage table printed above, cover the lines it counts as missed;"
+      echo "        if it did not, the report failed to build — fix the error above, or"
+      echo "        re-record the profiles it names with: just nx run <project>:test --skip-nx-cache"
     } >&2
     exit "$status"
   fi
