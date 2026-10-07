@@ -81,6 +81,9 @@ write_pid() {
 # mkdir is the one atomic test-and-set every platform's shell has. A lock whose
 # holder is gone — a run killed before its trap — is taken over, not waited on;
 # one whose holder is alive is waited on, for a bounded time.
+# llmlint: ignore-block[tool_output_is_signal] a run that pauses behind another,
+# or overrides a dead run's lock, says so once on stderr: silence would read as a
+# hang, and a takeover is exactly what a reader debugging a lost profile needs.
 lock() {
   must "create $STORE" mkdir -p "$STORE"
   local waited=0 holder
@@ -112,6 +115,7 @@ lock() {
   trap 'rm -rf "$LOCK" || echo "coverage: could not remove $LOCK; delete it before the next run" >&2' EXIT
   must "record this run in $LOCK" write_pid
 }
+# llmlint: ignore-end[tool_output_is_signal]
 
 # The raw profiles at the top of cargo-llvm-cov's directory — the only place it
 # reads them from, and the only place it writes them.

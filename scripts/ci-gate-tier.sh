@@ -5,12 +5,13 @@
 #   base=<sha>           the explicit base commit for the affected tier, or empty
 #                        to take the pull request's merge base
 #
-# Releases are batched: release-plz's release pull request accumulates every
-# merge since the last tag, so the commit that ships is one no merge job swept.
-# The broader tier therefore runs once, at release-prep — on that pull request —
-# and merge-to-main stays on the affected tier, keyed on the pushed range's base
-# (`github.event.before`) rather than on a base branch a push build does not
-# have. AGENTS.md "Commits, releases, and merging" records the model.
+# The release model that decides it is in AGENTS.md "Commits, releases, and
+# merging". A push is scoped against its pushed range's base
+# (`github.event.before`), because a push build has no base branch to fork from.
+#
+# llmlint: ignore-file[tool_output_is_signal] stdout here is the two
+# `$GITHUB_OUTPUT` records the workflow step appends, one key per line as that
+# file's format requires — data for the next steps, not a report to a reader.
 #
 # Reads GATE_EVENT (`github.event_name`), GATE_HEAD_REF (`github.head_ref`) and
 # GATE_BEFORE (`github.event.before`), all passed through `env:` and never

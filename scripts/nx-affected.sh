@@ -92,20 +92,27 @@ resolve_base() {
 case "${1:-}" in
 --affects)
   shift
-  [ "$#" -gt 0 ] && [ -n "$1" ] || {
-    echo "nx-affected: --affects needs a project name" >&2
-    echo "ACTION: name one or more, e.g. 'scripts/nx-affected.sh --affects notignored'" >&2
-    exit 2
-  }
+  [ "$#" -gt 0 ] || set -- ""
+  for name in "$@"; do
+    case "$name" in
+    "" | -* | *[!A-Za-z0-9_.-]*)
+      echo "nx-affected: --affects needs project names; '$name' is not one" >&2
+      echo "ACTION: name one or more, e.g. 'scripts/nx-affected.sh --affects notignored'" >&2
+      exit 2
+      ;;
+    esac
+  done
   wanted="$*"
   if ! base="$(resolve_base)"; then
     echo "nx-affected: no merge base — treating '$wanted' as affected" >&2
+    echo "ACTION: none needed to stay safe; to scope, fetch the base branch or set NOTIGNORED_NX_BASE_SHA" >&2
     printf 'true\n'
     exit 0
   fi
   # Read for Nx's answer, so the wrapper must not fold it into a summary line.
   if ! projects="$(NOTIGNORED_NX_SHOW_OUTPUT=1 bash scripts/nx.sh show projects --affected --base="$base" --head=HEAD --json)"; then
     echo "nx-affected: Nx could not list the affected projects — treating '$wanted' as affected" >&2
+    echo "ACTION: run 'just nx show projects --affected --json' to see Nx's own error" >&2
     printf 'true\n'
     exit 0
   fi

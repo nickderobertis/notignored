@@ -99,7 +99,7 @@ fn sorted(names: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn the_graph_holds_one_project_per_deliverable() {
+fn the_graph_holds_the_deliverables_and_the_crates_test_tiers() {
     assert_eq!(
         project_list(&["show", "projects", "--json"]),
         sorted(&PROJECTS),
