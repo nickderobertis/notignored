@@ -9,7 +9,10 @@
     "format": { "command": "just _crate-format" },
     "format-check": { "command": "just _crate-fmt-check" },
     "lint": { "command": "just _crate-lint" },
-    "test": { "command": "just _crate-test" },
+    "test": {
+      "command": "just _crate-test",
+      "outputs": ["{workspaceRoot}/target/coverage-profiles/notignored"]
+    },
     "doc": { "command": "just doc" },
     "check": {
       "executor": "nx:noop",

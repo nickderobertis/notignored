@@ -44,13 +44,12 @@ follow-ups.
      rather than optional narrative. -->
 
 - **Product shape:** cli
-- **Language(s):** rust, python, typescript
+- **Language(s):** rust, python, typescript, bash
 - **References composed:** base.md, shapes/cli.md, languages/rust.md,
-  intersections/rust-cli.md, ci.md, llmlint.md, releasing.md, monorepo.md
-- **Monorepo, since the SDKs:** three deliverables in three languages — the Rust
-  CLI, `python/notignored-sdk`, `npm/notignored-sdk` — is past the threshold where
-  monorepo.md applies, so it is composed rather than excluded. It was excluded
-  while there was one crate and one deliverable; that is no longer true.
+  languages/python.md, languages/typescript.md, languages/bash.md,
+  intersections/rust-cli.md, project-graph.md, ci.md, llmlint.md, releasing.md
+- **The project graph is mandatory** from create-repo v1.38.1 on, for every repo
+  whatever its deliverables, so it is composed rather than opted into.
 - **Excluded, and why:** *asdf / direnv* — `rust-toolchain.toml` already pins the
   toolchain and rustup reads it, so a second pin would only drift. *Bench tier* —
   deferred, not dropped: speed is a product claim, so it lands once the parser set
@@ -63,11 +62,15 @@ follow-ups.
 
 ## The project graph
 
-Three projects, one graph: `notignored` (the crate, rooted at the repo root),
-`notignored-sdk-python` and `notignored-sdk-npm` — each shipped, and each with
-its own nested `AGENTS.md` and a `.github/CODEOWNERS` line routing its reviews.
-They publish `notignored-sdk` to PyPI and to npm respectively; see "The registry
-packages".
+The crate's suite is split by tier so a change pays only for the tiers it
+reaches: the crate's own `test` is its unit tier, and the contract suites and
+the journeys are projects of their own. The e2e tier is the expensive one, so it
+depends on no project and names only the root files it reads (`e2eRootInputs`).
+
+**The coverage floor is enforced once, over every tier**, by
+`notignored-e2e:coverage`. It belongs to the e2e project so it runs exactly when
+the journeys do; a change that reaches neither the journeys nor `src/` (a
+contract suite alone) is measured again by the release-prep sweep.
 
 Nx **runs** targets; it never decides what one does. A target names its project's
 own language-native tool (`_crate-*` recipes for cargo, ruff/mypy for the Python
@@ -95,16 +98,19 @@ crate *project*, which would drag in the whole repo root.
 `tests/e2e/nx_workspace.rs` locks that mapping, because CI skips the `cross`,
 `msrv`, `deny`, and `install` matrices on `just affected-crate` and a file that
 stopped mapping to the crate would turn a skipped matrix into an unproven
-artifact. Everything downstream of that fails **closed**: with no derivable merge
-base, `scripts/nx-affected.sh` runs the whole graph and says so.
+artifact. That recipe asks after the crate *and* its test tiers, because the
+`cross` legs run every tier. Everything downstream of that fails **closed**: with
+no derivable base, `scripts/nx-affected.sh` runs the whole graph and says so. A
+base can be named outright with `NOTIGNORED_NX_BASE_SHA`, which wins over any
+base ref and selects everything, naming itself, when it does not resolve.
 
 `just bootstrap` is serialized (`--parallel=1`): projects share the
 `scripts/setup-*.sh` installers, which recreate a `.dev/<tool>` tree from scratch
 when a pin moves, and two of those at once race on the same directory.
 
 **Boundaries are enforced on tags, over the whole graph.** Each project declares
-one `scope:` tag and the CLI is the base layer — an SDK may depend on it, nothing
-may depend on an SDK. `tests/e2e/nx_workspace.rs` checks every edge Nx resolved
+one `scope:` tag and the CLI is the base layer — an SDK (`scope:sdk`) or a test
+tier (`scope:cli-tests`) may depend on it, and nothing may depend on either. `tests/e2e/nx_workspace.rs` checks every edge Nx resolved
 against that layering and that the graph stays acyclic. Not Nx's
 `@nx/enforce-module-boundaries`: that rule is ESLint's and reaches only the one
 TypeScript project, so it could not see an edge from the Rust crate at all.
@@ -397,6 +403,16 @@ exists to tell the owner to keep in step by hand. -->
 - **Merging a PR is the only human action in a release.** Never hand-edit a
   version, hand-tag, or hand-dispatch a publish; if a release needs that, the
   pipeline is broken.
+- **Releases are batched, so the broader tier runs at release-prep.**
+  release-plz's release pull request accumulates every merge since the last tag,
+  so the commit that ships is one no merge job swept. `ci.yml` therefore gates a
+  pull request *and* a push to main on the affected tier (`just check-affected`,
+  the push against its pushed range's base), and runs the one full sweep
+  (`just check`) on the release pull request — `scripts/ci-gate-tier.sh` decides,
+  by its `release-plz-` head branch. `release.yml`'s tag-time `test` job re-runs
+  `just check` over the tagged commit, the same tree the release pull request
+  swept: a deliberate, standing exception, kept so nothing publishes from a tree
+  that did not pass the gate in the run that built it.
 - **`RELEASE_PLZ_TOKEN` must stay a PAT.** A tag pushed by the default
   `GITHUB_TOKEN` does not trigger other workflows, so `release.yml` would never
   build the binaries and the release would stay an empty draft — silently.

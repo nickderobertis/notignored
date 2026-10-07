@@ -1,0 +1,31 @@
+{
+  "name": "notignored-integration",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "tags": ["scope:cli-tests", "lang:rust"],
+  "implicitDependencies": ["notignored"],
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:noop",
+      "dependsOn": [{ "projects": ["notignored"], "target": "bootstrap" }]
+    },
+    "format": {
+      "executor": "nx:noop",
+      "dependsOn": [{ "projects": ["notignored"], "target": "format" }]
+    },
+    "format-check": { "command": "just _crate-fmt-check" },
+    "lint": {
+      "command": "just _crate-lint-targets --tests",
+      "inputs": ["default", "^default"]
+    },
+    "test": {
+      "command": "just _crate-test-integration",
+      "inputs": ["default", "^default"],
+      "outputs": ["{workspaceRoot}/target/coverage-profiles/notignored-integration"]
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "test"]
+    }
+  }
+}

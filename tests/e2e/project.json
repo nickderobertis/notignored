@@ -1,0 +1,44 @@
+{
+  "name": "notignored-e2e",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "tags": ["scope:cli-tests", "lang:rust"],
+  "targets": {
+    "bootstrap": {
+      "command": "just _crate-e2e-bootstrap",
+      "dependsOn": [{ "projects": ["notignored"], "target": "bootstrap" }]
+    },
+    "format": {
+      "executor": "nx:noop",
+      "dependsOn": [{ "projects": ["notignored"], "target": "format" }]
+    },
+    "format-check": { "command": "just _crate-fmt-check" },
+    "lint": {
+      "command": "just _crate-lint-targets --test e2e",
+      "inputs": ["default", "crateSource", "e2eSharedTests"]
+    },
+    "test": {
+      "command": "just _crate-test-e2e",
+      "inputs": [
+        "default",
+        "e2eRootInputs",
+        "e2eSharedTests",
+        "pythonToolchain",
+        "jsToolchain"
+      ],
+      "outputs": ["{workspaceRoot}/target/coverage-profiles/notignored-e2e"]
+    },
+    "coverage": {
+      "command": "just _crate-coverage",
+      "cache": false,
+      "dependsOn": [
+        "test",
+        { "projects": ["notignored", "notignored-integration"], "target": "test" }
+      ]
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "test", "coverage"]
+    }
+  }
+}

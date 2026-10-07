@@ -426,6 +426,128 @@ fn the_verdict_script_exists() {
     );
 }
 
+const TIER_COMMAND: &str = r#"bash scripts/ci-gate-tier.sh >> "$GITHUB_OUTPUT""#;
+
+/// What the staged gate's tier step reads, and the one place each may come from.
+/// Passed through `env:` and never spliced into the script: a pull request's head
+/// ref is the contributor's to name.
+const TIER_INPUTS: [(&str, &str); 3] = [
+    ("GATE_EVENT", "${{ github.event_name }}"),
+    ("GATE_HEAD_REF", "${{ github.head_ref }}"),
+    ("GATE_BEFORE", "${{ github.event.before }}"),
+];
+
+/// Every way a job's tier step (`id: tier`) differs from the one
+/// `scripts/ci-gate-tier.sh` is driven through in `tests/ci_gate_tier.rs`.
+fn tier_step_problems(workflow: &Node, job: &str) -> Vec<String> {
+    let steps = workflow.get("jobs").get(job).get("steps").list();
+    let Some(step) = steps
+        .iter()
+        .find(|step| step.find("id").map(Node::scalar) == Some("tier"))
+    else {
+        return vec![format!(
+            "`{job}` has no step with `id: tier`, so nothing decides which tier it gates on"
+        )];
+    };
+    let mut problems = Vec::new();
+    let run = step.find("run").map_or("", Node::scalar);
+    if run != TIER_COMMAND {
+        problems.push(format!(
+            "`{job}`'s tier step runs `{run}` rather than `{TIER_COMMAND}`"
+        ));
+    }
+    for (variable, expression) in TIER_INPUTS {
+        let given = step
+            .find("env")
+            .and_then(|env| env.find(variable))
+            .map(Node::scalar);
+        if given != Some(expression) {
+            problems.push(format!(
+                "`{job}`'s tier step sets {variable} to {given:?} rather than `{expression}`"
+            ));
+        }
+    }
+    problems
+}
+
+/// Both jobs that decide on the tier read the same event values, so the gate and
+/// the matrices' skip decision cannot disagree about which tier a run is.
+#[test]
+fn the_gate_and_the_changes_job_read_the_tier_from_the_event() {
+    let workflow = parse(&read(CI));
+    for job in ["gate", "changes"] {
+        assert_none(&tier_step_problems(&workflow, job));
+    }
+}
+
+/// The prefix the tier script recognises release-plz's pull request by. It is
+/// restated in release-plz.yml, which finds its own pull request by the same
+/// prefix; if the two drifted, the release pull request would quietly lose the
+/// full sweep while release-plz.yml still found it.
+#[test]
+fn the_release_branch_prefix_matches_release_plz_yml() {
+    let script = read("scripts/ci-gate-tier.sh");
+    let prefix = script
+        .lines()
+        .find_map(|line| line.strip_prefix("readonly RELEASE_BRANCH_PREFIX="))
+        .expect("scripts/ci-gate-tier.sh declares RELEASE_BRANCH_PREFIX")
+        .trim_matches('"');
+    assert!(
+        !prefix.is_empty(),
+        "scripts/ci-gate-tier.sh's RELEASE_BRANCH_PREFIX is empty"
+    );
+    let release_plz = read(".github/workflows/release-plz.yml");
+    assert!(
+        release_plz.contains(&format!(r#"startswith("{prefix}")"#)),
+        "release-plz.yml no longer finds its pull request by `{prefix}`, the prefix \
+         scripts/ci-gate-tier.sh runs the full sweep on — make the two agree"
+    );
+}
+
+/// A push to main gates only its own range, so a run cancelled by the next push
+/// would leave that range gated by nothing on main. Pull requests may still
+/// cancel a superseded run: the next one covers the whole branch.
+#[test]
+fn a_push_run_is_never_cancelled_by_the_next_push() {
+    let workflow = parse(&read(CI));
+    let cancel = workflow
+        .get("concurrency")
+        .get("cancel-in-progress")
+        .scalar()
+        .to_string();
+    assert_eq!(
+        cancel, "${{ github.event_name == 'pull_request' }}",
+        "ci.yml's concurrency cancels in-progress runs on more than pull requests"
+    );
+}
+
+/// The activity types ci.yml's `pull_request` trigger must keep: GitHub's
+/// defaults, plus `ready_for_review`, since lifting a draft pushes no commit and
+/// would otherwise start no run for the head it makes ready.
+const PULL_REQUEST_TYPES: &[&str] = &["opened", "synchronize", "reopened", "ready_for_review"];
+
+fn pull_request_type_problems(workflow: &Node) -> Vec<String> {
+    let trigger = workflow.get("on").get("pull_request");
+    let Some(types) = trigger.find("types") else {
+        return vec![
+            "ci.yml's `pull_request` names no `types`, so a draft made ready \
+                     starts no run"
+                .to_string(),
+        ];
+    };
+    let types: Vec<&str> = types.list().iter().map(Node::scalar).collect();
+    PULL_REQUEST_TYPES
+        .iter()
+        .filter(|wanted| !types.contains(wanted))
+        .map(|missing| format!("ci.yml's `pull_request` types {types:?} lack `{missing}`"))
+        .collect()
+}
+
+#[test]
+fn a_pull_request_runs_when_it_opens_moves_or_leaves_draft() {
+    assert_none(&pull_request_type_problems(&parse(&read(CI))));
+}
+
 /// The checks above, shown catching what they exist for on edited copies of the
 /// real files — a check that passes the real tree could also be one that
 /// cannot fail.
@@ -470,6 +592,50 @@ mod the_checks_catch {
             ("run: bash scripts/ci-required.sh", "run: echo ok", "no step running"),
         ] {
             let problems = required_shape_problems(&ci_with(from, to));
+            assert!(
+                problems.iter().any(|problem| problem.contains(named)),
+                "`{from}` -> `{to}` went unreported: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pull_request_trigger_that_drops_a_type() {
+        for (from, to, named) in [
+            (
+                "types: [opened, synchronize, reopened, ready_for_review]",
+                "types: [opened, synchronize, reopened]",
+                "lack `ready_for_review`",
+            ),
+            (
+                "    types: [opened, synchronize, reopened, ready_for_review]\n",
+                "",
+                "names no `types`",
+            ),
+        ] {
+            let problems = pull_request_type_problems(&ci_with(from, to));
+            assert!(
+                problems.iter().any(|problem| problem.contains(named)),
+                "`{from}` -> `{to}` went unreported: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tier_step_that_reads_the_wrong_input() {
+        for (from, to, named) in [
+            (
+                "GATE_HEAD_REF: ${{ github.head_ref }}",
+                "GATE_HEAD_REF: ${{ github.ref }}",
+                "GATE_HEAD_REF",
+            ),
+            (
+                r#"run: bash scripts/ci-gate-tier.sh >> "$GITHUB_OUTPUT""#,
+                "run: echo tier=full >> \"$GITHUB_OUTPUT\"",
+                "rather than `bash scripts/ci-gate-tier.sh",
+            ),
+        ] {
+            let problems = tier_step_problems(&ci_with(from, to), "changes");
             assert!(
                 problems.iter().any(|problem| problem.contains(named)),
                 "`{from}` -> `{to}` went unreported: {problems:?}"

@@ -49,8 +49,7 @@ default:
 bootstrap:
     @bash scripts/nx.sh run-many -t bootstrap --parallel=1
 
-# Installs toolchain components, the pinned cargo dev tools, deps, and the
-# pinned linters and type checkers the e2e parity suites drive.
+# Installs toolchain components, the pinned cargo dev tools, and deps.
 # The Rust crate's own provisioning (the `notignored:bootstrap` target).
 _crate-bootstrap:
     @rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
@@ -59,6 +58,10 @@ _crate-bootstrap:
     @just _ensure-tool cargo-nextest
     @just _ensure-tool cargo-llvm-cov
     @cargo fetch --locked --quiet
+
+# The crate's toolchain comes first, through the target's `dependsOn`.
+# The pinned linters and type checkers the e2e parity suites drive.
+_crate-e2e-bootstrap:
     @bash scripts/setup-python-tools.sh
     @bash scripts/setup-js.sh
     @bash scripts/setup-misc-tools.sh
@@ -88,11 +91,12 @@ check-affected:
     @bash scripts/nx-affected.sh -t check
     @echo "check-affected: ok"
 
-# `true` when this branch's diff can reach the Rust crate project, so CI can skip
-# the cross-platform and install matrices on an SDK-only change. Fails closed.
-# Whether the Rust crate is affected by this branch.
+# `true` when this branch's diff can reach the Rust crate project or one of its
+# test tiers — which the cross-platform legs run — so CI can skip the
+# cross-platform and install matrices on an SDK-only change. Fails closed.
+# Whether the Rust crate or its tests are affected by this branch.
 affected-crate:
-    @bash scripts/nx-affected.sh --affects notignored
+    @bash scripts/nx-affected.sh --affects notignored notignored-integration notignored-e2e
 
 # Escape hatch for Nx itself, e.g. `just nx show projects` or `just nx graph`.
 # Run an arbitrary Nx command against this workspace.
@@ -111,9 +115,10 @@ format:
 lint:
     @bash scripts/nx.sh run-many -t lint
 
-# Every project's test suite; the crate's enforces its coverage floor.
+# Every project's test suite, then the crate's coverage floor over all three of
+# its tiers (`notignored-e2e:coverage`, which needs every tier's profiles).
 test:
-    @bash scripts/nx.sh run-many -t test
+    @bash scripts/nx.sh run-many -t test coverage
 
 # Verify the crate's formatting without modifying files.
 _crate-fmt-check:
@@ -127,13 +132,32 @@ _crate-format:
 _crate-lint:
     @cargo clippy --all-targets --locked --quiet -- -D warnings
 
+# A test tier's own lint: cargo selects lint scope by target, so each tier names
+# the targets it owns.
+# Lint the named cargo targets with clippy; any warning is an error.
+_crate-lint-targets *targets:
+    @cargo clippy {{targets}} --locked --quiet -- -D warnings
+
+# The crate's tests are three tiers, three Nx projects; each records its coverage
+# profiles without reporting, and `_crate-coverage` enforces the floor over all of
+# them (scripts/coverage.sh).
+# The unit tier: `src/`'s own tests, instrumented.
+_crate-test:
+    @bash scripts/coverage.sh tier notignored --lib --bins
+
+# The integration tier: the `tests/*.rs` contract suites, instrumented.
+_crate-test-integration:
+    @bash scripts/coverage.sh tier notignored-integration --tests -E 'kind(test) and not binary(e2e)'
+
+# The e2e tier: the `tests/e2e/` binary journeys, instrumented.
+_crate-test-e2e:
+    @bash scripts/coverage.sh tier notignored-e2e --test e2e
+
 # 95% line coverage is the gate; lower it only with a documented reason in
 # AGENTS.md.
-# The crate's full test suite (unit + integration + e2e) with coverage enforced.
-_crate-test:
-    @cargo llvm-cov nextest --locked --fail-under-lines 95 \
-      --status-level fail --final-status-level fail \
-      || { echo "tests failed, or coverage fell below 95% — cover the lines the table above counts as missed" >&2; exit 1; }
+# The crate's coverage floor over every tier's profiles, as one report.
+_crate-coverage:
+    @bash scripts/coverage.sh report notignored notignored-integration notignored-e2e
 
 # Coverage instrumentation is measured on Linux only, so the cross-platform CI
 # legs run the same suite through this instead of `test`.
