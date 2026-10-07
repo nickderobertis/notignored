@@ -521,6 +521,33 @@ fn a_push_run_is_never_cancelled_by_the_next_push() {
     );
 }
 
+/// The activity types ci.yml's `pull_request` trigger must keep: GitHub's
+/// defaults, plus `ready_for_review`, since lifting a draft pushes no commit and
+/// would otherwise start no run for the head it makes ready.
+const PULL_REQUEST_TYPES: &[&str] = &["opened", "synchronize", "reopened", "ready_for_review"];
+
+fn pull_request_type_problems(workflow: &Node) -> Vec<String> {
+    let trigger = workflow.get("on").get("pull_request");
+    let Some(types) = trigger.find("types") else {
+        return vec![
+            "ci.yml's `pull_request` names no `types`, so a draft made ready \
+                     starts no run"
+                .to_string(),
+        ];
+    };
+    let types: Vec<&str> = types.list().iter().map(Node::scalar).collect();
+    PULL_REQUEST_TYPES
+        .iter()
+        .filter(|wanted| !types.contains(wanted))
+        .map(|missing| format!("ci.yml's `pull_request` types {types:?} lack `{missing}`"))
+        .collect()
+}
+
+#[test]
+fn a_pull_request_runs_when_it_opens_moves_or_leaves_draft() {
+    assert_none(&pull_request_type_problems(&parse(&read(CI))));
+}
+
 /// The checks above, shown catching what they exist for on edited copies of the
 /// real files — a check that passes the real tree could also be one that
 /// cannot fail.
@@ -565,6 +592,28 @@ mod the_checks_catch {
             ("run: bash scripts/ci-required.sh", "run: echo ok", "no step running"),
         ] {
             let problems = required_shape_problems(&ci_with(from, to));
+            assert!(
+                problems.iter().any(|problem| problem.contains(named)),
+                "`{from}` -> `{to}` went unreported: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pull_request_trigger_that_drops_a_type() {
+        for (from, to, named) in [
+            (
+                "types: [opened, synchronize, reopened, ready_for_review]",
+                "types: [opened, synchronize, reopened]",
+                "lack `ready_for_review`",
+            ),
+            (
+                "    types: [opened, synchronize, reopened, ready_for_review]\n",
+                "",
+                "names no `types`",
+            ),
+        ] {
+            let problems = pull_request_type_problems(&ci_with(from, to));
             assert!(
                 problems.iter().any(|problem| problem.contains(named)),
                 "`{from}` -> `{to}` went unreported: {problems:?}"
