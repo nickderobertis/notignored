@@ -368,7 +368,7 @@ fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
 }
 
 /// How many contenders race for one abandoned lock.
-const CONTENDERS: usize = 8;
+const CONTENDERS: usize = 16;
 
 /// Releases every hold when a journey ends, passing or not, and waits for the
 /// started ones to see it before the scratch directory goes, so a failed
@@ -418,11 +418,21 @@ fn contenders_for_an_abandoned_lock_take_it_one_at_a_time() {
     let per_run = profiles_in(&store.join("solo")).len();
     assert!(per_run > 0, "the solo run stored no profiles");
 
-    // The abandoned lock: its holder has exited without releasing it.
-    let mut exited = Command::new("true").spawn().expect("spawn true");
-    let dead = exited.id();
-    exited.wait().expect("wait for true");
-    write(&lock, "pid", &dead.to_string());
+    // The abandoned lock: a real run killed mid-way, which never releases it.
+    // Its orphaned test is then let finish, so the profile it leaves is already
+    // lying loose before any contender starts.
+    let loose = dir.join("target/llvm-cov-target");
+    let abandoned = dir.join("hold-abandoned");
+    let _release_abandoned = ReleaseAll(vec![abandoned.clone()]);
+    let mut killed = held_tier(dir, &abandoned, std::process::Stdio::null());
+    let before = profiles_in(&loose).len();
+    killed.kill().expect("kill the held tier this test started");
+    killed.wait().expect("reap the killed tier");
+    write(&abandoned, "release", "");
+    wait_until("the killed run's test wrote its profile", || {
+        abandoned.join("finished").exists() && profiles_in(&loose).len() > before
+    });
+    assert!(lock.is_dir(), "the killed run's lock is already gone");
 
     let _release_all = ReleaseAll(
         (0..CONTENDERS)
@@ -458,7 +468,7 @@ fn contenders_for_an_abandoned_lock_take_it_one_at_a_time() {
             .map(|(index, _)| index)
             .collect()
     };
-    for _ in 0..CONTENDERS {
+    for round in 0..CONTENDERS {
         let start = std::time::Instant::now();
         while running(&contenders).is_empty() {
             if start.elapsed() > std::time::Duration::from_secs(120) {
@@ -477,8 +487,10 @@ fn contenders_for_an_abandoned_lock_take_it_one_at_a_time() {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        // Long enough for every queued contender to have retried the lock.
-        std::thread::sleep(std::time::Duration::from_millis(2500));
+        // Long enough for every queued contender to have retried the lock. The
+        // first round is the one that follows the reclaim, where the race was.
+        let settle = if round == 0 { 2500 } else { 1200 };
+        std::thread::sleep(std::time::Duration::from_millis(settle));
         let now = running(&contenders);
         assert_eq!(
             now.len(),

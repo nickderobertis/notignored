@@ -35,6 +35,10 @@ cd "$ROOT" || {
 }
 
 readonly FLOOR=95
+# The gate has no warnings-only mode, and these are the crate's test builds. Set
+# here rather than per recipe so every tier and the report's rebuild compile with
+# the same flags — a binary built with others would not match its profiles.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 case "$TARGET_DIR" in /*) ;; *) TARGET_DIR="$ROOT/$TARGET_DIR" ;; esac
 readonly COV_DIR="$TARGET_DIR/llvm-cov-target"
@@ -100,15 +104,18 @@ reclaim() {
   local seen="$1"
   mkdir "$RECLAIM" 2>/dev/null || return 1
   write_pid "$RECLAIM" || {
-    rm -rf "$RECLAIM"
-    die "could not record this run in $RECLAIM" "check that $STORE is writable by you, then re-run"
+    # Best effort: the refusal below names the directory either way.
+    rm -rf "$RECLAIM" 2>/dev/null || true
+    die "could not record this run in $RECLAIM" \
+      "check that $STORE is writable by you, delete $RECLAIM if it remains, then re-run"
   }
   if [ "$(holder_of "$LOCK")" = "$seen" ]; then
     echo "coverage: taking over a lock left by pid $seen, which has exited" >&2
     rm -rf "$LOCK" || {
-      rm -rf "$RECLAIM"
+      # Best effort: the refusal below names both directories either way.
+      rm -rf "$RECLAIM" 2>/dev/null || true
       die "could not remove the stale lock $LOCK" \
-        "check that $STORE is writable by you, or delete $LOCK, then re-run"
+        "check that $STORE is writable by you, or delete $LOCK and $RECLAIM, then re-run"
     }
   fi
   must "release $RECLAIM" rm -rf "$RECLAIM"
