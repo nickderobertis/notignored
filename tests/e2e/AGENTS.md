@@ -18,10 +18,9 @@ expensive tier, so it sits behind its own edge.
   `notignored` binary for them; there is no separate `build` task to wait on.
 - **Its bootstrap installs the pinned parity toolchain** after the crate's own.
   A journey that needs a new tool adds its installer to `_crate-e2e-bootstrap`.
-- **Its coverage counts towards the crate's floor, but it never reports.** `test`
-  records its profiles under `target/coverage-profiles/notignored-e2e`;
-  `notignored:coverage` combines them with the other tiers' and enforces 95% —
-  most of the binary's lines are covered only from here.
+- **It hosts the crate's `coverage` target.** The floor needs this tier's
+  profiles, so the report lives where the journeys are selected; hosted on the
+  crate, it would pull them into every root-only change.
 - **The packaging journeys stay in this project, deliberately.** They are the
   slowest (`verify_npm`, `packaging`, `installer`, …), but the whole tier runs in
   about 30 seconds of wall clock on a warm build, they share this binary's

@@ -4,7 +4,7 @@ This directory is the crate's **integration tier**: the `tests/*.rs` suites that
 hold files to each other — workflows, the action, the installer, the packaging
 manifests, the report schema — by reading them. `tests/e2e/` below it is a
 project of its own (`notignored-e2e`); Nx maps a file to the project whose root
-is its longest prefix, so nothing here selects the journeys.
+is its longest prefix, so a change to a contract suite selects only this one.
 
 - **One cargo package, three Nx projects.** The tiers are split in the graph,
   not into crates: the journeys run the binary through `assert_cmd`'s
@@ -13,9 +13,6 @@ is its longest prefix, so nothing here selects the journeys.
   `test` selects its binaries with a nextest filter
   (`kind(test) and not binary(e2e)`), not with `-p`, and a new suite needs no
   graph edit.
-- **Its coverage counts towards the crate's floor, but it never reports.** `test`
-  records its profiles under `target/coverage-profiles/notignored-integration`
-  (`scripts/coverage.sh tier`), and `notignored:coverage` combines every tier's.
 - **`fixtures/`, `golden/` and `support/` live here but serve the journeys too.**
   The e2e project names them as inputs (`e2eSharedTests` in `nx.json`), so a
   change to one re-runs both tiers. A new directory the journeys read belongs in

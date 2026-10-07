@@ -52,6 +52,25 @@ fn integration() {
 }
 "#;
 
+/// A test that holds its tier's run open until the journey releases it, so a
+/// second run meets a lock a real run is holding. It marks when it starts and
+/// when it is released, in the directory `HOLD_DIR` names.
+const HOLD: &str = r#"use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+#[test]
+fn holds_the_run_open() {
+    let dir = PathBuf::from(std::env::var("HOLD_DIR").expect("HOLD_DIR"));
+    std::fs::write(dir.join("started"), "").unwrap();
+    let start = Instant::now();
+    while !dir.join("release").exists() {
+        assert!(start.elapsed() < Duration::from_secs(120), "never released");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::fs::write(dir.join("finished"), "").unwrap();
+}
+"#;
+
 /// The variables an enclosing instrumented run hands its tests. The scratch run
 /// is its own measurement, so none of them may reach it.
 fn is_enclosing_run_variable(name: &str) -> bool {
@@ -90,6 +109,7 @@ fn scratch_package() -> tempfile::TempDir {
     write(dir.path(), "Cargo.toml", MANIFEST);
     write(dir.path(), "src/lib.rs", LIB);
     write(dir.path(), "tests/integration.rs", INTEGRATION);
+    write(dir.path(), "tests/hold.rs", HOLD);
     for file in ["scripts/coverage.sh", "rust-toolchain.toml"] {
         let contents = std::fs::read_to_string(root.join(file)).expect("read a repo file");
         write(dir.path(), file, &contents);
@@ -143,7 +163,7 @@ fn tiers_combine_into_one_report_that_enforces_the_floor() {
 
     for (tier, args) in [
         ("unit", &["--lib"][..]),
-        ("integration", &["--tests", "-E", "kind(test)"][..]),
+        ("integration", &["--test", "integration"][..]),
     ] {
         let mut command = vec!["tier", tier];
         command.extend_from_slice(args);
@@ -217,27 +237,60 @@ fn tiers_combine_into_one_report_that_enforces_the_floor() {
     );
 }
 
+/// Poll until `done` holds, or fail naming what never happened.
+fn wait_until(what: &str, done: impl Fn() -> bool) {
+    let start = std::time::Instant::now();
+    while !done() {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(120),
+            "timed out waiting until {what}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A tier run held open by the scratch package's `hold` test until `release`
+/// is written into `hold_dir`.
+fn held_tier(dir: &Path, hold_dir: &Path, stderr: std::process::Stdio) -> std::process::Child {
+    std::fs::create_dir_all(hold_dir).expect("create the hold directory");
+    let child = isolated(Command::new(bash_program()), dir)
+        .env("HOLD_DIR", hold_dir)
+        .args(["scripts/coverage.sh", "tier", "holder", "--test", "hold"])
+        .stdout(std::process::Stdio::null())
+        .stderr(stderr)
+        .spawn()
+        .expect("start the held tier");
+    wait_until("the held tier's test started", || {
+        hold_dir.join("started").exists()
+    });
+    child
+}
+
+/// Two tiers at once is what Nx does with a free slot. The second has to queue
+/// behind the first rather than sweep up its profiles, give up by name when the
+/// first never finishes, and take over the lock of a run killed before it could
+/// release it — without adopting the profiles that run left behind.
 #[test]
 fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
     let package = scratch_package();
     let dir = package.path();
-    let run = coverage(dir, &["tier", "unit", "--lib"]);
-    assert!(run.status.success(), "{}", text(&run));
-    let lock = dir.join("target/coverage-profiles/.lock");
+    let store = dir.join("target/coverage-profiles");
+    let loose = dir.join("target/llvm-cov-target");
+    let lock = store.join(".lock");
 
-    // Held by a live process — this test's own — the run queues, then gives up
-    // naming the holder once its wait runs out.
-    write(&lock, "pid", &std::process::id().to_string());
-    let held = isolated(Command::new(bash_program()), dir)
+    // A live holder: a bounded wait gives up naming it.
+    let first = dir.join("hold-1");
+    let mut holder = held_tier(dir, &first, std::process::Stdio::null());
+    let refused = isolated(Command::new(bash_program()), dir)
         .env("NOTIGNORED_COVERAGE_LOCK_WAIT", "2")
         .args(["scripts/coverage.sh", "tier", "unit", "--lib"])
         .output()
         .expect("run scripts/coverage.sh");
-    let said = text(&held);
+    let said = text(&refused);
     assert!(
-        !held.status.success()
+        !refused.status.success()
             && said.contains("waiting for another tier's run")
-            && said.contains(&format!("pid {} has held", std::process::id()))
+            && said.contains(&format!("pid {} has held", holder.id()))
             && said.contains("ACTION:"),
         "a held lock was not waited on and then refused by name:\n{said}"
     );
@@ -246,16 +299,66 @@ fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
         "the refused run removed a lock it never held"
     );
 
-    // Held by a process that has exited, it is taken over.
-    let mut exited = Command::new("true").spawn().expect("spawn true");
-    let pid = exited.id();
-    exited.wait().expect("wait for true");
-    write(&lock, "pid", &pid.to_string());
+    // An unbounded wait queues, and runs once the holder finishes.
+    let queued_log = dir.join("queued.log");
+    let mut queued = isolated(Command::new(bash_program()), dir)
+        .args(["scripts/coverage.sh", "tier", "unit", "--lib"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(&queued_log).expect("create the queued run's log"))
+        .spawn()
+        .expect("start the queued tier");
+    wait_until("the queued run reported that it is waiting", || {
+        std::fs::read_to_string(&queued_log)
+            .is_ok_and(|log| log.contains("waiting for another tier's run"))
+    });
+    write(&first, "release", "");
+    assert!(holder.wait().expect("wait for the holder").success());
+    assert!(
+        queued.wait().expect("wait for the queued run").success(),
+        "the queued run failed once the lock was free:\n{}",
+        std::fs::read_to_string(&queued_log).unwrap_or_default()
+    );
+    assert!(!profiles_in(&store.join("holder")).is_empty());
+    assert!(!profiles_in(&store.join("unit")).is_empty());
+
+    // A holder killed mid-run leaves its lock, and — once its orphaned test
+    // exits — profiles that belong to no tier.
+    let second = dir.join("hold-2");
+    let mut killed = held_tier(dir, &second, std::process::Stdio::null());
+    let killed_pid = killed.id();
+    let before = profiles_in(&loose).len();
+    killed.kill().expect("kill the held tier this test started");
+    killed.wait().expect("reap the killed tier");
+    write(&second, "release", "");
+    wait_until("the killed run's test wrote its profile", || {
+        second.join("finished").exists() && profiles_in(&loose).len() > before
+    });
+    let leftovers: Vec<_> = profiles_in(&loose)
+        .iter()
+        .filter_map(|path| path.file_name().map(std::ffi::OsStr::to_os_string))
+        .collect();
+    assert!(lock.is_dir(), "the killed run's lock is already gone");
+
     let taken = coverage(dir, &["tier", "unit", "--lib"]);
     assert!(
-        taken.status.success() && text(&taken).contains(&format!("left by pid {pid}")),
+        taken.status.success() && text(&taken).contains(&format!("left by pid {killed_pid}")),
         "an abandoned lock was not taken over:\n{}",
         text(&taken)
+    );
+    let adopted: Vec<_> = profiles_in(&store.join("unit"))
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| leftovers.iter().any(|left| left == name))
+        })
+        .collect();
+    assert!(
+        adopted.is_empty(),
+        "the unit tier filed the killed run's profiles as its own: {adopted:?}"
+    );
+    assert!(
+        profiles_in(&loose).is_empty(),
+        "leftover profiles survived the run"
     );
     assert!(!lock.exists(), "the run did not release the lock it took");
 }

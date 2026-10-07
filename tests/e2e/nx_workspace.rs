@@ -32,6 +32,9 @@ const PROJECTS: [&str; 5] = [
 /// cross-platform legs run, so `just affected-crate` asks after every one.
 const CRATE_PROJECTS: [&str; 3] = ["notignored", "notignored-integration", "notignored-e2e"];
 
+/// The project whose `coverage` target enforces the crate's floor.
+const COVERAGE_PROJECT: &str = "notignored-e2e";
+
 /// `run-many`/`affected` fan out by target *name*, so one root command only
 /// covers the whole repo while these mean the same thing in every project.
 const UNIFORM_TARGETS: [&str; 6] = [
@@ -137,7 +140,7 @@ fn the_crates_check_aggregates_its_docs_tier() {
     let depends_on = config["targets"]["check"]["dependsOn"]
         .as_array()
         .expect("the crate's `check` declares dependsOn");
-    for tier in ["format-check", "lint", "test", "doc", "coverage"] {
+    for tier in ["format-check", "lint", "test", "doc"] {
         assert!(
             depends_on.iter().any(|entry| entry == tier),
             "the crate's `check` no longer depends on `{tier}`, so `just check` \
@@ -151,18 +154,28 @@ fn the_crates_check_aggregates_its_docs_tier() {
 /// profiles. A tier missing from either list would let the floor be measured
 /// over less of the suite than the e2e-inclusive run it replaced — silently,
 /// since a smaller suite can still clear 95% on the lines it happens to reach.
+///
+/// It is the e2e project's target, and in that project's `check`, because it
+/// needs the journeys' profiles: hosted anywhere the journeys are not selected,
+/// it would pull the expensive tier back into every change that reaches it.
 #[test]
 fn the_crates_coverage_combines_every_test_tier() {
     let config: serde_json::Value =
-        serde_json::from_str(nx(&["show", "project", "notignored", "--json"]).trim())
-            .expect("`nx show project notignored` is JSON");
+        serde_json::from_str(nx(&["show", "project", COVERAGE_PROJECT, "--json"]).trim())
+            .expect("`nx show project` is JSON");
+    assert!(
+        config["targets"]["check"]["dependsOn"]
+            .as_array()
+            .is_some_and(|tiers| tiers.iter().any(|tier| tier == "coverage")),
+        "{COVERAGE_PROJECT}'s `check` no longer runs `coverage`, so no gate enforces the floor"
+    );
     let coverage = &config["targets"]["coverage"];
     let depends_on = coverage["dependsOn"]
         .as_array()
-        .expect("the crate's `coverage` declares dependsOn");
+        .expect("the `coverage` target declares dependsOn");
     let waits_on = |project: &str| {
         depends_on.iter().any(|entry| {
-            (project == "notignored" && entry == "test")
+            (project == COVERAGE_PROJECT && entry == "test")
                 || (entry["target"] == "test"
                     && entry["projects"]
                         .as_array()
@@ -204,7 +217,7 @@ fn the_crates_coverage_combines_every_test_tier() {
         );
         assert!(
             waits_on(project),
-            "`notignored:coverage` does not depend on {project}:test, so it can \
+            "`{COVERAGE_PROJECT}:coverage` does not depend on {project}:test, so it can \
              report before that tier's profiles exist\n\
              ACTION: add it to the coverage target's dependsOn in project.json"
         );

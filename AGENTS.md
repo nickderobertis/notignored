@@ -68,12 +68,12 @@ the journeys are projects of their own. The e2e tier is the expensive one, so it
 depends on no project and names only the root files it reads (`e2eRootInputs`).
 
 **Coverage is measured per tier and enforced once.** Each tier's `test` runs
-`cargo llvm-cov --no-report` through `scripts/coverage.sh`, which files its
-profiles as that target's cached output, and `notignored:coverage` — in the
-crate's `check` — merges all three and holds the 95% line floor over `src/`, the
-same measurement the single e2e-inclusive run made. It runs wherever the crate
-is affected, which selects every tier; a change to the tests alone is measured
-again by the release-prep sweep.
+`cargo llvm-cov --no-report` through `scripts/coverage.sh`, and
+`notignored-e2e:coverage` merges all three and holds the 95% line floor over
+`src/`, the same measurement the single e2e-inclusive run made. It belongs to the
+e2e project so it runs exactly when the journeys do; a change that reaches
+neither the journeys nor `src/` (a contract suite alone) is measured again by the
+release-prep sweep.
 
 Nx **runs** targets; it never decides what one does. A target names its project's
 own language-native tool (`_crate-*` recipes for cargo, ruff/mypy for the Python

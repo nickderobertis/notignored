@@ -60,11 +60,13 @@ explicit_base() {
   case "$sha" in
   "" | *[!0-9a-fA-F]*)
     echo "nx-affected: NOTIGNORED_NX_BASE_SHA '$sha' is not a commit id" >&2
+    echo "ACTION: set it to a hexadecimal commit id, or unset it to use the merge base" >&2
     return 1
     ;;
   esac
   if ! git rev-parse --verify --quiet "$sha^{commit}" 2>/dev/null; then
     echo "nx-affected: NOTIGNORED_NX_BASE_SHA '$sha' is not a commit in this checkout" >&2
+    echo "ACTION: fetch that commit (a full-depth checkout has it), or correct the variable" >&2
     return 1
   fi
 }
@@ -111,6 +113,10 @@ case "${1:-}" in
   # project whose name is a substring of another's would otherwise answer for it.
   # Exit 0 is "affected", 1 is "not"; anything else — output that is not an array
   # of names, a node that would not run — is an answer nobody read, so it selects.
+  # llmlint: ignore-block[changed_behavior_has_e2e] only a substitute for Nx could
+  # print something other than its JSON list, and the journeys drive the real Nx
+  # rather than a stub; tests/e2e/nx_workspace.rs proves the parsed path's true and
+  # false answers, and every other way this script cannot decide fails closed too.
   verdict=0
   # shellcheck disable=SC2016 # JavaScript, whose `${...}` templates are for node to expand
   printf '%s' "$projects" | node -e '
@@ -137,6 +143,7 @@ case "${1:-}" in
     printf 'true\n'
     ;;
   esac
+  # llmlint: ignore-end[changed_behavior_has_e2e]
   ;;
 *)
   [ "$#" -gt 0 ] || {

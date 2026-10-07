@@ -28,9 +28,17 @@
       ],
       "outputs": ["{workspaceRoot}/target/coverage-profiles/notignored-e2e"]
     },
+    "coverage": {
+      "command": "just _crate-coverage",
+      "cache": false,
+      "dependsOn": [
+        "test",
+        { "projects": ["notignored", "notignored-integration"], "target": "test" }
+      ]
+    },
     "check": {
       "executor": "nx:noop",
-      "dependsOn": ["format-check", "lint", "test"]
+      "dependsOn": ["format-check", "lint", "test", "coverage"]
     }
   }
 }

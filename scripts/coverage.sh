@@ -88,6 +88,12 @@ lock() {
     [ -d "$LOCK" ] || die "cannot create the lock $LOCK" \
       "check that $STORE is writable by you, then re-run"
     holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    # Only a positive process id is probed. Anything else — a holder that has
+    # made the lock but not yet written to it, or a torn write — is waited on
+    # like a live one, never taken over on a guess.
+    case "$holder" in
+    "" | 0* | *[!0-9]*) holder="" ;;
+    esac
     if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
       echo "coverage: taking over a lock left by pid $holder, which has exited" >&2
       must "remove the stale lock $LOCK" rm -rf "$LOCK"
@@ -120,7 +126,6 @@ clear_loose_profiles() {
     \( -name '*.profraw' -o -name '*.profdata' -o -name '*-profraw-list' \) -delete
 }
 
-# The profiles one tier has stored, or nothing when it has none.
 stored_profiles() {
   [ -d "$STORE/$1" ] || return 0
   must "list $1's stored profiles" find "$STORE/$1" -maxdepth 1 -type f -name '*.profraw'

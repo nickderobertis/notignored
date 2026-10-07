@@ -116,7 +116,7 @@ lint:
     @bash scripts/nx.sh run-many -t lint
 
 # Every project's test suite, then the crate's coverage floor over all three of
-# its tiers (`notignored:coverage`, which needs every tier's profiles).
+# its tiers (`notignored-e2e:coverage`, which needs every tier's profiles).
 test:
     @bash scripts/nx.sh run-many -t test coverage
 
