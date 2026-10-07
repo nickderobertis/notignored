@@ -99,7 +99,9 @@ holder_of() {
 # contender that queued behind the same dead run sees the same pid, so the
 # decision and the removal happen under a second mkdir mutex, and the holder is
 # read again inside it: a contender that lost the race finds a live holder — or
-# no lock at all — and removes nothing. Returns non-zero when the mutex is busy.
+# no lock at all — and removes nothing. Returns non-zero when the mutex is busy,
+# and sets `took_over` to the dead pid when this contender removed its lock.
+took_over=""
 reclaim() {
   local seen="$1"
   mkdir "$RECLAIM" 2>/dev/null || return 1
@@ -110,13 +112,13 @@ reclaim() {
       "check that $STORE is writable by you, delete $RECLAIM if it remains, then re-run"
   }
   if [ "$(holder_of "$LOCK")" = "$seen" ]; then
-    echo "coverage: taking over a lock left by pid $seen, which has exited" >&2
     rm -rf "$LOCK" || {
       # Best effort: the refusal below names both directories either way.
       rm -rf "$RECLAIM" 2>/dev/null || true
       die "could not remove the stale lock $LOCK" \
         "check that $STORE is writable by you, or delete $LOCK and $RECLAIM, then re-run"
     }
+    took_over="$seen"
   fi
   must "release $RECLAIM" rm -rf "$RECLAIM"
 }
@@ -159,6 +161,10 @@ lock() {
     holder="$(holder_of "$LOCK")"
     if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
       reclaim "$holder" || refuse_dead_reclaim
+      if [ -n "$took_over" ]; then
+        echo "coverage: took over a lock left by pid $took_over, which had exited" >&2
+        took_over=""
+      fi
       [ -d "$RECLAIM" ] || continue
     elif [ "$waited" -eq 0 ]; then
       echo "coverage: waiting for another tier's run (pid ${holder:-unknown}) to finish" >&2
