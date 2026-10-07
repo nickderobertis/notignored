@@ -175,6 +175,17 @@ report() {
         "run its tier first: just nx run $project:test"
   done
   lock
+  # A tier Nx replayed from cache brings back its profiles but not the binaries
+  # they count, and the target directory may have been rebuilt from other sources
+  # since. So rebuild every test binary from the sources as they are — a no-op
+  # when the tiers just ran — selecting no test, so nothing runs.
+  local build
+  if ! build="$(cargo llvm-cov --no-report nextest --locked --tests -E 'none()' \
+    --no-tests=pass --status-level none --final-status-level none 2>&1)"; then
+    printf '%s\n' "$build" >&2
+    die "could not build the instrumented test binaries the report reads" \
+      "fix the build error above, then re-run"
+  fi
   clear_loose_profiles
   must "create $COV_DIR" mkdir -p "$COV_DIR"
   local found file
@@ -195,8 +206,7 @@ EOF
   if [ "$status" -ne 0 ]; then
     {
       echo "coverage: below ${FLOOR}% lines over the tiers $*, or the report could not be built"
-      echo "ACTION: cover the lines the table above counts as missed. If a tier replayed from"
-      echo "        cache onto a target directory rebuilt since, re-run it: NX_SKIP_NX_CACHE=true just test"
+      echo "ACTION: cover the lines the table above counts as missed"
     } >&2
     exit "$status"
   fi

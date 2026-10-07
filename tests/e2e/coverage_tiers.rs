@@ -235,6 +235,28 @@ fn tiers_combine_into_one_report_that_enforces_the_floor() {
         before.0,
         "the report consumed the stored profiles a cached tier would replay"
     );
+
+    // What Nx does on a cache hit: the sources are back where a tier's last run
+    // saw them and its profiles are restored, but the binaries on disk were
+    // built since, from other sources. The report still has to be exact.
+    let cached = dir.join("cached-unit");
+    std::fs::rename(store.join("unit"), &cached).expect("set the unit tier's profiles aside");
+    write(
+        dir,
+        "src/lib.rs",
+        &format!("{LIB}\npub fn added_since(x: u32) -> u32 {{\n    x + 7\n}}\n"),
+    );
+    let rebuilt = coverage(dir, &["tier", "unit", "--lib"]);
+    assert!(rebuilt.status.success(), "{}", text(&rebuilt));
+    write(dir, "src/lib.rs", LIB);
+    std::fs::remove_dir_all(store.join("unit")).expect("drop the newer run's profiles");
+    std::fs::rename(&cached, store.join("unit")).expect("replay the cached profiles");
+    let replayed = coverage(dir, &["report", "unit", "integration"]);
+    assert!(
+        replayed.status.success() && String::from_utf8_lossy(&replayed.stdout).contains("100.00%"),
+        "a report over replayed profiles measured binaries built from other sources:\n{}",
+        text(&replayed)
+    );
 }
 
 fn wait_until(what: &str, done: impl Fn() -> bool) {
