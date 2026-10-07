@@ -367,6 +367,168 @@ fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
     assert!(!lock.exists(), "the run did not release the lock it took");
 }
 
+/// How many contenders race for one abandoned lock.
+const CONTENDERS: usize = 8;
+
+/// Releases every hold when a journey ends, passing or not, and waits for the
+/// started ones to see it before the scratch directory goes, so a failed
+/// assertion leaves no held run waiting out its timeout.
+struct ReleaseAll(Vec<PathBuf>);
+
+impl Drop for ReleaseAll {
+    fn drop(&mut self) {
+        for hold in &self.0 {
+            let _ = std::fs::write(hold.join("release"), "");
+        }
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(10)
+            && self
+                .0
+                .iter()
+                .any(|hold| hold.join("started").exists() && !hold.join("finished").exists())
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
+/// Several queued runs meeting the same abandoned lock all read the same dead
+/// holder. Only one may reclaim it: a contender that removed the lock after
+/// another had already taken it over would run beside it and sweep up its
+/// profiles. Each contender here is a real run held open by the scratch `hold`
+/// test, so two running at once is visible as two started, unreleased holds.
+#[test]
+fn contenders_for_an_abandoned_lock_take_it_one_at_a_time() {
+    let package = scratch_package();
+    let dir = package.path();
+    let store = dir.join("target/coverage-profiles");
+    let lock = store.join(".lock");
+
+    // One uncontended held run: it builds the binaries, so the contenders below
+    // race only for the lock, and its profile count is what one run files.
+    let solo = dir.join("hold-solo");
+    std::fs::create_dir_all(&solo).expect("create the solo hold directory");
+    write(&solo, "release", "");
+    let warm = isolated(Command::new(bash_program()), dir)
+        .env("HOLD_DIR", &solo)
+        .args(["scripts/coverage.sh", "tier", "solo", "--test", "hold"])
+        .output()
+        .expect("run the solo tier");
+    assert!(warm.status.success(), "{}", text(&warm));
+    let per_run = profiles_in(&store.join("solo")).len();
+    assert!(per_run > 0, "the solo run stored no profiles");
+
+    // The abandoned lock: its holder has exited without releasing it.
+    let mut exited = Command::new("true").spawn().expect("spawn true");
+    let dead = exited.id();
+    exited.wait().expect("wait for true");
+    write(&lock, "pid", &dead.to_string());
+
+    let _release_all = ReleaseAll(
+        (0..CONTENDERS)
+            .map(|index| dir.join(format!("hold-{index}")))
+            .collect(),
+    );
+    let mut contenders: Vec<(String, PathBuf, std::process::Child)> = (0..CONTENDERS)
+        .map(|index| {
+            let name = format!("contender-{index}");
+            let hold = dir.join(format!("hold-{index}"));
+            std::fs::create_dir_all(&hold).expect("create a hold directory");
+            let child = isolated(Command::new(bash_program()), dir)
+                .env("HOLD_DIR", &hold)
+                .args(["scripts/coverage.sh", "tier", &name, "--test", "hold"])
+                .stdout(std::process::Stdio::null())
+                .stderr(
+                    std::fs::File::create(dir.join(format!("{name}.log")))
+                        .expect("create a contender's log"),
+                )
+                .spawn()
+                .expect("start a contender");
+            (name, hold, child)
+        })
+        .collect();
+
+    let running = |contenders: &[(String, PathBuf, std::process::Child)]| -> Vec<usize> {
+        contenders
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, hold, _))| {
+                hold.join("started").exists() && !hold.join("release").exists()
+            })
+            .map(|(index, _)| index)
+            .collect()
+    };
+    for _ in 0..CONTENDERS {
+        let start = std::time::Instant::now();
+        while running(&contenders).is_empty() {
+            if start.elapsed() > std::time::Duration::from_secs(120) {
+                let states: Vec<String> = contenders
+                    .iter_mut()
+                    .map(|(name, _, child)| {
+                        format!(
+                            "{name}: {:?}\n{}",
+                            child.try_wait(),
+                            std::fs::read_to_string(dir.join(format!("{name}.log")))
+                                .unwrap_or_default()
+                        )
+                    })
+                    .collect();
+                panic!("no contender took the lock:\n{}", states.join("\n"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // Long enough for every queued contender to have retried the lock.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        let now = running(&contenders);
+        assert_eq!(
+            now.len(),
+            1,
+            "{} contenders ran at once after reclaiming one abandoned lock: {:?}",
+            now.len(),
+            now.iter()
+                .map(|&index| &contenders[index].0)
+                .collect::<Vec<_>>()
+        );
+        let (name, hold, child) = &mut contenders[now[0]];
+        let owner = std::fs::read_to_string(lock.join("pid")).unwrap_or_default();
+        assert_eq!(
+            owner.trim(),
+            child.id().to_string(),
+            "{name} is running but the lock does not name it — another contender \
+             removed or replaced the lock it holds"
+        );
+        write(hold, "release", "");
+        let status = child.wait().expect("wait for a contender");
+        assert!(
+            status.success(),
+            "{name} failed:\n{}",
+            std::fs::read_to_string(dir.join(format!("{name}.log"))).unwrap_or_default()
+        );
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    for (name, _, _) in &contenders {
+        let profiles = profiles_in(&store.join(name));
+        assert_eq!(
+            profiles.len(),
+            per_run,
+            "{name} filed {} profiles where one run files {per_run}: profiles were mixed",
+            profiles.len()
+        );
+        for profile in profiles {
+            assert!(
+                seen.insert(profile.file_name().map(std::ffi::OsStr::to_os_string)),
+                "{} was filed under two contenders",
+                profile.display()
+            );
+        }
+    }
+    assert!(
+        !lock.exists(),
+        "the last contender did not release the lock"
+    );
+}
+
 #[test]
 fn the_script_refuses_what_it_cannot_measure() {
     let package = tempfile::tempdir().expect("tempdir");
@@ -536,6 +698,11 @@ fn a_tier_replayed_from_the_nx_cache_is_measured_against_the_current_sources() {
         text(&first)
     );
 
+    // Nx notices a changed file by its modification time, and a rewrite inside
+    // the same tick as its last read goes unseen — so every edit here waits for
+    // the clock to move first, as any edit made by hand would have.
+    let next_tick = || std::thread::sleep(std::time::Duration::from_millis(1100));
+    next_tick();
     write(
         dir,
         "src/lib.rs",
@@ -548,6 +715,7 @@ fn a_tier_replayed_from_the_nx_cache_is_measured_against_the_current_sources() {
         text(&changed)
     );
 
+    next_tick();
     write(dir, "src/lib.rs", LIB);
     let replayed = nx_run(dir, "unit:coverage");
     let said = plain(&replayed);

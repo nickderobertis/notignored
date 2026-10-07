@@ -42,6 +42,7 @@ readonly COV_DIR="$TARGET_DIR/llvm-cov-target"
 # tests/e2e/nx_workspace.rs holds the two to the same path.
 readonly STORE="$ROOT/target/coverage-profiles"
 readonly LOCK="$STORE/.lock"
+readonly RECLAIM="$STORE/.lock-reclaim"
 # Long enough for the slowest tier to finish ahead of a queued one.
 readonly LOCK_WAIT_SECONDS="${NOTIGNORED_COVERAGE_LOCK_WAIT:-3600}"
 
@@ -74,11 +75,65 @@ valid_project() {
 }
 
 write_pid() {
-  echo "$$" >"$LOCK/pid"
+  echo "$$" >"$1/pid"
+}
+
+# The process id a lock directory records, or nothing when it records none a
+# probe could trust — a holder that has made the directory but not yet written
+# to it, or a torn write — which is then waited on like a live one, never taken
+# over on a guess.
+holder_of() {
+  local holder
+  holder="$(cat "$1/pid" 2>/dev/null || true)"
+  case "$holder" in
+  "" | 0* | *[!0-9]*) holder="" ;;
+  esac
+  printf '%s' "$holder"
+}
+
+# Reclaim the lock from `$1`, the dead holder this contender saw. Every
+# contender that queued behind the same dead run sees the same pid, so the
+# decision and the removal happen under a second mkdir mutex, and the holder is
+# read again inside it: a contender that lost the race finds a live holder — or
+# no lock at all — and removes nothing. Returns non-zero when the mutex is busy.
+reclaim() {
+  local seen="$1"
+  mkdir "$RECLAIM" 2>/dev/null || return 1
+  write_pid "$RECLAIM" || {
+    rm -rf "$RECLAIM"
+    die "could not record this run in $RECLAIM" "check that $STORE is writable by you, then re-run"
+  }
+  if [ "$(holder_of "$LOCK")" = "$seen" ]; then
+    echo "coverage: taking over a lock left by pid $seen, which has exited" >&2
+    rm -rf "$LOCK" || {
+      rm -rf "$RECLAIM"
+      die "could not remove the stale lock $LOCK" \
+        "check that $STORE is writable by you, or delete $LOCK, then re-run"
+    }
+  fi
+  must "release $RECLAIM" rm -rf "$RECLAIM"
+}
+
+# A reclaim mutex is held for a moment. One whose holder has exited was
+# abandoned mid-reclaim, and is never cleared on a guess — clearing it is the same
+# check-then-act race the mutex exists to close — so the run stops and names it.
+refuse_dead_reclaim() {
+  local holder
+  holder="$(holder_of "$RECLAIM")"
+  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+    die "pid $holder exited while reclaiming $LOCK, leaving $RECLAIM behind" \
+      "if no coverage run is in progress, delete $RECLAIM and re-run"
+  fi
+}
+
+# Release the lock on exit only while it is still this run's.
+release() {
+  [ "$(holder_of "$LOCK")" = "$$" ] || return 0
+  rm -rf "$LOCK" || echo "coverage: could not remove $LOCK; delete it before the next run" >&2
 }
 
 # mkdir is the one atomic test-and-set every platform's shell has. A lock whose
-# holder is gone — a run killed before its trap — is taken over, not waited on;
+# holder is gone — a run killed before its trap — is reclaimed, not waited on;
 # one whose holder is alive is waited on, for a bounded time.
 # llmlint: ignore-block[tool_output_is_signal] a run that pauses behind another,
 # or overrides a dead run's lock, says so once on stderr: silence would read as a
@@ -87,32 +142,29 @@ lock() {
   must "create $STORE" mkdir -p "$STORE"
   local waited=0 holder
   until mkdir "$LOCK" 2>/dev/null; do
-    [ -d "$LOCK" ] || die "cannot create the lock $LOCK" \
-      "check that $STORE is writable by you, then re-run"
-    holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
-    # Only a positive process id is probed. Anything else — a holder that has
-    # made the lock but not yet written to it, or a torn write — is waited on
-    # like a live one, never taken over on a guess.
-    case "$holder" in
-    "" | 0* | *[!0-9]*) holder="" ;;
-    esac
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-      echo "coverage: taking over a lock left by pid $holder, which has exited" >&2
-      must "remove the stale lock $LOCK" rm -rf "$LOCK"
-      continue
+    # Gone already — released between that attempt and this look — is
+    # contention: try again at once. Still impossible to make is an error.
+    if [ ! -d "$LOCK" ]; then
+      mkdir "$LOCK" 2>/dev/null && break
+      [ -d "$LOCK" ] || die "cannot create the lock $LOCK" \
+        "check that $STORE is writable by you, then re-run"
     fi
-    if [ "$waited" -eq 0 ]; then
+    holder="$(holder_of "$LOCK")"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      reclaim "$holder" || refuse_dead_reclaim
+      [ -d "$RECLAIM" ] || continue
+    elif [ "$waited" -eq 0 ]; then
       echo "coverage: waiting for another tier's run (pid ${holder:-unknown}) to finish" >&2
     fi
     if [ "$waited" -ge "$LOCK_WAIT_SECONDS" ]; then
       die "pid ${holder:-unknown} has held $LOCK for over ${LOCK_WAIT_SECONDS}s" \
-        "if no coverage run is in progress, delete $LOCK and re-run"
+        "if no coverage run is in progress, delete $LOCK and $RECLAIM, then re-run"
     fi
     waited=$((waited + 1))
     sleep 1
   done
-  trap 'rm -rf "$LOCK" || echo "coverage: could not remove $LOCK; delete it before the next run" >&2' EXIT
-  must "record this run in $LOCK" write_pid
+  trap release EXIT
+  must "record this run in $LOCK" write_pid "$LOCK"
 }
 # llmlint: ignore-end[tool_output_is_signal]
 
