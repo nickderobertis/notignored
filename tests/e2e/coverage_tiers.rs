@@ -488,12 +488,35 @@ fn nx_run(dir: &Path, target: &str) -> Output {
             command.env_remove(name);
         }
     }
+    // An enclosing Nx task forces colour on; the assertions read plain text.
     command
         .args(["run", target, "--outputStyle=static"])
         .env("NX_DAEMON", "false")
         .env("NX_USE_LOCAL", "true")
+        .env("FORCE_COLOR", "0")
+        .env("NO_COLOR", "1")
         .output()
         .expect("run nx")
+}
+
+/// `text` with any terminal colour sequences removed, should a tool emit them
+/// regardless.
+fn plain(output: &Output) -> String {
+    let raw = text(output);
+    let mut plain = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for end in chars.by_ref() {
+                if end.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
 }
 
 /// A cache hit brings a tier's profiles back but not the binaries they count:
@@ -520,14 +543,14 @@ fn a_tier_replayed_from_the_nx_cache_is_measured_against_the_current_sources() {
     );
     let changed = nx_run(dir, "unit:test");
     assert!(
-        changed.status.success() && !text(&changed).contains("[local cache]"),
+        changed.status.success() && !plain(&changed).contains("[local cache]"),
         "the changed sources did not rebuild the unit tier:\n{}",
         text(&changed)
     );
 
     write(dir, "src/lib.rs", LIB);
     let replayed = nx_run(dir, "unit:coverage");
-    let said = text(&replayed);
+    let said = plain(&replayed);
     assert!(
         said.contains("nx run unit:test  [local cache]")
             && said.contains("nx run integration:test  [local cache]"),
