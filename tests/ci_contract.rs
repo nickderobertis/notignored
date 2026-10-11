@@ -522,9 +522,13 @@ fn a_push_run_is_never_cancelled_by_the_next_push() {
 }
 
 /// The activity types ci.yml's `pull_request` trigger must keep: GitHub's
-/// defaults, plus `ready_for_review`, since lifting a draft pushes no commit and
-/// would otherwise start no run for the head it makes ready.
-const PULL_REQUEST_TYPES: &[&str] = &["opened", "synchronize", "reopened", "ready_for_review"];
+/// defaults.
+const PULL_REQUEST_TYPES: &[&str] = &["opened", "synchronize", "reopened"];
+
+/// The activity type ci.yml's `pull_request` trigger must not name: lifting a
+/// draft pushes no commit, so the draft's runs already report on the head it
+/// makes ready, and a run on the lift would only repeat them.
+const REPEATS_A_DRAFTS_RUNS: &str = "ready_for_review";
 
 fn pull_request_type_problems(workflow: &Node) -> Vec<String> {
     let trigger = workflow.get("on").get("pull_request");
@@ -536,15 +540,22 @@ fn pull_request_type_problems(workflow: &Node) -> Vec<String> {
         ];
     };
     let types: Vec<&str> = types.list().iter().map(Node::scalar).collect();
-    PULL_REQUEST_TYPES
+    let mut problems: Vec<String> = PULL_REQUEST_TYPES
         .iter()
         .filter(|wanted| !types.contains(wanted))
         .map(|missing| format!("ci.yml's `pull_request` types {types:?} lack `{missing}`"))
-        .collect()
+        .collect();
+    if types.contains(&REPEATS_A_DRAFTS_RUNS) {
+        problems.push(format!(
+            "ci.yml's `pull_request` types {types:?} name `{REPEATS_A_DRAFTS_RUNS}`, \
+             which re-runs CI on a commit its draft runs already reported on"
+        ));
+    }
+    problems
 }
 
 #[test]
-fn a_pull_request_runs_when_it_opens_moves_or_leaves_draft() {
+fn a_pull_request_runs_when_it_opens_or_moves_and_not_when_it_leaves_draft() {
     assert_none(&pull_request_type_problems(&parse(&read(CI))));
 }
 
@@ -600,15 +611,20 @@ mod the_checks_catch {
     }
 
     #[test]
-    fn a_pull_request_trigger_that_drops_a_type() {
+    fn a_pull_request_trigger_with_the_wrong_types() {
         for (from, to, named) in [
             (
-                "types: [opened, synchronize, reopened, ready_for_review]",
                 "types: [opened, synchronize, reopened]",
-                "lack `ready_for_review`",
+                "types: [opened, synchronize]",
+                "lack `reopened`",
             ),
             (
-                "    types: [opened, synchronize, reopened, ready_for_review]\n",
+                "types: [opened, synchronize, reopened]",
+                "types: [opened, synchronize, reopened, ready_for_review]",
+                "name `ready_for_review`",
+            ),
+            (
+                "    types: [opened, synchronize, reopened]\n",
                 "",
                 "names no `types`",
             ),

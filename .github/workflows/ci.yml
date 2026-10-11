@@ -3,11 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
-  # The default activity types plus `ready_for_review`: lifting a draft pushes
-  # no commit, so without it the pull request's head is left with whatever ran
-  # while it was a draft and nothing reports for it once it is ready.
+  # The default activity types, without `ready_for_review`: lifting a draft
+  # pushes no commit, so the runs from while it was a draft already report on
+  # its head, and a run on the lift would only repeat them.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
 
 # Least privilege: most jobs only need to read the repo.
 permissions:
