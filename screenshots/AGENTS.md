@@ -162,11 +162,11 @@ baseline. That job cannot be a required check — its report lane needs write
 permissions a fork's pull request is never granted — so read a red `Visual docs`
 as "the output moved; bless it or explain it", not as advisory noise.
 
-The local pre-push guard (`.githooks/pre-push`, opt in with
-`git config core.hooksPath .githooks`) re-captures **only** when a `[guard].paths`
-file changes (`screencomp.toml`), and on drift it regenerates the baseline,
-builds a review gallery (`shots/review/index.html`), and blocks the push so you
-commit the refreshed baseline + README images deliberately.
+Pushes do not run visual capture or classification. CI owns the visual check;
+use the manual capture, baseline, and review commands above before pushing an
+intended output change. Existing clones configured with
+`core.hooksPath=.githooks` need no configuration change: the pre-push file has
+been removed.
 
 ## Changing the screenshots
 
