@@ -2,9 +2,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, isDeepStrictEqual } from "node:util";
 import { report } from "@onebudgetspec/sdk";
-import { eventClasses } from "./event-classes.mjs";
+import {
+  eventClasses,
+  variants,
+  variantKey,
+  lifecycleEvents,
+} from "./event-classes.mjs";
 import { sourceDigest } from "./workflow-graph.mjs";
 
 try {
@@ -30,38 +35,128 @@ try {
     !telemetry.jobCounts.length
   )
     throw new Error("incomplete telemetry workload");
-  for (const row of telemetry.jobCounts) {
-    if (
-      !row ||
-      typeof row.workflow !== "string" ||
-      typeof row.event !== "string" ||
-      !Array.isArray(row.rows) ||
-      !isCount(row.count) ||
-      row.count !== row.rows.length
+  const macRows = (run) => run.rows.filter((row) => row.enabled && row.macos);
+  const validRuns = (runs) =>
+    Array.isArray(runs) &&
+    runs.every(
+      (run) =>
+        run &&
+        typeof run.workflow === "string" &&
+        typeof run.event === "string" &&
+        Array.isArray(run.rows) &&
+        run.rows.every(
+          (row) =>
+            row &&
+            typeof row.enabled === "boolean" &&
+            typeof row.macos === "boolean" &&
+            Array.isArray(row.runner) &&
+            row.runner.length === 1 &&
+            typeof row.runner[0] === "string" &&
+            row.macos === row.runner[0].startsWith("macos-") &&
+            typeof row.job === "string",
+        ),
+    );
+  const sameSet = (actual, expected) =>
+    actual.length === expected.length &&
+    new Set(actual).size === actual.length &&
+    expected.every((id) => actual.includes(id));
+  const expectedVariants = variants();
+  const expectedScenarioIds = expectedVariants.flatMap((variant) =>
+    eventClasses.map(([id]) => `${id}/${variantKey(variant)}`),
+  );
+  if (
+    !sameSet(
+      telemetry.scenarios.map((row) => row.id),
+      expectedScenarioIds,
     )
-      throw new Error("invalid workflow job measurement");
+  )
+    throw new Error("incomplete scenario workload");
+  for (const scenario of telemetry.scenarios) {
+    const event = eventClasses.find(([id]) => scenario.id.startsWith(`${id}/`));
+    if (
+      !validRuns(scenario.runs) ||
+      scenario.event !== event[1] ||
+      scenario.action !== event[2] ||
+      scenario.ref !== event[3] ||
+      scenario.id !==
+        `${event[0]}/${variantKey({ ...scenario, fork: scenario.ownership === "fork" })}`
+    )
+      throw new Error("invalid scenario measurement");
   }
+  const expectedJobs = telemetry.scenarios.flatMap((scenario) =>
+    scenario.runs.map((run) => ({
+      scenario: scenario.id,
+      workflow: run.workflow,
+      event: run.event,
+      count: macRows(run).length,
+      rows: macRows(run),
+    })),
+  );
+  if (!isDeepStrictEqual(telemetry.jobCounts, expectedJobs))
+    throw new Error("job measurement differs from scenario rows");
+  if (
+    !sameSet(
+      telemetry.lifecycleCounts.map(variantKey),
+      expectedVariants.map(variantKey),
+    )
+  )
+    throw new Error("incomplete lifecycle workload");
+  const lifecycleSources = {
+    "ordinary-pr-push": "pr-synchronize",
+    "ordinary-base-merge": "base-push",
+    "version-only-release-pr": "pr-opened",
+    "release-base-merge": "release-merge",
+    "release-tag": "release-tag",
+    "release-published": "release-published",
+    "automatic-smoke": "downstream",
+    schedule: "scheduled",
+  };
+  const comparable = (runs, omitMac = false) =>
+    runs.map(({ workflow, event, rows }) => ({
+      workflow,
+      event,
+      rows: rows.map((row) =>
+        omitMac && row.macos ? { ...row, enabled: false } : row,
+      ),
+    }));
   for (const lifecycle of telemetry.lifecycleCounts) {
     if (
-      !lifecycle ||
-      !Array.isArray(lifecycle.runs) ||
+      !validRuns(lifecycle.runs) ||
       !isCount(lifecycle.count) ||
-      lifecycle.runs.some(
-        (run) =>
-          !run ||
-          !Array.isArray(run.rows) ||
-          run.rows.some(
-            (row) =>
-              typeof row.enabled !== "boolean" ||
-              typeof row.macos !== "boolean",
-          ),
+      !Array.isArray(lifecycle.eventScenarios) ||
+      !sameSet(
+        lifecycle.eventScenarios.map((event) => event.id),
+        lifecycleEvents,
       ) ||
-      lifecycle.count !==
-        lifecycle.runs.filter((run) =>
-          run.rows.some((row) => row.enabled && row.macos),
-        ).length
+      !isDeepStrictEqual(
+        lifecycle.runs,
+        lifecycle.eventScenarios.flatMap((event) => event.runs),
+      )
     )
       throw new Error("invalid lifecycle measurement");
+    for (const event of lifecycle.eventScenarios) {
+      const releasePr = event.id === "version-only-release-pr";
+      const variant = releasePr
+        ? { ...lifecycle, diff: "version", fork: false }
+        : lifecycle;
+      const scenario = telemetry.scenarios.find(
+        (row) =>
+          row.id === `${lifecycleSources[event.id]}/${variantKey(variant)}`,
+      );
+      if (
+        !validRuns(event.runs) ||
+        !isDeepStrictEqual(
+          comparable(event.runs),
+          comparable(scenario.runs, releasePr),
+        )
+      )
+        throw new Error("lifecycle event differs from recorded scenarios");
+    }
+    if (
+      lifecycle.count !==
+      lifecycle.runs.filter((run) => macRows(run).length).length
+    )
+      throw new Error("lifecycle count differs from rows");
   }
   if (!isCount(telemetry.jobsPerRun) || !isCount(telemetry.runsPerChange))
     throw new Error("invalid recorded count");

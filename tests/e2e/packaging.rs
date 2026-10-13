@@ -759,6 +759,14 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
             );
         }
 
+        run(
+            "install and execute the staged CLI forms without an SDK",
+            Command::new("bash")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.sh")
+                .arg(&stage)
+                .arg("python3"),
+        );
         let manifest_path = stage.join("manifest.json");
         let original_manifest = std::fs::read(&manifest_path).expect("read staged manifest");
         let good: serde_json::Value =

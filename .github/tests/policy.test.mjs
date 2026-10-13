@@ -161,6 +161,7 @@ export function classifyHistory(
   event,
   head = h.heads.version,
   base = h.base,
+  env = {},
 ) {
   const path = join(h.dir, "event.json");
   writeFileSync(
@@ -171,7 +172,11 @@ export function classifyHistory(
     execFileSync(
       "node",
       [policy, "classify", "--event", path, "--base", base, "--head", head],
-      { cwd: h.dir, encoding: "utf8" },
+      {
+        cwd: h.dir,
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_EVENT_NAME: "", ...env },
+      },
     ),
   );
 }
@@ -179,6 +184,23 @@ test("real classifier over git histories admits only same-repository semantic re
   const h = history();
   try {
     assert.equal(classifyHistory(h, payload()).isReleaseOnly, true);
+    for (const event of [{}, "{"])
+      assert.equal(
+        classifyHistory(h, event, h.heads.source, h.base, {
+          GITHUB_EVENT_NAME: "push",
+        }).macosRequired,
+        false,
+      );
+    assert.equal(
+      classifyHistory(
+        h,
+        { ...payload("feature"), event_name: "schedule" },
+        h.heads.source,
+        h.base,
+        { GITHUB_EVENT_NAME: "pull_request" },
+      ).macosRequired,
+      true,
+    );
     for (const event of [
       payload("feature"),
       payload(undefined, true),
@@ -294,7 +316,7 @@ export function workflowClassify(
       GITHUB_EVENT_PATH: path,
       GITHUB_OUTPUT: output,
       RUNNER_TEMP: h.dir,
-      POLICY_EVENT: eventName,
+      GITHUB_EVENT_NAME: eventName,
       POLICY_BASE: h.base,
       POLICY_HEAD: head,
     },

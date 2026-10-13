@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
-import { workflows } from "../workflow-graph.mjs";
+import { workflows, runWorkflow } from "../workflow-graph.mjs";
 
 test("both Darwin architectures retain exact-run artifacts and pre-publication native installers", () => {
   const release = workflows()["release.yml"].jobs;
@@ -107,4 +107,34 @@ test("modeled guard and arch outputs remain tied to the real commands and output
   assert.match(reusable, /ARCHES_OVERRIDE: \$\{\{ inputs.arches \}\}/);
   assert.match(reusable, /matrix: \$\{\{ steps.read.outputs.matrix \}\}/);
   assert.match(reusable, /screencomp arches --format json/);
+});
+
+test("real guard commands decide modeled prerequisite outputs, including changed conditions", () => {
+  const graph = workflows();
+  const scenario = {
+    event: "push",
+    ref: "refs/tags/v0.2.0",
+    policy: { macosRequired: false },
+    cratePublish: false,
+    releasePlz: false,
+  };
+  const enabled = (name, job, input = graph[name]) =>
+    runWorkflow(name, input, scenario).find((row) => row.job === job).enabled;
+  assert.equal(enabled("release.yml", "publish-crate"), false);
+  assert.equal(enabled("release-plz.yml", "release-plz"), false);
+  for (const [name, job] of [
+    ["release.yml", "publish-crate"],
+    ["release-plz.yml", "release-plz"],
+  ]) {
+    const changed = structuredClone(graph[name]);
+    changed.jobs.guard.steps[0].run = changed.jobs.guard.steps[0].run.replace(
+      '[ -n "$TOKEN" ]',
+      '[ -z "$TOKEN" ]',
+    );
+    assert.equal(
+      enabled(name, job, changed),
+      true,
+      "actual changed condition must control routing",
+    );
+  }
 });

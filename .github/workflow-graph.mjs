@@ -2,10 +2,71 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  mkdtempSync,
+  rmSync,
+} from "node:fs";
 import { data, Evaluator, Lexer, Parser } from "@actions/expressions";
 import { parse } from "yaml";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
+const guardCache = new Map();
+function guardOutputs(job, tokenPresent, root) {
+  const step = job.steps.find((step) => step.id === "check");
+  if (!step?.run || Object.keys(step.env ?? {}).join() !== "TOKEN")
+    throw new Error("unresolved guard command or environment");
+  const key = JSON.stringify([step.run, job.outputs, tokenPresent]);
+  if (guardCache.has(key)) return guardCache.get(key);
+  const scratch = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "macos-guard-"),
+  );
+  try {
+    const output = join(scratch, "outputs");
+    execFileSync("bash", ["-e", "-o", "pipefail", "-c", step.run], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: "pipe",
+      env: {
+        PATH: process.env.PATH,
+        TOKEN: tokenPresent ? "present" : "",
+        GITHUB_OUTPUT: output,
+      },
+    });
+    const parsed = Object.fromEntries(
+      readFileSync(output, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => line.split("=")),
+    );
+    const outputs = Object.fromEntries(
+      Object.entries(job.outputs).map(([field, expression]) => [
+        field,
+        resolve(expression, { steps: { check: { outputs: parsed } } }),
+      ]),
+    );
+    if (
+      !Object.values(outputs).every((value) =>
+        ["true", "false"].includes(value),
+      )
+    )
+      throw new Error("unresolved guard output");
+    guardCache.set(key, outputs);
+    return outputs;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+const hostedRunners = new Set([
+  "ubuntu-latest",
+  "ubuntu-24.04-arm",
+  "windows-latest",
+  "macos-latest",
+  "macos-15-intel",
+]);
 const archCache = new Map();
 const yamlCache = new Map();
 function yamlFile(path) {
@@ -313,7 +374,7 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
             throw new Error(
               `${name}/${id}: unresolved runner ${JSON.stringify(runner)}`,
             );
-          if (!labels.some((label) => /^(ubuntu|windows|macos)-/.test(label)))
+          if (labels.length !== 1 || !hostedRunners.has(labels[0]))
             throw new Error(
               `${name}/${id}: unclassified runner ${JSON.stringify(runner)}`,
             );
@@ -339,9 +400,9 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
           ),
         };
       else if (id === "guard" && name === "release.yml")
-        outputs = { publish: String(scenario.cratePublish ?? true) };
+        outputs = guardOutputs(job, scenario.cratePublish ?? true, root);
       else if (id === "guard" && name === "release-plz.yml")
-        outputs = { enabled: "true" };
+        outputs = guardOutputs(job, scenario.releasePlz ?? true, root);
       else if (id === "arches" && name === reusable) {
         const config = readFileSync(`${root}/screencomp.toml`, "utf8");
         let arches = archCache.get(config);

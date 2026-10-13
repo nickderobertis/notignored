@@ -171,6 +171,9 @@ if (
     } catch {
       event = {};
     }
+    // The runner owns event identity; payload data cannot authorize a PR skip.
+    if (process.env.GITHUB_EVENT_NAME)
+      event = { ...event, event_name: process.env.GITHUB_EVENT_NAME };
     console.log(JSON.stringify(classify(event, values.base, values.head)));
   } catch (error) {
     console.error(

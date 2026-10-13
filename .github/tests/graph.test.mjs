@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  mkdtempSync,
+  rmSync,
+} from "node:fs";
 import { test } from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse } from "yaml";
 import {
   evaluate,
@@ -13,7 +21,7 @@ import {
 } from "../workflow-graph.mjs";
 import { classifyHistory, history, payload } from "./policy.test.mjs";
 
-import { eventClasses } from "../event-classes.mjs";
+import { eventClasses, variants, variantKey } from "../event-classes.mjs";
 
 function macRows(run) {
   return run.rows.filter((row) => row.enabled && row.macos);
@@ -26,129 +34,115 @@ test("actual workflow/call graph routes the complete event and publish workload 
     const graph = workflows();
     const scenarios = [],
       lifecycles = [];
-    for (const cratePublish of [false, true])
-      for (const diff of ["source", "version", "dependency"])
-        for (const fork of [false, true])
-          for (const pypi of [false, true])
-            for (const npm of [false, true]) {
-              const vars = {
-                PYPI_PUBLISH: String(pypi),
-                NPM_PUBLISH: String(npm),
-              };
-              const ordinary = payload("feature/mac-policy", fork);
-              const release = payload();
-              const ordinaryPolicy = classifyHistory(
-                h,
-                ordinary,
-                h.heads[diff],
-              );
-              const releasePolicy = classifyHistory(
-                h,
-                release,
-                h.heads.version,
-              );
-              for (const [id, event, action, ref] of eventClasses) {
-                const scenario = {
-                  id: `${id}/${diff}/${fork ? "fork" : "same"}/${pypi}/${npm}/${cratePublish}`,
-                  event,
-                  action,
-                  ref,
-                  vars,
-                  policy: ordinaryPolicy,
-                  pr: ordinary.pull_request,
-                  diff,
-                  ownership: fork ? "fork" : "same",
-                  inputs: { diagnostic: id === "manual-opt-in" },
-                  cratePublish,
-                  workflow: "Release",
-                };
-                const runs = fanout(scenario);
-                for (const run of runs) {
-                  for (const row of macRows(run))
-                    assert.ok(
-                      (run.workflow === "ci.yml" &&
-                        event === "pull_request" &&
-                        row.job === "macos") ||
-                        (run.workflow === "release.yml" &&
-                          event === "push" &&
-                          ref.startsWith("refs/tags/") &&
-                          row.job === "macos-build") ||
-                        (run.workflow === "published-smoke.yml" &&
-                          event === "workflow_dispatch" &&
-                          scenario.inputs.diagnostic &&
-                          row.job === "macos-diagnostic"),
-                      `unauthorized Mac location ${JSON.stringify({ scenario, row })}`,
-                    );
-                }
-                scenarios.push({ ...scenario, runs });
-              }
-              const lifecycle = [
-                {
-                  id: "ordinary-pr-push",
-                  event: "pull_request",
-                  action: "synchronize",
-                  ref: "refs/pull/1/merge",
-                  pr: ordinary.pull_request,
-                  policy: ordinaryPolicy,
-                },
-                {
-                  id: "ordinary-base-merge",
-                  event: "push",
-                  ref: "refs/heads/main",
-                  policy: ordinaryPolicy,
-                },
-                {
-                  id: "version-only-release-pr",
-                  event: "pull_request",
-                  action: "opened",
-                  ref: "refs/pull/2/merge",
-                  pr: release.pull_request,
-                  policy: releasePolicy,
-                },
-                {
-                  id: "release-base-merge",
-                  event: "push",
-                  ref: "refs/heads/main",
-                  policy: releasePolicy,
-                },
-                {
-                  id: "release-tag",
-                  event: "push",
-                  ref: "refs/tags/v0.2.0",
-                  policy: releasePolicy,
-                },
-                {
-                  id: "release-published",
-                  event: "release",
-                  action: "published",
-                  ref: "refs/tags/v0.2.0",
-                  policy: releasePolicy,
-                },
-                {
-                  id: "automatic-smoke",
-                  event: "workflow_run",
-                  action: "completed",
-                  workflow: "Release",
-                  ref: "refs/heads/main",
-                  policy: releasePolicy,
-                },
-                {
-                  id: "schedule",
-                  event: "schedule",
-                  ref: "refs/heads/main",
-                  policy: releasePolicy,
-                },
-              ].flatMap((s) =>
-                fanout({ ...s, vars, cratePublish, inputs: {} }),
-              );
-              lifecycles.push({
-                diff,
-                fork,
-                vars,
-                cratePublish,
-                runs: lifecycle,
-              });
-            }
+    for (const { diff, fork, vars, cratePublish } of variants()) {
+      const ordinary = payload("feature/mac-policy", fork);
+      const release = payload();
+      const ordinaryPolicy = classifyHistory(h, ordinary, h.heads[diff]);
+      const releasePolicy = classifyHistory(h, release, h.heads.version);
+      for (const [id, event, action, ref] of eventClasses) {
+        const scenario = {
+          id: `${id}/${variantKey({ diff, fork, vars, cratePublish })}`,
+          event,
+          action,
+          ref,
+          vars,
+          policy: ordinaryPolicy,
+          pr: ordinary.pull_request,
+          diff,
+          ownership: fork ? "fork" : "same",
+          inputs: { diagnostic: id === "manual-opt-in" },
+          cratePublish,
+          workflow: "Release",
+        };
+        const runs = fanout(scenario);
+        for (const run of runs) {
+          for (const row of macRows(run))
+            assert.ok(
+              (run.workflow === "ci.yml" &&
+                event === "pull_request" &&
+                row.job === "macos") ||
+                (run.workflow === "release.yml" &&
+                  event === "push" &&
+                  ref.startsWith("refs/tags/") &&
+                  row.job === "macos-build") ||
+                (run.workflow === "published-smoke.yml" &&
+                  event === "workflow_dispatch" &&
+                  scenario.inputs.diagnostic &&
+                  row.job === "macos-diagnostic"),
+              `unauthorized Mac location ${JSON.stringify({ scenario, row })}`,
+            );
+        }
+        scenarios.push({ ...scenario, runs });
+      }
+      const lifecycle = [
+        {
+          id: "ordinary-pr-push",
+          event: "pull_request",
+          action: "synchronize",
+          ref: "refs/pull/1/merge",
+          pr: ordinary.pull_request,
+          policy: ordinaryPolicy,
+        },
+        {
+          id: "ordinary-base-merge",
+          event: "push",
+          ref: "refs/heads/main",
+          policy: ordinaryPolicy,
+        },
+        {
+          id: "version-only-release-pr",
+          event: "pull_request",
+          action: "opened",
+          ref: "refs/pull/2/merge",
+          pr: release.pull_request,
+          policy: releasePolicy,
+        },
+        {
+          id: "release-base-merge",
+          event: "push",
+          ref: "refs/heads/main",
+          policy: releasePolicy,
+        },
+        {
+          id: "release-tag",
+          event: "push",
+          ref: "refs/tags/v0.2.0",
+          policy: releasePolicy,
+        },
+        {
+          id: "release-published",
+          event: "release",
+          action: "published",
+          ref: "refs/tags/v0.2.0",
+          policy: releasePolicy,
+        },
+        {
+          id: "automatic-smoke",
+          event: "workflow_run",
+          action: "completed",
+          workflow: "Release",
+          ref: "refs/heads/main",
+          policy: releasePolicy,
+        },
+        {
+          id: "schedule",
+          event: "schedule",
+          ref: "refs/heads/main",
+          policy: releasePolicy,
+        },
+      ].map((s) => ({
+        id: s.id,
+        runs: fanout({ ...s, vars, cratePublish, inputs: {} }),
+      }));
+      lifecycles.push({
+        diff,
+        fork,
+        vars,
+        cratePublish,
+        eventScenarios: lifecycle,
+        runs: lifecycle.flatMap((event) => event.runs),
+      });
+    }
     for (const kind of ["source", "dependency", "metadata"]) {
       const scenario = {
         id: `forged-release-${kind}`,
@@ -261,6 +255,26 @@ test("actual workflow/call graph routes the complete event and publish workload 
       { ...validTelemetry, scenarios: "not-an-array" },
       { ...validTelemetry, lifecycleCounts: [] },
       { ...validTelemetry, jobCounts: undefined },
+      { ...validTelemetry, scenarios: validTelemetry.scenarios.slice(1) },
+      { ...validTelemetry, jobCounts: validTelemetry.jobCounts.slice(1) },
+      {
+        ...validTelemetry,
+        lifecycleCounts: validTelemetry.lifecycleCounts.slice(1),
+      },
+      {
+        ...validTelemetry,
+        jobCounts: validTelemetry.jobCounts.map((r, i) =>
+          i
+            ? r
+            : { ...r, rows: r.rows.map((row) => ({ ...row, macos: false })) },
+        ),
+      },
+      {
+        ...validTelemetry,
+        lifecycleCounts: validTelemetry.lifecycleCounts.map((r, i) =>
+          i ? r : { ...r, eventScenarios: r.eventScenarios.slice(1) },
+        ),
+      },
       { ...validTelemetry, jobsPerRun: undefined },
       { ...validTelemetry, jobsPerRun: -1 },
       { ...validTelemetry, jobsPerRun: 0 },
@@ -371,6 +385,8 @@ test("matrix expansion and published expression evaluator resolve runners; unres
     { "runs-on": "${{ needs.unknown.outputs.os }}" },
     { uses: "unknown/repo/.github/workflows/call.yml@v1" },
     { "runs-on": "self-hosted" },
+    { "runs-on": ["self-hosted", "ubuntu-latest"] },
+    { "runs-on": "ubuntu-invented" },
     { "runs-on": "ubuntu-latest", if: "invented()" },
   ]) {
     assert.throws(
@@ -434,5 +450,77 @@ test("Linux and Windows commands and event lanes remain in their original jobs",
           `lost ${name}/${id}/${JSON.stringify(row)}`,
         );
     }
+  }
+});
+
+test("reusable calls reject corrupted locked provenance and source before counting", () => {
+  const root = mkdtempSync(
+    join(
+      process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(),
+      "macos-reusable-",
+    ),
+  );
+  try {
+    mkdirSync(`${root}/.github/fixtures/reusable`, { recursive: true });
+    const originals = Object.fromEntries(
+      ["lock.json", "source.json", "screencomp-v0.4.2.yml"].map((name) => [
+        name,
+        readFileSync(`.github/fixtures/reusable/${name}`, "utf8"),
+      ]),
+    );
+    const graph = workflows();
+    const scenario = {
+      event: "pull_request",
+      ref: "refs/pull/1/merge",
+      policy: { macosRequired: true },
+      pr: payload("feature").pull_request,
+    };
+    writeFileSync(`${root}/screencomp.toml`, readFileSync("screencomp.toml"));
+    for (const mutation of [
+      "commit",
+      "sourceSha256",
+      "semanticSha256",
+      "source",
+      "fixture",
+    ]) {
+      for (const [name, text] of Object.entries(originals))
+        writeFileSync(`${root}/.github/fixtures/reusable/${name}`, text);
+      if (mutation === "source") {
+        const source = JSON.parse(originals["source.json"]);
+        source.source += "\n# changed source\n";
+        writeFileSync(
+          `${root}/.github/fixtures/reusable/source.json`,
+          JSON.stringify(source),
+        );
+      } else if (mutation === "fixture")
+        writeFileSync(
+          `${root}/.github/fixtures/reusable/screencomp-v0.4.2.yml`,
+          originals["screencomp-v0.4.2.yml"].replace(
+            "ubuntu-latest",
+            "macos-latest",
+          ),
+        );
+      else {
+        const lock = JSON.parse(originals["lock.json"]);
+        lock[mutation] = "corrupted";
+        writeFileSync(
+          `${root}/.github/fixtures/reusable/lock.json`,
+          JSON.stringify(lock),
+        );
+      }
+      assert.throws(
+        () =>
+          runWorkflow(
+            "visual-docs.yml",
+            graph["visual-docs.yml"],
+            scenario,
+            root,
+          ),
+        /unresolved reusable workflow/,
+        mutation,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
