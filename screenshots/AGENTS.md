@@ -164,9 +164,7 @@ as "the output moved; bless it or explain it", not as advisory noise.
 
 Pushes do not run visual capture or classification. CI owns the visual check;
 use the manual capture, baseline, and review commands above before pushing an
-intended output change. Existing clones configured with
-`core.hooksPath=.githooks` need no configuration change: the pre-push file has
-been removed.
+intended output change.
 
 ## Changing the screenshots
 
