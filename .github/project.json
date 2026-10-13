@@ -32,7 +32,8 @@
         "default",
         "{workspaceRoot}/screencomp.toml",
         "{workspaceRoot}/scripts/ci-required.sh",
-        "{workspaceRoot}/scripts/ci-gate-tier.sh"
+        "{workspaceRoot}/scripts/ci-gate-tier.sh",
+        "{workspaceRoot}/scripts/release-version.mjs"
       ]
     },
     "budgets": {

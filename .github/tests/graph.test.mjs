@@ -559,3 +559,103 @@ test("reusable calls reject corrupted locked provenance and source before counti
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("real YAML graph traverses downstream runs and refuses unsupported filters and cycles", () => {
+  const root = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "macos-fanout-"),
+  );
+  try {
+    mkdirSync(`${root}/.github/workflows`, { recursive: true });
+    const entry = {
+      name: "Entry",
+      on: { push: { branches: ["main"] } },
+      jobs: { proof: { "runs-on": "macos-latest" } },
+    };
+    const downstream = {
+      name: "Downstream",
+      on: { workflow_run: { workflows: ["Entry"], types: ["completed"] } },
+      jobs: { proof: { "runs-on": "ubuntu-latest" } },
+    };
+    const write = () => {
+      writeFileSync(`${root}/.github/workflows/entry.yml`, stringify(entry));
+      writeFileSync(
+        `${root}/.github/workflows/downstream.yml`,
+        stringify(downstream),
+      );
+    };
+    const scenario = {
+      id: "synthetic-downstream",
+      event: "push",
+      ref: "refs/heads/main",
+      policy: { macosRequired: false },
+    };
+    write();
+    assert.deepEqual(
+      fanout(scenario, root).map((run) => [run.workflow, run.event]),
+      [
+        ["entry.yml", "push"],
+        ["downstream.yml", "workflow_run"],
+      ],
+    );
+    downstream.on.workflow_run.workflows.push("Downstream");
+    write();
+    assert.throws(() => fanout(scenario, root), /fan-out cycle/);
+    downstream.on.workflow_run.workflows.pop();
+    entry.on.push["paths-ignore"] = ["docs/**"];
+    write();
+    assert.throws(() => fanout(scenario, root), /unsupported trigger filter/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("real reusable resolver accepts an explicit architecture and rejects malformed overrides and configuration", () => {
+  const root = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "macos-arches-"),
+  );
+  try {
+    mkdirSync(`${root}/.github/fixtures/reusable`, { recursive: true });
+    for (const name of ["lock.json", "source.json", "screencomp-v0.4.2.yml"])
+      writeFileSync(
+        `${root}/.github/fixtures/reusable/${name}`,
+        readFileSync(`.github/fixtures/reusable/${name}`),
+      );
+    writeFileSync(`${root}/screencomp.toml`, readFileSync("screencomp.toml"));
+    const workflow = structuredClone(workflows()["visual-docs.yml"]);
+    const caller = Object.values(workflow.jobs).find((job) => job.uses);
+    const scenario = {
+      event: "pull_request",
+      ref: "refs/pull/1/merge",
+      policy: { macosRequired: true },
+      pr: payload("feature").pull_request,
+    };
+    caller.with.arches = '["aarch64"]';
+    const capture = runWorkflow(
+      "visual-docs.yml",
+      workflow,
+      scenario,
+      root,
+    ).find((row) => row.call?.endsWith("/capture"));
+    assert.equal(capture.matrix.arch, "aarch64");
+    assert.deepEqual(capture.runner, ["ubuntu-24.04-arm"]);
+    for (const value of ["[", "[]", "[1]"]) {
+      caller.with.arches = value;
+      assert.throws(() =>
+        runWorkflow("visual-docs.yml", workflow, scenario, root),
+      );
+    }
+    delete caller.with.arches;
+    writeFileSync(`${root}/screencomp.toml`, "[capture]\narches=[]\n");
+    assert.throws(
+      () => runWorkflow("visual-docs.yml", workflow, scenario, root),
+      /configured architectures/,
+    );
+    writeFileSync(`${root}/screencomp.toml`, "not valid TOML[");
+    assert.throws(
+      () => runWorkflow("visual-docs.yml", workflow, scenario, root),
+      /TOML/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

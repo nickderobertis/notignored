@@ -30,6 +30,7 @@
       "{workspaceRoot}/scripts/github-release.sh",
       "{workspaceRoot}/scripts/install.sh",
       "{workspaceRoot}/scripts/npm-build.mjs",
+      "{workspaceRoot}/scripts/release-version.mjs",
       "{workspaceRoot}/scripts/stage-release.py",
       "{workspaceRoot}/scripts/stage-release.sh",
       "{workspaceRoot}/scripts/staged-transport.py",

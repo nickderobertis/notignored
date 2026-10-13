@@ -27,16 +27,18 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 stage="$(cd "$stage" && pwd)"
 version="$(node --input-type=module -e '
   import { readFileSync } from "node:fs";
+  import { pathToFileURL } from "node:url";
+  const { isReleaseVersion } = await import(pathToFileURL(process.argv[2]).href);
   const manifest = JSON.parse(readFileSync(process.argv[1]));
   if (!manifest || typeof manifest !== "object" || typeof manifest.target !== "string"
-      || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(manifest.version)
+      || !isReleaseVersion(manifest.version)
       || manifest.tag !== "v" + manifest.version
       || !manifest.hashes || Object.keys(manifest.hashes).sort().join() !== "archive,npm,wheel"
       || Object.values(manifest.hashes).some(hash => !/^[0-9a-f]{64}$/.test(hash))
       || new Set(Object.values(manifest.hashes)).size !== 1) throw new Error("invalid staged manifest");
   console.log(manifest.version);
-' "$stage/manifest.json")"
-work="$(mktemp -d)"
+' "$stage/manifest.json" "$root/scripts/release-version.mjs")"
+work="$(mktemp -d "${TMPDIR:-/tmp}/notignored-stage.XXXXXXXX")"
 trap 'rm -rf "$work"' EXIT
 run python3 "$root/scripts/stage-release.py" --verify --out "$stage"
 run uv venv --quiet --python "$python" "$work/venv"

@@ -424,7 +424,7 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
                 'import tomllib,json,sys; print(json.dumps(tomllib.load(open(sys.argv[1],"rb"))["capture"]["arches"]))',
                 `${root}/screencomp.toml`,
               ],
-              { encoding: "utf8" },
+              { encoding: "utf8", stdio: "pipe" },
             ),
           );
           archCache.set(config, arches);
@@ -527,6 +527,7 @@ export function sourceDigest(root = ".") {
       "Cargo.lock",
       "pyproject.toml",
       "scripts/npm-build.mjs",
+      "scripts/release-version.mjs",
       "npm/notignored/package.json",
       ".maturin-version",
     ],

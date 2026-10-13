@@ -4,16 +4,19 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 
+import {
+  isReleaseVersion,
+  isPythonMetadataVersion,
+} from "../scripts/release-version.mjs";
+
 export const releaseBranchPrefix = "release-plz-";
 const ownName = (name) =>
   /^notignored(?:-cli|-sdk)?(?:-(?:linux|darwin|win32)-(?:x64|arm64))?$/.test(
     name ?? "",
   );
-const version = (value) =>
-  typeof value === "string" && /^\d+\.\d+\.\d+(?:[-+.][\w.-]+)?$/.test(value);
-function eraseVersion(object) {
+function eraseVersion(object, accepts = isReleaseVersion) {
   if ("version" in object) {
-    if (!version(object.version)) throw new Error("invalid version");
+    if (!accepts(object.version)) throw new Error("invalid version");
     object.version = "<version>";
   }
 }
@@ -45,7 +48,11 @@ function semantic(path, text) {
   if (path === "Cargo.lock" || path === "python/notignored-sdk/uv.lock") {
     const doc = parseToml(text);
     for (const pkg of doc.package ?? [])
-      if (ownName(pkg.name)) eraseVersion(pkg);
+      if (ownName(pkg.name))
+        eraseVersion(
+          pkg,
+          path.endsWith("uv.lock") ? isPythonMetadataVersion : isReleaseVersion,
+        );
     return doc;
   }
   if (
@@ -54,13 +61,13 @@ function semantic(path, text) {
   ) {
     const doc = parseToml(text);
     if (!ownName(doc.project?.name)) throw new Error("unexpected project");
-    eraseVersion(doc.project);
-    doc.project.dependencies = doc.project.dependencies?.map((dep) =>
-      dep.replace(
-        /^(notignored-cli)==\d+\.\d+\.\d+(?:[-+.][\w.-]+)?$/,
-        "$1==<version>",
-      ),
-    );
+    eraseVersion(doc.project, isPythonMetadataVersion);
+    doc.project.dependencies = doc.project.dependencies?.map((dep) => {
+      const pin = /^notignored-cli==(.+)$/.exec(dep);
+      return pin && isPythonMetadataVersion(pin[1])
+        ? "notignored-cli==<version>"
+        : dep;
+    });
     return doc;
   }
   if (
@@ -74,10 +81,15 @@ function semantic(path, text) {
     const doc = JSON.parse(text);
     if (ownName(doc.name)) eraseVersion(doc);
     for (const pkg of Object.values(doc.packages ?? {}))
-      if (ownName(pkg.name)) eraseVersion(pkg);
+      if (ownName(pkg.name))
+        eraseVersion(
+          pkg,
+          path.endsWith("uv.lock") ? isPythonMetadataVersion : isReleaseVersion,
+        );
     for (const field of ["dependencies", "optionalDependencies"]) {
       for (const [name, value] of Object.entries(doc[field] ?? {})) {
-        if (ownName(name) && version(value)) doc[field][name] = "<version>";
+        if (ownName(name) && isReleaseVersion(value))
+          doc[field][name] = "<version>";
       }
     }
     return doc;

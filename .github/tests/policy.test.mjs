@@ -239,6 +239,12 @@ test("all admitted manifest forms reject non-version content and added/deleted/r
   const h = history();
   try {
     for (const [path, change] of [
+      [
+        "Cargo.toml",
+        (text) =>
+          text.replace('version = "0.1.0"', 'version = "not-a-version"'),
+      ],
+      ["CHANGELOG.md", () => "Release notes without a version heading\n"],
       ["pyproject.toml", (text) => text.replace("CLI", "changed")],
       [
         "python/notignored-sdk/pyproject.toml",
@@ -270,6 +276,21 @@ test("all admitted manifest forms reject non-version content and added/deleted/r
         path,
       );
     }
+    h.git("checkout", "-q", h.base);
+    const cargoPath = join(h.dir, "Cargo.toml");
+    writeFileSync(
+      cargoPath,
+      readFileSync(cargoPath, "utf8").replace(
+        'version = "0.1.0"',
+        'version = "1.2.3-rc.1+build.2"',
+      ),
+    );
+    h.git("add", "-u");
+    h.git("commit", "-qm", "combined prerelease and build version");
+    assert.equal(
+      classifyHistory(h, payload(), h.git("rev-parse", "HEAD")).isReleaseOnly,
+      true,
+    );
     for (const mutation of ["added", "deleted", "renamed"]) {
       h.git("checkout", "-q", h.base);
       if (mutation === "added") {
@@ -304,6 +325,11 @@ export function workflowClassify(
   );
   mkdirSync(join(h.dir, ".github"), { recursive: true });
   writeFileSync(join(h.dir, ".github/macos-policy.mjs"), readFileSync(policy));
+  mkdirSync(join(h.dir, "scripts"), { recursive: true });
+  writeFileSync(
+    join(h.dir, "scripts/release-version.mjs"),
+    readFileSync(resolve("scripts/release-version.mjs")),
+  );
   const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
   const step = workflow.jobs.changes.steps.find((step) => step.id === "policy");
   const output = join(h.dir, "workflow-output");

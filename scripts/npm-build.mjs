@@ -43,6 +43,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RELEASE_VERSION as VERSION } from "./release-version.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -79,13 +80,6 @@ function attempt(what, action, step) {
   }
 }
 
-// The version both registries index this release under. npm rejects anything
-// that is not semver, and a version with a stray specifier would publish under a
-// name no consumer could ask for — so it is validated here rather than at the
-// registry, whichever source it came from.
-// At most one `-prerelease` and one `+build`, in that order: repeating either
-// (`1.2.3+one+two`) is not a version npm will take.
-const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 // Read the crate version from the root Cargo.toml [package] section. A tiny hand
 // parser avoids a TOML dependency: take the first `version = "..."` after the

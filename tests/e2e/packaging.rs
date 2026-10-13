@@ -769,12 +769,134 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
             paths.extend(std::env::split_paths(
                 &std::env::var_os("PATH").expect("PATH"),
             ));
+            let wrapper_path = std::env::join_paths(&paths).expect("wrapper PATH");
             run(
                 "install and execute staged forms after delayed real server startup",
                 verify()
-                    .env("PATH", std::env::join_paths(paths).expect("wrapper PATH"))
+                    .env("PATH", &wrapper_path)
                     .env("STAGED_REAL_PYTHON", python.trim()),
             );
+            let bad_sdk = scratch.path().join("sdk-wrong-report.tgz");
+            run(
+                "corrupt the real SDK artifact's exported report",
+                Command::new(python.trim())
+                    .arg("-c")
+                    .arg(
+                        r#"
+import io,sys,tarfile
+found=False
+with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2],'w:gz') as dest:
+    for member in source.getmembers():
+        data=source.extractfile(member).read() if member.isfile() else None
+        if member.name == 'package/dist/index.js':
+            data=b'export async function scan(){return {ignores:[]};}\n'
+            member.size=len(data)
+            found=True
+        dest.addfile(member,io.BytesIO(data) if data is not None else None)
+assert found, 'real SDK entry point was not present'
+"#,
+                    )
+                    .arg(&sdk_tgz)
+                    .arg(&bad_sdk),
+            );
+            let sdk_work = scratch.path().join("bad-sdk-work");
+            std::fs::create_dir(&sdk_work).expect("create SDK failure scratch");
+            let rejected = Command::new("bash")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.sh")
+                .arg(&stage)
+                .arg("python3")
+                .arg(&bad_sdk)
+                .env("TMPDIR", &sdk_work)
+                .output()
+                .expect("install SDK artifact with an incorrect report");
+            assert!(!rejected.status.success());
+            let error = String::from_utf8_lossy(&rejected.stderr);
+            assert!(
+                error.contains("ignores") && error.contains("ACTION:"),
+                "wrong SDK error: {error}"
+            );
+            assert!(
+                std::fs::read_dir(&sdk_work)
+                    .expect("SDK scratch")
+                    .find(|entry| entry
+                        .as_ref()
+                        .expect("temporary entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("notignored-stage."))
+                    .is_none(),
+                "SDK rejection left temporary installs: {:?}",
+                std::fs::read_dir(&sdk_work)
+                    .expect("read leftover entries")
+                    .map(|entry| entry.expect("leftover entry").file_name())
+                    .collect::<Vec<_>>()
+            );
+            std::fs::write(
+                &shim,
+                r#"#!/usr/bin/env bash
+if [[ "$1" == */scripts/staged-transport.py ]]; then
+  printf '%s' "$$" > "$STAGED_PID_FILE"
+  case "$STAGED_MODE" in
+    stopped) exec "$STAGED_REAL_PYTHON" "$1" "$STAGED_MISSING_ASSETS" "$3" ;;
+    silent) exec sleep 40 ;;
+  esac
+fi
+exec "$STAGED_REAL_PYTHON" "$@"
+"#,
+            )
+            .expect("write server-startup subprocess wrapper");
+            for (mode, expected) in [
+                ("stopped", "stopped before startup"),
+                ("silent", "did not start within 30 seconds"),
+            ] {
+                let work_root = scratch.path().join(format!("{mode}-work"));
+                std::fs::create_dir(&work_root).expect("create startup failure scratch");
+                let pid_file = scratch.path().join(format!("{mode}-pid"));
+                let rejected = verify()
+                    .env("PATH", &wrapper_path)
+                    .env("STAGED_REAL_PYTHON", python.trim())
+                    .env("STAGED_MODE", mode)
+                    .env("STAGED_PID_FILE", &pid_file)
+                    .env(
+                        "STAGED_MISSING_ASSETS",
+                        scratch.path().join("absent-assets"),
+                    )
+                    .env("TMPDIR", &work_root)
+                    .output()
+                    .expect("drive startup refusal through the real staging wrapper");
+                assert!(!rejected.status.success(), "{mode} server was accepted");
+                let error = String::from_utf8_lossy(&rejected.stderr);
+                assert!(
+                    error.contains(expected) && error.contains("ACTION:"),
+                    "wrong startup error: {error}"
+                );
+                let pid: u32 = std::fs::read_to_string(&pid_file)
+                    .expect("owned server PID")
+                    .trim()
+                    .parse()
+                    .expect("numeric server PID");
+                let process = Command::new("ps")
+                    .args(["-p", &pid.to_string(), "-o", "pid="])
+                    .output()
+                    .expect("read the captured child PID");
+                assert!(
+                    String::from_utf8_lossy(&process.stdout).trim().is_empty(),
+                    "startup refusal left its captured child running"
+                );
+                assert!(
+                    std::fs::read_dir(&work_root)
+                        .expect("startup scratch")
+                        .find(|entry| entry
+                            .as_ref()
+                            .expect("temporary entry")
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("notignored-stage."))
+                        .is_none(),
+                    "startup refusal left temporary installs"
+                );
+            }
         }
 
         run(

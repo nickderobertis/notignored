@@ -315,8 +315,8 @@ ungated on purpose: a packaging break must redden a release even while publishin
 is off.
 
 **Darwin installs are staged before publication, not read from registries.**
-The shared Mac runner pool is bounded to one job per workflow and two runs per
-change lifecycle; `.github/AGENTS.md` owns routing and its graph proof. Linux and
+The shared Mac runner pool has workflow and lifecycle budgets in
+`.github/budgets.yaml`; `.github/AGENTS.md` owns routing and its graph proof. Linux and
 Windows retain live registry delivery and weekly smoke. Both Darwin architectures
 retain archive/wheel/npm artifacts, with x86_64 execution under Rosetta in the
 single pre-publication build; a successful local install proves packaging, not
