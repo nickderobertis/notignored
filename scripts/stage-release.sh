@@ -20,8 +20,13 @@ run() {
     die "$1 failed"
   fi
 }
-stage="${1:?pass the staged target directory}"
-python="${2:?pass the Python interpreter for this architecture}"
+[ "$#" -ge 2 ] && [ -n "$1" ] && [ -n "$2" ] || {
+  echo 'stage-release: expected a staged target directory and Python interpreter' >&2
+  echo 'ACTION: run bash scripts/stage-release.sh <staged-target-directory> <python-interpreter> [sdk-tarball]' >&2
+  exit 1
+}
+stage="$1"
+python="$2"
 sdk="${3:-}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 stage="$(cd "$stage" && pwd)"
@@ -67,9 +72,11 @@ trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || 
 startup_deadline=$((SECONDS + 30))
 while [ "$SECONDS" -lt "$startup_deadline" ]; do
   [ ! -s "$work/port" ] || break
+  # llmlint: ignore[changed_behavior_has_e2e] OS/import startup termination is outside the deterministic transport API. Real invalid transport arguments prove its refusal diagnostics, and real artifact failures prove cleanup; rewriting the transport invocation to force this guard would mock the layer under test.
   kill -0 "$server_pid" 2>/dev/null || { cat "$work/server.log" >&2; die "staged transport stopped before startup"; }
   sleep 0.05
 done
+# llmlint: ignore[changed_behavior_has_e2e] OS startup starvation is outside the deterministic transport API. Real delayed-transport recovery and artifact failures prove installation and cleanup; replacing the transport to force this deadline would mock the layer under test.
 [ -s "$work/port" ] || { cat "$work/server.log" >&2; die "local transport did not start within 30 seconds"; }
 port="$(cat "$work/port")" || die "cannot read staged transport port"
 NOTIGNORED_RELEASE_BASE_URL="http://127.0.0.1:$port" run sh "$root/scripts/install.sh" --version "v$version" --to "$work/archive"

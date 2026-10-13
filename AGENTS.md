@@ -314,13 +314,9 @@ never add an `environment:` or OIDC claim expecting one. The *build* jobs stay
 ungated on purpose: a packaging break must redden a release even while publishing
 is off.
 
-**Darwin installs are staged before publication, not read from registries.**
-The shared Mac runner pool has workflow and lifecycle budgets in
-`.github/budgets.yaml`; `.github/AGENTS.md` owns routing and its graph proof. Linux and
-Windows retain live registry delivery and weekly smoke. Both Darwin architectures
-retain archive/wheel/npm artifacts, with x86_64 execution under Rosetta in the
-single pre-publication build; a successful local install proves packaging, not
-registry propagation.
+**Darwin installs are staged before publication.** Local installs prove packaging,
+while Linux and Windows registry probes prove delivery; neither substitutes for
+the other.
 
 **The GitHub Release is the third install surface, and it is verified the same
 way.** `taiki-e/upload-rust-binary-action` derives *both* published names from the

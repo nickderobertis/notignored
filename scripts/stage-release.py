@@ -21,6 +21,7 @@ import tomllib
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
+from typing import TypeAlias
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -37,18 +38,24 @@ class Architecture(StrEnum):
     AARCH64 = "aarch64"
 
 
+Sha256Digest: TypeAlias = str
+TargetTriple: TypeAlias = str
+ReleaseVersion: TypeAlias = str
+ReleaseTag: TypeAlias = str
+
+
 @dataclass(frozen=True)
 class PayloadHashes:
-    archive: str
-    wheel: str
-    npm: str
+    archive: Sha256Digest
+    wheel: Sha256Digest
+    npm: Sha256Digest
 
 
 @dataclass(frozen=True)
 class ArtifactManifest:
-    target: str
-    version: str
-    tag: str
+    target: TargetTriple
+    version: ReleaseVersion
+    tag: ReleaseTag
     architecture: Architecture
     hashes: PayloadHashes
     archive: str

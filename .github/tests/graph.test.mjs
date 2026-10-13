@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   readFileSync,
   writeFileSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
 } from "node:fs";
 import { test } from "node:test";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
 import { createHash } from "node:crypto";
 import {
@@ -251,6 +252,69 @@ test("actual workflow/call graph routes the complete event and publish workload 
     const validTelemetry = JSON.parse(
       readFileSync(".github/.telemetry/macos-policy.json", "utf8"),
     );
+    // Reconcile every dependent measurement so only source coverage can refuse
+    // these omissions, rather than a stale count or inconsistent lifecycle.
+    for (const omission of ["workflow", "job"]) {
+      const omitted = structuredClone(validTelemetry);
+      const prune = (runs) =>
+        runs
+          .filter((run) => omission !== "workflow" || run.workflow !== "ci.yml")
+          .map((run) => ({
+            ...run,
+            rows: run.rows.filter(
+              (row) =>
+                omission !== "job" ||
+                run.workflow !== "ci.yml" ||
+                row.job !== "macos",
+            ),
+          }));
+      for (const scenario of omitted.scenarios)
+        scenario.runs = prune(scenario.runs);
+      for (const lifecycle of omitted.lifecycleCounts) {
+        for (const event of lifecycle.eventScenarios)
+          event.runs = prune(event.runs);
+        lifecycle.runs = lifecycle.eventScenarios.flatMap(
+          (event) => event.runs,
+        );
+        lifecycle.count = lifecycle.runs.filter(
+          (run) => macRows(run).length,
+        ).length;
+      }
+      omitted.jobCounts = omitted.scenarios.flatMap((scenario) =>
+        scenario.runs.map((run) => ({
+          scenario: scenario.id,
+          workflow: run.workflow,
+          event: run.event,
+          count: macRows(run).length,
+          rows: macRows(run),
+        })),
+      );
+      omitted.jobsPerRun = Math.max(
+        ...omitted.jobCounts.map((run) => run.count),
+      );
+      omitted.runsPerChange = Math.max(
+        ...omitted.lifecycleCounts.map((run) => run.count),
+      );
+      const path = `${h.dir}/omitted-${omission}.json`;
+      writeFileSync(path, JSON.stringify(omitted));
+      const result = spawnSync(
+        "node",
+        [
+          ".github/macos-budget.mjs",
+          "--metric",
+          "jobs-per-run",
+          "--telemetry",
+          path,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.notEqual(
+        result.status,
+        0,
+        `reporter accepted omitted ${omission}`,
+      );
+      assert.match(result.stderr, /incomplete (workflow|job) coverage/);
+    }
     for (const malformed of [
       { ...validTelemetry, eventClasses: "abcdefghijkl" },
       { ...validTelemetry, scenarios: "not-an-array" },
@@ -454,6 +518,7 @@ test("Linux and Windows commands and event lanes remain in their original jobs",
   }
 });
 
+// llmlint: ignore-block[shell_test_tiers_stay_split] The task requires the unified workflow graph proof to reject reusable provenance and architecture-output drift. These mutations drive the same real TOML declaration reader as production graph resolution, not a separate host installer or paid probe.
 test("reusable calls reject corrupted locked provenance and source before counting", () => {
   const root = mkdtempSync(
     join(
@@ -560,6 +625,8 @@ test("reusable calls reject corrupted locked provenance and source before counti
   }
 });
 
+// llmlint: ignore-end[shell_test_tiers_stay_split]
+
 test("real YAML graph traverses downstream runs and refuses unsupported filters and cycles", () => {
   const root = mkdtempSync(
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "macos-fanout-"),
@@ -609,6 +676,221 @@ test("real YAML graph traverses downstream runs and refuses unsupported filters 
   }
 });
 
+test("actual YAML branch and tag subscriptions honor inclusion, negation and re-inclusion", () => {
+  const root = mkdtempSync(
+    join(
+      process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(),
+      "macos-filters-",
+    ),
+  );
+  try {
+    mkdirSync(`${root}/.github/workflows`, { recursive: true });
+    const workflow = {
+      name: "Filtered",
+      on: {
+        push: {
+          branches: [
+            "release/**",
+            "!release/private/**",
+            "release/private/approved",
+            "hotfix/*",
+          ],
+          tags: ["v*", "!v*-rc*", "v2.0.0-rc.1"],
+        },
+      },
+      jobs: { proof: { "runs-on": "ubuntu-latest" } },
+    };
+    const path = `${root}/.github/workflows/filtered.yml`;
+    writeFileSync(path, stringify(workflow));
+    for (const [ref, included] of [
+      ["refs/heads/release/public", true],
+      ["refs/heads/release/private/denied", false],
+      ["refs/heads/release/private/approved", true],
+      ["refs/heads/hotfix/fix", true],
+      ["refs/heads/hotfix/fix/nested", false],
+      ["refs/heads/main", false],
+      ["refs/tags/v1.2.3", true],
+      ["refs/tags/v1.2.3-rc.1", false],
+      ["refs/tags/v2.0.0-rc.1", true],
+      ["refs/tags/other", false],
+    ]) {
+      const runs = fanout(
+        { event: "push", ref, policy: { macosRequired: false } },
+        root,
+      );
+      assert.deepEqual(
+        runs.map((run) => run.workflow),
+        included ? ["filtered.yml"] : [],
+        ref,
+      );
+    }
+    workflow.on.push.branches = ["release/?"];
+    writeFileSync(path, stringify(workflow));
+    assert.throws(
+      () => fanout({ event: "push", ref: "refs/heads/release/a" }, root),
+      /unsupported trigger pattern/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// llmlint: ignore-block[shell_test_tiers_stay_split] The task requires the unified real workflow graph proof, including reconciliation with the production changes calculation. This drives its actual just/Nx read-only boundary over local histories, not a separate installer or expensive product journey.
+test("production affected step and modeled crate routing agree over real source, release, SDK and unknown-base histories", () => {
+  const root = mkdtempSync(
+    join(
+      process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(),
+      "macos-affected-",
+    ),
+  );
+  const git = (...args) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: "pipe",
+    }).trim();
+  try {
+    const configs = execFileSync(
+      "git",
+      ["ls-files", "-z", "*project.json", "*package.json"],
+      { encoding: "utf8" },
+    )
+      .split("\0")
+      .filter(Boolean);
+    for (const path of [
+      ...configs,
+      "nx.json",
+      "package-lock.json",
+      ".gitignore",
+      "justfile",
+      "Cargo.toml",
+      "Cargo.lock",
+      "scripts/nx.sh",
+      "scripts/nx-affected.sh",
+      "scripts/ci-gate-tier.sh",
+      "scripts/preserved-log.sh",
+    ]) {
+      mkdirSync(join(root, path, ".."), { recursive: true });
+      writeFileSync(join(root, path), readFileSync(path));
+    }
+    symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
+    git("init", "-q");
+    git("config", "user.name", "Affected journey");
+    git("config", "user.email", "affected@example.invalid");
+    git("add", ".");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+    const ci = workflows()["ci.yml"];
+    const script = ci.jobs.changes.steps.find(
+      (step) => step.id === "affected",
+    ).run;
+    const tierScript = ci.jobs.changes.steps.find(
+      (step) => step.id === "tier",
+    ).run;
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => !name.startsWith("NX_")),
+    );
+    for (const [path, expected, tier] of [
+      ["src/lib.rs", true, "affected"],
+      ["Cargo.lock", true, "affected"],
+      ["CHANGELOG.md", true, "full"],
+      ["python/notignored-sdk/README.md", false, "affected"],
+    ]) {
+      git("checkout", "-q", base);
+      mkdirSync(join(root, path, ".."), { recursive: true });
+      writeFileSync(
+        join(root, path),
+        readFileSync(join(root, path), { encoding: "utf8", flag: "a+" }) +
+          (path.endsWith(".rs") ? "\n// changed\n" : "\n# changed\n"),
+      );
+      git("add", ".");
+      git("commit", "-qm", `edit ${path}`);
+      for (const namedBase of [
+        base,
+        "1111111111111111111111111111111111111111",
+      ]) {
+        const output = join(root, ".git", "outputs");
+        writeFileSync(output, "");
+        const event = tier === "full" ? "pull_request" : "push";
+        const branch = tier === "full" ? "release-plz-drift" : "feature";
+        const decision = spawnSync(
+          "bash",
+          ["-e", "-o", "pipefail", "-c", tierScript],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: {
+              ...env,
+              GATE_EVENT: event,
+              GATE_HEAD_REF: branch,
+              GATE_BEFORE: namedBase,
+              GITHUB_OUTPUT: output,
+            },
+          },
+        );
+        assert.equal(decision.status, 0, decision.stderr);
+        const selected = Object.fromEntries(
+          readFileSync(output, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => line.split("=")),
+        );
+        assert.equal(selected.tier, tier);
+        writeFileSync(output, "");
+        const calculation = spawnSync(
+          "bash",
+          ["-e", "-o", "pipefail", "-c", script],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: {
+              ...env,
+              CI: "1",
+              TIER: selected.tier,
+              NOTIGNORED_NX_BASE_SHA: selected.base,
+              GITHUB_OUTPUT: output,
+              GITHUB_BASE_REF: "",
+              NOTIGNORED_NX_BASE_REF: "",
+            },
+          },
+        );
+        assert.equal(calculation.status, 0, calculation.stderr);
+        const actual = readFileSync(output, "utf8").trim();
+        const required = namedBase === base ? expected : true;
+        assert.equal(
+          actual,
+          `crate=${required}`,
+          `${path}: ${calculation.stderr}`,
+        );
+        if (namedBase === base && tier === "affected")
+          assert.doesNotMatch(
+            calculation.stderr,
+            /no merge base|could not list/,
+          );
+        const rows = runWorkflow("ci.yml", ci, {
+          event,
+          ref: event === "push" ? "refs/heads/main" : "refs/pull/1/merge",
+          policy: { macosRequired: true },
+          pr: payload(branch).pull_request,
+          ...(required ? {} : { crate: false }),
+        });
+        for (const row of rows.filter((row) =>
+          ["cross", "install", "msrv", "deny"].includes(row.job),
+        ))
+          assert.equal(
+            row.enabled,
+            required,
+            `${path}/${row.job} differs from production calculation`,
+          );
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+// llmlint: ignore-end[shell_test_tiers_stay_split]
+
+// llmlint: ignore-block[shell_test_tiers_stay_split] The task requires one github-workflows proof to traverse real reusable matrices, whose architecture declaration is TOML. Parsing that declaration is part of the offline graph boundary, not a separate host installer journey or paid probe.
 test("real reusable resolver accepts an explicit architecture and rejects malformed overrides and configuration", () => {
   const root = mkdtempSync(
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "macos-arches-"),
@@ -659,3 +941,5 @@ test("real reusable resolver accepts an explicit architecture and rejects malfor
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// llmlint: ignore-end[shell_test_tiers_stay_split]

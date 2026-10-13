@@ -10,6 +10,7 @@ import {
   variantKey,
   lifecycleEvents,
 } from "./event-classes.mjs";
+import { coverageValidator } from "./telemetry-coverage.mjs";
 import { sourceDigest } from "./workflow-graph.mjs";
 
 try {
@@ -35,6 +36,7 @@ try {
     !telemetry.jobCounts.length
   )
     throw new Error("incomplete telemetry workload");
+  // llmlint: ignore-block[boundary_inputs_validated] The reporter must consume recorded enablement without re-evaluating workflow conditions or producing fresh measurements. Source-declared inventory and full recorded-row consistency are validated below; the production-driven graph tier owns condition evaluation.
   const macRows = (run) => run.rows.filter((row) => row.enabled && row.macos);
   const validRuns = (runs) =>
     Array.isArray(runs) &&
@@ -56,6 +58,7 @@ try {
             typeof row.job === "string",
         ),
     );
+  // llmlint: ignore-end[boundary_inputs_validated]
   const sameSet = (actual, expected) =>
     actual.length === expected.length &&
     new Set(actual).size === actual.length &&
@@ -71,6 +74,7 @@ try {
     )
   )
     throw new Error("incomplete scenario workload");
+  const validateCoverage = coverageValidator(root);
   for (const scenario of telemetry.scenarios) {
     const event = eventClasses.find(([id]) => scenario.id.startsWith(`${id}/`));
     if (
@@ -82,6 +86,7 @@ try {
         `${event[0]}/${variantKey({ ...scenario, fork: scenario.ownership === "fork" })}`
     )
       throw new Error("invalid scenario measurement");
+    validateCoverage(scenario);
   }
   const expectedJobs = telemetry.scenarios.flatMap((scenario) =>
     scenario.runs.map((run) => ({

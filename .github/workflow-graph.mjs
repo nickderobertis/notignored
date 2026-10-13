@@ -89,6 +89,51 @@ export function workflows(root = ".") {
       .map((p) => [p, yamlFile(`${root}/.github/workflows/${p}`)]),
   );
 }
+export function calledWorkflow(uses, root = ".") {
+  let called;
+  if (uses.startsWith("./.github/workflows/"))
+    called = yamlFile(`${root}/${uses.slice(2)}`);
+  else if (uses === reusable) {
+    const lock = JSON.parse(
+      readFileSync(`${root}/.github/fixtures/reusable/lock.json`, "utf8"),
+    );
+    called = yamlFile(
+      `${root}/.github/fixtures/reusable/screencomp-v0.4.2.yml`,
+    );
+    const source = JSON.parse(
+      readFileSync(`${root}/.github/fixtures/reusable/source.json`, "utf8"),
+    );
+    const sourceDigest = createHash("sha256")
+      .update(source.source)
+      .digest("hex");
+    const sourceSemantic = createHash("sha256")
+      .update(JSON.stringify(parse(source.source)))
+      .digest("hex");
+    if (
+      source.commit !== lock.commit ||
+      source.url !==
+        `https://raw.githubusercontent.com/nickderobertis/screencomp/${lock.commit}/.github/workflows/visual-docs-reusable.yml` ||
+      sourceDigest !== lock.sourceSha256 ||
+      sourceSemantic !== lock.semanticSha256
+    )
+      throw new Error(
+        "unresolved reusable workflow: source provenance differs",
+      );
+    const digest = createHash("sha256")
+      .update(JSON.stringify(called))
+      .digest("hex");
+    if (
+      lock.call !== uses ||
+      !/^[0-9a-f]{40}$/.test(lock.commit) ||
+      !/^[0-9a-f]{64}$/.test(lock.sourceSha256) ||
+      digest !== lock.semanticSha256
+    )
+      throw new Error(
+        "unresolved reusable workflow: locked provenance differs",
+      );
+  } else throw new Error(`unresolved reusable workflow: ${uses}`);
+  return called;
+}
 function datum(value) {
   if (value === null || value === undefined) return new data.Null();
   if (Array.isArray(value)) return new data.Array(...value.map(datum));
@@ -127,7 +172,7 @@ export function evaluate(expression, context, results = []) {
   ]).parse();
   return new Evaluator(ast, datum(context), functions).evaluate();
 }
-function resolve(value, context) {
+export function resolve(value, context) {
   if (typeof value !== "string") return value;
   if (/^\$\{\{[\s\S]*\}\}$/.test(value)) {
     const result = evaluate(value, context);
@@ -185,13 +230,16 @@ export function expand(matrix = {}, context = {}) {
   rows = [...expanded.map((entry) => entry.value), ...added];
   return rows;
 }
-const matches = (pattern, value) =>
-  new RegExp(
+function matches(pattern, value) {
+  if (/[?+\[\]\\]/.test(pattern))
+    throw new Error("unsupported trigger pattern; resolve explicitly");
+  return new RegExp(
     `^${pattern
-      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-      .replaceAll("*", ".*")
-      .replaceAll("?", ".")}$`,
+      .replace(/[.+^\${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*|\*/g, (token) => (token === "**" ? ".*" : "[^/]*"))}$`,
   ).test(value);
+}
+
 function filter(patterns, value) {
   let allowed = false;
   for (const pattern of patterns) {
@@ -293,51 +341,7 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
         (explicitStatus || results.every((r) => r === "success")) &&
         evaluate(condition, context, results).coerceString() === "true";
       if (job.uses) {
-        let called;
-        if (job.uses.startsWith("./.github/workflows/"))
-          called = yamlFile(`${root}/${job.uses.slice(2)}`);
-        else if (job.uses === reusable) {
-          const lock = JSON.parse(
-            readFileSync(`${root}/.github/fixtures/reusable/lock.json`, "utf8"),
-          );
-          called = yamlFile(
-            `${root}/.github/fixtures/reusable/screencomp-v0.4.2.yml`,
-          );
-          const source = JSON.parse(
-            readFileSync(
-              `${root}/.github/fixtures/reusable/source.json`,
-              "utf8",
-            ),
-          );
-          const sourceDigest = createHash("sha256")
-            .update(source.source)
-            .digest("hex");
-          const sourceSemantic = createHash("sha256")
-            .update(JSON.stringify(parse(source.source)))
-            .digest("hex");
-          if (
-            source.commit !== lock.commit ||
-            source.url !==
-              `https://raw.githubusercontent.com/nickderobertis/screencomp/${lock.commit}/.github/workflows/visual-docs-reusable.yml` ||
-            sourceDigest !== lock.sourceSha256 ||
-            sourceSemantic !== lock.semanticSha256
-          )
-            throw new Error(
-              "unresolved reusable workflow: source provenance differs",
-            );
-          const digest = createHash("sha256")
-            .update(JSON.stringify(called))
-            .digest("hex");
-          if (
-            lock.call !== job.uses ||
-            !/^[0-9a-f]{40}$/.test(lock.commit) ||
-            !/^[0-9a-f]{64}$/.test(lock.sourceSha256) ||
-            digest !== lock.semanticSha256
-          )
-            throw new Error(
-              "unresolved reusable workflow: locked provenance differs",
-            );
-        } else throw new Error(`unresolved reusable workflow: ${job.uses}`);
+        const called = calledWorkflow(job.uses, root);
         const inputs = {
           ...defaults(called),
           ...Object.fromEntries(

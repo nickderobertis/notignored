@@ -921,6 +921,7 @@ jobs:
       RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
       - uses: Swatinem/rust-cache@v2
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-node@v4
@@ -934,7 +935,7 @@ jobs:
         run: |
           read -r -a release_targets <<< "$RELEASE_TARGETS"
           rustup target add "${release_targets[@]}"
-          bash scripts/setup-misc-tools.sh
+          just setup-misc-tools
           sudo softwareupdate --install-rosetta --agree-to-license
           uv python install cpython-3.12-macos-aarch64-none cpython-3.12-macos-x86_64-none
       - name: Build and stage both architectures from one binary each

@@ -1,4 +1,3 @@
-// Event workload shared by the graph recorder and telemetry validator.
 export const eventClasses = [
   ["pr-opened", "pull_request", "opened", "refs/pull/1/merge"],
   ["pr-synchronize", "pull_request", "synchronize", "refs/pull/1/merge"],

@@ -1,4 +1,3 @@
-// Native syntax and structural validation for private JavaScript tooling.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { parse } from "yaml";

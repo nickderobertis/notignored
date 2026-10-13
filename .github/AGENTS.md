@@ -9,8 +9,5 @@ permits a Mac omission. Author login cannot: release-plz uses the owner's PAT.
 Unknown PR classification requires coverage. Main pushes and scheduled smoke
 spend no Mac runner; the explicit manual diagnostic defaults off.
 
-The baseline workflows were parsed from b107580. The reusable screencomp workflow
-is parsed from the v0.4.2 source at the commit and source/semantic hashes in
-`fixtures/reusable/lock.json`; update its locked
-fixture when changing the production call, including its dynamic arch output
-resolution from screencomp.toml.
+Update the locked reusable fixture and its provenance when changing its
+production call, including dynamic architecture resolution from screencomp.toml.

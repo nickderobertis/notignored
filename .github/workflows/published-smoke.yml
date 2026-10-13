@@ -246,6 +246,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Ask GitHub which release is latest
         id: release
         env:
@@ -255,10 +258,12 @@ jobs:
           .tagName | tr -d '\r')"
 
           if [ -z "$tag" ]; then
-            echo "::error::GitHub Release on $RUNNER_OS/$RUNNER_ARCH: no published release to install"
+            echo "::error::GitHub Release on $RUNNER_OS/$RUNNER_ARCH: no published release to install" >&2
             echo "ACTION: check https://github.com/$GITHUB_REPOSITORY/releases — release.yml may never have cut one" >&2
             exit 1
           fi
+
+          node scripts/release-version.mjs validate --kind tag --value "$tag"
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Install the latest release with scripts/install.sh
@@ -266,7 +271,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: >
           if ! sh scripts/install.sh --to "$RUNNER_TEMP/notignored-bin"; then
-            echo "::error::GitHub Release on $RUNNER_OS/$RUNNER_ARCH: scripts/install.sh failed"
+            echo "::error::GitHub Release on $RUNNER_OS/$RUNNER_ARCH: scripts/install.sh failed" >&2
             echo "ACTION: check https://github.com/$GITHUB_REPOSITORY/releases/latest — the archive or its .sha256 sibling may be missing for this target" >&2
             exit 1
           fi
@@ -287,7 +292,7 @@ jobs:
         id: pypi-install
         run: >
           if ! pip install --upgrade notignored-cli; then
-            echo "::error::PyPI on $RUNNER_OS/$RUNNER_ARCH: pip install notignored-cli failed"
+            echo "::error::PyPI on $RUNNER_OS/$RUNNER_ARCH: pip install notignored-cli failed" >&2
             echo "ACTION: check https://pypi.org/project/notignored-cli/ for a yanked or missing wheel for this platform" >&2
             exit 1
           fi
@@ -296,10 +301,12 @@ jobs:
           '\r')"
 
           if [ -z "$version" ]; then
-            echo "::error::PyPI on $RUNNER_OS/$RUNNER_ARCH: notignored-cli installed but reports no version"
+            echo "::error::PyPI on $RUNNER_OS/$RUNNER_ARCH: notignored-cli installed but reports no version" >&2
             echo "ACTION: inspect the wheel's metadata — pip show found no Version field" >&2
             exit 1
           fi
+
+          node scripts/release-version.mjs validate --kind python --value "$version"
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
         if: vars.PYPI_PUBLISH == 'true'
@@ -321,10 +328,12 @@ jobs:
           version="$(npm view notignored-cli version 2>/dev/null | tr -d '\r')"
 
           if [ -z "$version" ]; then
-            echo "::error::npm on $RUNNER_OS/$RUNNER_ARCH: the registry serves no version of notignored-cli"
+            echo "::error::npm on $RUNNER_OS/$RUNNER_ARCH: the registry serves no version of notignored-cli" >&2
             echo "ACTION: check https://www.npmjs.com/package/notignored-cli — the latest dist-tag may be unset or the package unpublished" >&2
             exit 1
           fi
+
+          node scripts/release-version.mjs validate --kind release --value "$version"
 
           # Pin the install and assertion to the same observed registry version.
 

@@ -189,7 +189,7 @@ jobs:
           notignored "$tmp" --format json | grep -q '"E501"'
           code=0
           notignored "$tmp" --fail-if-found || code=$?
-          [ "$code" -eq 1 ] || { echo "::error::expected exit 1, got $code"; exit 1; }
+          [ "$code" -eq 1 ] || { echo "::error::expected exit 1, got $code" >&2; exit 1; }
       - name: Install the documented command and assert its CLI
         # llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] The scheduling task moves the existing Mac documented Git install here because main pushes may no longer request Mac; this preserves that real install assertion without adding an automatic Mac location.
         run: |

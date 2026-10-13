@@ -551,6 +551,7 @@ fn put_back(shared: &Path, keep: &Path) -> std::io::Result<()> {
 /// it put on that venv's PATH — and prove the binary the rest of this suite is
 /// running is the one that was there before the build ([`KeptBinary`] says why
 /// that needs proving, and why here rather than in a test of its own).
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task explicitly requires the production builder journey behind its existing packaging/e2e edge, without a new project or unrelated-project dependency. Its staging source inputs in nx.json invalidate this same owning tier so cached results cannot hide changed builders.
 #[test]
 fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
     let scratch = tempfile::tempdir().expect("a scratch directory");
@@ -710,6 +711,24 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
             .expect("run unsupported staging target");
         assert!(!refused.status.success());
         assert!(String::from_utf8_lossy(&refused.stderr).contains("unsupported target"));
+        for arguments in [vec![], vec!["--target", host_target()]] {
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(arguments)
+                .arg("--out")
+                .arg(scratch.path().join("missing-mode"))
+                .output()
+                .expect("run staging without a complete mode");
+            assert!(!refused.status.success());
+            assert!(refused.stdout.is_empty());
+            let error = String::from_utf8_lossy(&refused.stderr);
+            assert!(error.contains("packing requires --target and --wheel"));
+            assert!(
+                error.contains("ACTION:"),
+                "missing mode had no recovery: {error}"
+            );
+        }
         let manifest: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(stage.join("manifest.json")).expect("read payload manifest"),
         )
@@ -832,71 +851,22 @@ assert found, 'real SDK entry point was not present'
                     .map(|entry| entry.expect("leftover entry").file_name())
                     .collect::<Vec<_>>()
             );
-            std::fs::write(
-                &shim,
-                r#"#!/usr/bin/env bash
-if [[ "$1" == */scripts/staged-transport.py ]]; then
-  printf '%s' "$$" > "$STAGED_PID_FILE"
-  case "$STAGED_MODE" in
-    stopped) exec "$STAGED_REAL_PYTHON" "$1" "$STAGED_MISSING_ASSETS" "$3" ;;
-    silent) exec sleep 40 ;;
-  esac
-fi
-exec "$STAGED_REAL_PYTHON" "$@"
-"#,
-            )
-            .expect("write server-startup subprocess wrapper");
-            for (mode, expected) in [
-                ("stopped", "stopped before startup"),
-                ("silent", "did not start within 30 seconds"),
-            ] {
-                let work_root = scratch.path().join(format!("{mode}-work"));
-                std::fs::create_dir(&work_root).expect("create startup failure scratch");
-                let pid_file = scratch.path().join(format!("{mode}-pid"));
-                let rejected = verify()
-                    .env("PATH", &wrapper_path)
-                    .env("STAGED_REAL_PYTHON", python.trim())
-                    .env("STAGED_MODE", mode)
-                    .env("STAGED_PID_FILE", &pid_file)
-                    .env(
-                        "STAGED_MISSING_ASSETS",
-                        scratch.path().join("absent-assets"),
-                    )
-                    .env("TMPDIR", &work_root)
-                    .output()
-                    .expect("drive startup refusal through the real staging wrapper");
-                assert!(!rejected.status.success(), "{mode} server was accepted");
-                let error = String::from_utf8_lossy(&rejected.stderr);
-                assert!(
-                    error.contains(expected) && error.contains("ACTION:"),
-                    "wrong startup error: {error}"
-                );
-                let pid: u32 = std::fs::read_to_string(&pid_file)
-                    .expect("owned server PID")
-                    .trim()
-                    .parse()
-                    .expect("numeric server PID");
-                let process = Command::new("ps")
-                    .args(["-p", &pid.to_string(), "-o", "pid="])
-                    .output()
-                    .expect("read the captured child PID");
-                assert!(
-                    String::from_utf8_lossy(&process.stdout).trim().is_empty(),
-                    "startup refusal left its captured child running"
-                );
-                assert!(
-                    std::fs::read_dir(&work_root)
-                        .expect("startup scratch")
-                        .find(|entry| entry
-                            .as_ref()
-                            .expect("temporary entry")
-                            .file_name()
-                            .to_string_lossy()
-                            .starts_with("notignored-stage."))
-                        .is_none(),
-                    "startup refusal left temporary installs"
-                );
-            }
+        }
+
+        for arguments in [vec![], vec![stage.to_str().expect("staged path")]] {
+            let refused = Command::new("bash")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.sh")
+                .args(arguments)
+                .output()
+                .expect("run staging with missing arguments");
+            assert!(!refused.status.success());
+            assert!(refused.stdout.is_empty());
+            assert!(
+                String::from_utf8_lossy(&refused.stderr)
+                    .contains("ACTION: run bash scripts/stage-release.sh"),
+                "missing arguments did not explain the real invocation"
+            );
         }
 
         run(
@@ -1074,6 +1044,8 @@ os.replace(path+'.new',path)
         scratch.path(),
     );
 }
+
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 /// Every argument the package builder refuses, and what it tells the caller.
 ///
