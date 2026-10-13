@@ -730,7 +730,35 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
                 .arg(&sdk_tgz);
             command
         };
-        run("install and execute every staged form", &mut verify());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let shim_dir = scratch.path().join("delayed-python");
+            std::fs::create_dir(&shim_dir).expect("create interpreter wrapper directory");
+            let shim = shim_dir.join("python3");
+            std::fs::write(
+                &shim,
+                "#!/usr/bin/env bash\ncase \"$1\" in */scripts/staged-transport.py) sleep 6;; esac\nexec \"$STAGED_REAL_PYTHON\" \"$@\"\n",
+            )
+            .expect("write delayed real-interpreter wrapper");
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+                .expect("make interpreter wrapper executable");
+            let python = run(
+                "locate the real Python interpreter",
+                required("python3").args(["-c", "import sys; print(sys.executable)"]),
+            );
+            let mut paths = vec![shim_dir];
+            paths.extend(std::env::split_paths(
+                &std::env::var_os("PATH").expect("PATH"),
+            ));
+            run(
+                "install and execute staged forms after delayed real server startup",
+                verify()
+                    .env("PATH", std::env::join_paths(paths).expect("wrapper PATH"))
+                    .env("STAGED_REAL_PYTHON", python.trim()),
+            );
+        }
+
         let manifest_path = stage.join("manifest.json");
         let original_manifest = std::fs::read(&manifest_path).expect("read staged manifest");
         let good: serde_json::Value =

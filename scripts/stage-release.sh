@@ -62,12 +62,13 @@ fi
 python3 "$root/scripts/staged-transport.py" "$stage/archives" "$work/port" >"$work/server.log" 2>&1 &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; rm -rf "$work"' EXIT
-for _ in {1..100}; do
-  [ ! -f "$work/port" ] || break
+startup_deadline=$((SECONDS + 30))
+while [ "$SECONDS" -lt "$startup_deadline" ]; do
+  [ ! -s "$work/port" ] || break
   kill -0 "$server_pid" 2>/dev/null || { cat "$work/server.log" >&2; die "staged transport stopped before startup"; }
   sleep 0.05
 done
-[ -f "$work/port" ] || die "local transport did not start"
+[ -s "$work/port" ] || { cat "$work/server.log" >&2; die "local transport did not start within 30 seconds"; }
 port="$(cat "$work/port")" || die "cannot read staged transport port"
 NOTIGNORED_RELEASE_BASE_URL="http://127.0.0.1:$port" run sh "$root/scripts/install.sh" --version "v$version" --to "$work/archive"
 PATH="$work/archive:$PATH" run bash "$root/scripts/smoke-published.sh" --expect-version "$version" --label "staged archive"
