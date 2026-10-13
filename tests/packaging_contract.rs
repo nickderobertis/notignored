@@ -118,12 +118,7 @@ const PINNED_INSTALLS: [(&str, &str); 5] = [
 /// is published and never installed. The one released target still with no leg,
 /// `aarch64-unknown-linux-gnu`, is covered by the build matrices and by
 /// `tests/e2e/packaging.rs` on whichever host runs it.
-const VERIFY_RUNNERS: [&str; 4] = [
-    "ubuntu-latest",
-    "macos-latest",
-    "macos-15-intel",
-    "windows-latest",
-];
+const VERIFY_RUNNERS: [&str; 2] = ["ubuntu-latest", "windows-latest"];
 
 /// The runners the GitHub Release's own installer is verified on.
 ///
@@ -133,7 +128,7 @@ const VERIFY_RUNNERS: [&str; 4] = [
 /// install jobs on windows-latest. The `x86_64-pc-windows-msvc` asset *names* are
 /// still held to a real release's manifest by `tests/install_contract.rs`, so the
 /// failure that made this leg necessary could not hide on the leg it lacks.
-const INSTALLER_RUNNERS: [&str; 3] = ["ubuntu-latest", "macos-latest", "macos-15-intel"];
+const INSTALLER_RUNNERS: [&str; 1] = ["ubuntu-latest"];
 
 /// Every job that installs a published artifact and smoke-tests it, as
 /// `(workflow, job, runners)`.
@@ -306,8 +301,17 @@ fn the_release_is_attached_to_as_a_draft_and_published_after_every_upload() {
     let publish = job("publish-release");
     assert_eq!(
         needs(&publish),
-        ["upload".to_string()].into_iter().collect(),
-        "`publish-release` must wait for every upload leg, and only for them"
+        [
+            "upload",
+            "upload-darwin",
+            "macos-build",
+            "build-wheels",
+            "build-npm"
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        "`publish-release` must wait for every archive and staged verification"
     );
     let scripts = scripts(&publish);
     let publishes = scripts
@@ -345,6 +349,7 @@ fn nothing_publishes_without_the_gate() {
         "build-npm",
         "build-sdk-npm",
         "build-python-sdk",
+        "macos-build",
         "publish-crate",
     ] {
         assert!(
@@ -467,11 +472,25 @@ fn every_secret_the_pipeline_uses_is_provisioned() {
 /// no Rust toolchain there to do it.
 #[test]
 fn the_binary_wheel_and_npm_matrices_cover_the_same_targets() {
-    let expected: Vec<&str> = TARGETS.iter().map(|(target, _)| *target).collect();
+    let expected: BTreeSet<String> = TARGETS
+        .iter()
+        .map(|(target, _)| (*target).to_string())
+        .collect();
+    let darwin = job("macos-build");
+    let darwin_targets: Vec<String> = darwin
+        .get("env")
+        .get("RELEASE_TARGETS")
+        .scalar()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
     for name in ["upload", "build-wheels", "build-npm"] {
+        let all: BTreeSet<String> = matrix_targets(&job(name))
+            .into_iter()
+            .chain(darwin_targets.iter().cloned())
+            .collect();
         assert_eq!(
-            matrix_targets(&job(name)),
-            expected,
+            all, expected,
             "`{name}` no longer builds the five released targets"
         );
     }
@@ -1293,6 +1312,8 @@ fn the_floating_major_tag_moves_after_every_publish_and_verification() {
     // The binaries the action itself downloads. Not `publish-`/`verify-`-named,
     // and the one artifact a consumer of `@v0` cannot do without.
     expected.insert("upload".to_string());
+    expected.insert("upload-darwin".to_string());
+    expected.insert("macos-build".to_string());
     let missing: Vec<&String> = expected.difference(&waits_for).collect();
     assert!(
         missing.is_empty(),
@@ -1381,4 +1402,61 @@ fn the_floating_major_tag_moves_only_when_nothing_failed() {
         "`major-tag` no longer runs {MAJOR_TAG_SCRIPT}; the tag logic must stay in the \
          script tests/e2e/major_tag.rs drives, not inline in a workflow"
     );
+}
+
+/// The single Mac job retains both released architectures and their three
+/// installed forms, before Linux attaches bytes to the immutable draft.
+#[test]
+fn darwin_staging_retains_both_architectures_and_precedes_publication() {
+    let mac = job("macos-build");
+    assert_eq!(mac.get("runs-on").scalar(), "macos-latest");
+    assert!(mac.find("strategy").is_none());
+    assert!(
+        mac.find("if").is_none(),
+        "local proofs must run with publishing off"
+    );
+    let scripts = scripts(&mac).join("\n");
+    for required in [
+        "rustup target add \"${release_targets[@]}\"",
+        "maturin==$(cat .maturin-version)",
+        "scripts/stage-release.py --target",
+        "scripts/stage-release.sh staged/aarch64-apple-darwin",
+        "scripts/stage-release.sh staged/x86_64-apple-darwin",
+        "arch -x86_64",
+        "softwareupdate --install-rosetta",
+    ] {
+        assert!(scripts.contains(required), "Mac staging lost {required}");
+    }
+    for name in [
+        "publish-release",
+        "publish-pypi",
+        "publish-npm",
+        "upload-darwin",
+    ] {
+        assert!(
+            needs(&job(name)).contains("macos-build"),
+            "{name} publishes before Mac proof"
+        );
+        assert_eq!(job(name).get("runs-on").scalar(), "ubuntu-latest");
+    }
+    let upload = job("upload-darwin");
+    assert!(scripts_for_darwin_upload(&upload).contains("scripts/github-release.sh await-draft"));
+    for artifact in [
+        "wheels-darwin",
+        "npm-darwin",
+        "archives-darwin",
+        "darwin-payload-manifests",
+    ] {
+        assert!(
+            mac.get("steps").list().iter().any(|step| step
+                .find("with")
+                .and_then(|with| with.find("name"))
+                .is_some_and(|name| name.scalar() == artifact)),
+            "Mac staging lost artifact {artifact}"
+        );
+    }
+}
+
+fn scripts_for_darwin_upload(upload: &Node) -> String {
+    scripts(upload).join("\n")
 }

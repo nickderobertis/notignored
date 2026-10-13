@@ -295,3 +295,26 @@ fn the_route_catches_a_miswired_gate() {
         );
     }
 }
+
+/// The tier's conservative full sweep cannot authorize a Mac omission: that
+/// is the semantic classifier's separate output in the real changes job.
+#[test]
+fn a_release_named_branch_full_sweep_never_authorizes_mac_omission() {
+    let (success, outputs, _) = tier(&[
+        ("GATE_EVENT", "pull_request"),
+        ("GATE_HEAD_REF", "release-plz-forged"),
+    ]);
+    assert!(success);
+    assert_eq!(outputs.get("tier").map(String::as_str), Some("full"));
+    assert!(!outputs.contains_key("macos"));
+    let workflow = ci();
+    assert_eq!(
+        workflow
+            .get("jobs")
+            .get("changes")
+            .get("outputs")
+            .get("macos")
+            .scalar(),
+        "${{ steps.policy.outputs.macos }}"
+    );
+}

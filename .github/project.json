@@ -1,0 +1,55 @@
+{
+  "name": "github-workflows",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "tags": [
+    "scope:cli-tests",
+    "lang:javascript"
+  ],
+  "targets": {
+    "bootstrap": {
+      "command": "npm ci --prefix .github --ignore-scripts --no-audit --no-fund --silent && bash scripts/setup-js.sh"
+    },
+    "format": {
+      "command": "node .github/tooling-check.mjs format"
+    },
+    "format-check": {
+      "command": "node .github/tooling-check.mjs format-check"
+    },
+    "lint": {
+      "command": "node .github/tooling-check.mjs lint"
+    },
+    "schema-check": {
+      "command": "node .github/tooling-check.mjs schema-check"
+    },
+    "test": {
+      "command": "node --test .github/tests/*.test.mjs",
+      "cache": false,
+      "dependsOn": [
+        "bootstrap"
+      ],
+      "inputs": [
+        "default",
+        "{workspaceRoot}/screencomp.toml",
+        "{workspaceRoot}/scripts/ci-required.sh",
+        "{workspaceRoot}/scripts/ci-gate-tier.sh"
+      ]
+    },
+    "budgets": {
+      "command": "node .github/check-budgets.mjs",
+      "cache": false,
+      "dependsOn": [
+        "test"
+      ]
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": [
+        "format-check",
+        "lint",
+        "schema-check",
+        "budgets"
+      ]
+    }
+  }
+}

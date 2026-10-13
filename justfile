@@ -307,3 +307,9 @@ lint-llm-validate *args:
 lint-llm-diff base="origin/main" *args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     llmlint --diff --diff-base "{{base}}" {{args}}
+
+# The former Mac cross assertions, sequentially in its one allowed PR lane.
+_macos-ci:
+    @just fmt-check
+    @just lint
+    @just test-quick

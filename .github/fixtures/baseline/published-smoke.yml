@@ -1,0 +1,166 @@
+name: Published smoke
+on:
+  schedule:
+    - cron: 23 6 * * 1
+  workflow_dispatch: null
+permissions: {}
+concurrency:
+  group: published-smoke
+  cancel-in-progress: false
+jobs:
+  github-release:
+    name: github-release (${{ matrix.os }})
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - macos-15-intel
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ask GitHub which release is latest
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq
+          .tagName | tr -d '\r')"
+
+          if [ -z "$tag" ]; then
+            echo "::error::GitHub Release on $RUNNER_OS/$RUNNER_ARCH: no published release to install"
+            echo "ACTION: check https://github.com/$GITHUB_REPOSITORY/releases — release.yml may never have cut one" >&2
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Install the latest release with scripts/install.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >
+          if ! sh scripts/install.sh --to "$RUNNER_TEMP/notignored-bin"; then
+            echo "::error::GitHub Release on $RUNNER_OS/$RUNNER_ARCH: scripts/install.sh failed"
+            echo "ACTION: check https://github.com/$GITHUB_REPOSITORY/releases/latest — the archive or its .sha256 sibling may be missing for this target" >&2
+            exit 1
+          fi
+
+          echo "$RUNNER_TEMP/notignored-bin" >> "$GITHUB_PATH"
+      - name: Smoke-test what the Release served
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          bash scripts/smoke-published.sh \
+            --expect-version "${TAG#v}" \
+            --label "GitHub Release notignored $TAG on $RUNNER_OS/$RUNNER_ARCH"
+  pypi:
+    name: pypi (${{ matrix.os }})
+    if: ${{ vars.PYPI_PUBLISH == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - macos-15-intel
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the latest published wheel
+        id: install
+        run: >
+          if ! pip install --upgrade notignored-cli; then
+            echo "::error::PyPI on $RUNNER_OS/$RUNNER_ARCH: pip install notignored-cli failed"
+            echo "ACTION: check https://pypi.org/project/notignored-cli/ for a yanked or missing wheel for this platform" >&2
+            exit 1
+          fi
+
+          version="$(pip show notignored-cli | sed -n 's/^Version: //p' | tr -d
+          '\r')"
+
+          if [ -z "$version" ]; then
+            echo "::error::PyPI on $RUNNER_OS/$RUNNER_ARCH: notignored-cli installed but reports no version"
+            echo "ACTION: inspect the wheel's metadata — pip show found no Version field" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Smoke-test what PyPI served
+        env:
+          VERSION: ${{ steps.install.outputs.version }}
+        run: |
+          bash scripts/smoke-published.sh \
+            --expect-version "$VERSION" \
+            --label "PyPI notignored-cli $VERSION on $RUNNER_OS/$RUNNER_ARCH"
+  npm:
+    name: npm (${{ matrix.os }})
+    if: ${{ vars.NPM_PUBLISH == 'true' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - macos-15-intel
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the latest published package
+        id: install
+        run: >
+          version="$(npm view notignored-cli version 2>/dev/null | tr -d '\r')"
+
+          if [ -z "$version" ]; then
+            echo "::error::npm on $RUNNER_OS/$RUNNER_ARCH: the registry serves no version of notignored-cli"
+            echo "ACTION: check https://www.npmjs.com/package/notignored-cli — the latest dist-tag may be unset or the package unpublished" >&2
+            exit 1
+          fi
+
+          # Pinned to what `npm view` just reported so the version asserted
+          below
+
+          # is the one that was installed, even if latest moves mid-run. That
+
+          # pin is also why this install retries: `npm view` and the install
+
+          # resolve independently, so a version published minutes ago can be on
+
+          # the edge one read and not the other — the same race that reddened
+
+          # three releases, which scripts/retry-install.sh records.
+
+          bash scripts/retry-install.sh \
+            --label "npm notignored-cli $version on $RUNNER_OS/$RUNNER_ARCH" \
+            --action "the platform package for this runner is missing or unpublished; check the notignored-cli-* packages" \
+            -- npm install -g --prefer-online "notignored-cli@${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Smoke-test what npm served
+        env:
+          VERSION: ${{ steps.install.outputs.version }}
+        run: |
+          bash scripts/smoke-published.sh \
+            --expect-version "$VERSION" \
+            --label "npm notignored-cli $VERSION on $RUNNER_OS/$RUNNER_ARCH"

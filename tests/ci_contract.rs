@@ -683,3 +683,38 @@ mod the_checks_catch {
         }
     }
 }
+
+#[test]
+fn macos_routing_uses_the_semantic_classifier_and_required_covers_it() {
+    let workflow = parse(&read(CI));
+    let jobs = workflow.get("jobs");
+    let changes = jobs.get("changes");
+    let commands: Vec<String> = run_steps(changes.get("steps").list())
+        .iter()
+        .map(|step| step.get("run").scalar().to_string())
+        .collect();
+    assert!(commands
+        .iter()
+        .any(|command| command.contains("node .github/macos-policy.mjs classify --event")));
+    let mac = jobs.get("macos");
+    assert_eq!(
+        mac.get("if").scalar(),
+        "needs.changes.outputs.macos == 'true'"
+    );
+    assert_eq!(mac.get("runs-on").scalar(), "macos-latest");
+    assert!(mac.find("strategy").is_none());
+    assert!(needs_of(jobs.get("required")).contains(&"macos".to_string()));
+    let commands = run_steps(mac.get("steps").list())
+        .iter()
+        .map(|step| step.get("run").scalar().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for command in [
+        "just _macos-ci",
+        "cargo install --path . --locked",
+        "cargo install --git https://github.com/nickderobertis/notignored --locked",
+        "--fail-if-found",
+    ] {
+        assert!(commands.contains(command), "Mac CI lost {command}");
+    }
+}

@@ -596,6 +596,246 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
             .arg(&wheel),
     );
 
+    // Drive the release's actual staging and install commands over this wheel;
+    // transport is loopback, while packing, installation and CLI execution are real.
+    if cfg!(unix) {
+        for mutation in ["member", "metadata", "tag", "architecture", "format", "zip"] {
+            let broken = scratch.path().join(format!("{mutation}.whl"));
+            run(
+                "make a malformed real wheel",
+                Command::new("python3").arg("-c").arg(r#"
+import sys,zipfile,struct
+source,destination,mutation=sys.argv[1:]
+if mutation == 'zip':
+    open(destination,'wb').write(b'not a zip')
+    sys.exit(0)
+with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as changed:
+    for member in original.infolist():
+        name=member.filename
+        payload=original.read(name)
+        if '.data/scripts/' in name:
+            if mutation == 'member': name += '-other'
+            elif mutation == 'architecture':
+                payload=bytearray(payload)
+                if payload[:4] == b'\x7fELF':
+                    machine=struct.unpack_from('<H',payload,18)[0]
+                    struct.pack_into('<H',payload,18,183 if machine == 62 else 62)
+                else:
+                    machine=struct.unpack_from('<I',payload,4)[0]
+                    struct.pack_into('<I',payload,4,0x0100000c if machine == 0x01000007 else 0x01000007)
+            elif mutation == 'format':
+                if payload[:4] == b'\x7fELF':
+                    machine=struct.unpack_from('<H',payload,18)[0]
+                    payload=b'\xcf\xfa\xed\xfe'+struct.pack('<I',0x01000007 if machine == 62 else 0x0100000c)+payload[8:]
+                else:
+                    machine=struct.unpack_from('<I',payload,4)[0]
+                    payload=bytearray(payload)
+                    payload[:4]=b'\x7fELF'
+                    struct.pack_into('<H',payload,18,62 if machine == 0x01000007 else 183)
+        elif name.endswith('/METADATA') and mutation == 'metadata':
+            payload=payload.replace(b'Name: notignored-cli',b'Name: wrong-cli')
+        elif name.endswith('/WHEEL') and mutation == 'tag':
+            payload=b'Wheel-Version: 1.0\nTag: py3-none-any\n'
+        changed.writestr(name,payload)
+"#).arg(&wheel).arg(&broken).arg(mutation),
+            );
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(["--target", host_target(), "--wheel"])
+                .arg(&broken)
+                .arg("--out")
+                .arg(scratch.path().join("rejected"))
+                .output()
+                .expect("run malformed wheel staging");
+            assert!(!refused.status.success(), "{mutation} was accepted");
+            let expected = match mutation {
+                "member" => "exact cli payload",
+                "metadata" => "name/version",
+                "tag" => "platform tags",
+                "architecture" => "architecture",
+                "format" => "operating-system format",
+                "zip" => "not a zip",
+                _ => unreachable!("the mutation vocabulary is fixed above"),
+            };
+            assert!(
+                String::from_utf8_lossy(&refused.stderr)
+                    .to_lowercase()
+                    .contains(expected),
+                "{mutation} failed for the wrong reason: {}",
+                String::from_utf8_lossy(&refused.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&refused.stderr).contains("ACTION:"),
+                "{mutation} did not name a recovery action"
+            );
+        }
+        let refused = Command::new("python3")
+            .current_dir(repo_root())
+            .arg("scripts/stage-release.py")
+            .args(["--target", "unsupported-target", "--wheel"])
+            .arg(&wheel)
+            .arg("--out")
+            .arg(scratch.path().join("rejected"))
+            .output()
+            .expect("run unsupported staging target");
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("unsupported target"));
+        let stage = scratch.path().join("staged");
+        run(
+            "stage the release artifact",
+            Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(["--target", host_target(), "--wheel"])
+                .arg(&wheel)
+                .arg("--out")
+                .arg(&stage),
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(stage.join("manifest.json")).expect("read payload manifest"),
+        )
+        .expect("payload manifest JSON");
+        assert_eq!(manifest["target"], host_target());
+        assert_eq!(manifest["version"], cargo_version());
+        assert_eq!(manifest["hashes"]["archive"], manifest["hashes"]["wheel"]);
+        assert_eq!(manifest["hashes"]["npm"], manifest["hashes"]["wheel"]);
+        run(
+            "build the staged TypeScript SDK",
+            Command::new(crate::support::bash_program())
+                .current_dir(repo_root())
+                .args([
+                    "scripts/dev-tool.sh",
+                    "tsc",
+                    "-p",
+                    "npm/notignored-sdk/tsconfig.json",
+                ]),
+        );
+        let sdk = PathBuf::from(run(
+            "stamp the staged TypeScript SDK",
+            required("node")
+                .current_dir(repo_root())
+                .arg("npm/notignored-sdk/scripts/pack.mjs")
+                .arg("--out")
+                .arg(scratch.path().join("sdk")),
+        ));
+        let sdk_tgz = npm_pack(&sdk, &scratch.path().join("sdk-tarballs"));
+        let verify = || {
+            let mut command = Command::new("bash");
+            command
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.sh")
+                .arg(&stage)
+                .arg("python3")
+                .arg(&sdk_tgz);
+            command
+        };
+        run("install and execute every staged form", &mut verify());
+        let manifest_path = stage.join("manifest.json");
+        let original_manifest = std::fs::read(&manifest_path).expect("read staged manifest");
+        let good: serde_json::Value =
+            serde_json::from_slice(&original_manifest).expect("manifest JSON");
+        for (field, value) in [
+            ("target", serde_json::json!("unknown-target")),
+            ("version", serde_json::json!("")),
+            ("version", serde_json::json!(42)),
+            ("tag", serde_json::json!("v999.0.0")),
+            ("architecture", serde_json::json!("unknown")),
+            ("archive", serde_json::json!("../outside.tar.gz")),
+            ("hashes", serde_json::json!({})),
+            (
+                "hashes",
+                serde_json::json!({"archive": 123, "npm": "bad", "wheel": "bad"}),
+            ),
+        ] {
+            let mut invalid = good.clone();
+            invalid[field] = value;
+            std::fs::write(
+                &manifest_path,
+                serde_json::to_vec(&invalid).expect("serialize bad manifest"),
+            )
+            .expect("write bad manifest");
+            let refused = verify().output().expect("verify malformed manifest");
+            assert!(
+                !refused.status.success(),
+                "invalid manifest {field} was accepted"
+            );
+            assert!(String::from_utf8_lossy(&refused.stderr).contains("ACTION:"));
+        }
+        std::fs::write(&manifest_path, original_manifest).expect("restore staged manifest");
+        for (assets, port) in [
+            (
+                scratch.path().join("missing-assets"),
+                scratch.path().join("port"),
+            ),
+            (stage.join("archives"), manifest_path),
+            (
+                stage.join("archives"),
+                scratch.path().join("missing-parent/port"),
+            ),
+        ] {
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/staged-transport.py")
+                .arg(assets)
+                .arg(port)
+                .output()
+                .expect("run invalid transport");
+            assert!(!refused.status.success());
+            assert!(String::from_utf8_lossy(&refused.stderr).contains("ACTION:"));
+        }
+
+        let staged_wheel = stage
+            .join("wheels")
+            .join(wheel.file_name().expect("wheel filename"));
+        let original_wheel = std::fs::read(&staged_wheel).expect("read staged wheel");
+        run(
+            "corrupt one staged payload",
+            Command::new("python3")
+                .arg("-c")
+                .arg(
+                    r#"
+import sys,zipfile,os
+path=sys.argv[1]
+with zipfile.ZipFile(path) as original, zipfile.ZipFile(path+'.new','w') as changed:
+    for name in original.namelist():
+        payload=original.read(name)
+        if '.data/scripts/' in name: payload += b'changed'
+        changed.writestr(name,payload)
+os.replace(path+'.new',path)
+"#,
+                )
+                .arg(&staged_wheel),
+        );
+        let disagreement = verify().output().expect("verify mismatched payloads");
+        assert!(!disagreement.status.success());
+        assert!(String::from_utf8_lossy(&disagreement.stderr).contains("hashes differ"));
+        std::fs::write(staged_wheel, original_wheel).expect("restore staged wheel");
+        let checksum = std::fs::read_dir(stage.join("archives"))
+            .expect("read archives")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "sha256")
+            })
+            .expect("a checksum sibling");
+        let original = std::fs::read(&checksum).expect("read checksum");
+        std::fs::write(&checksum, "0".repeat(64)).expect("corrupt checksum");
+        let failure = verify().output().expect("run corrupted stage");
+        assert!(
+            !failure.status.success(),
+            "a bad checksum installed successfully"
+        );
+        assert!(
+            String::from_utf8_lossy(&failure.stderr).contains("checksum"),
+            "failure should name the checksum: {}",
+            String::from_utf8_lossy(&failure.stderr)
+        );
+        std::fs::write(checksum, original).expect("restore checksum");
+        run("recover after restoring staged checksum", &mut verify());
+    }
+
     // The wheel's console command, on the venv's PATH exactly as `pip install`
     // puts it there.
     let bin = if cfg!(windows) {

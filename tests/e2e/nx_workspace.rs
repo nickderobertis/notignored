@@ -20,12 +20,13 @@ use crate::support::{bash_program, repo_root};
 /// — and the crate's two test tiers that are projects of their own so a change
 /// pays only for the tiers it reaches: the `tests/*.rs` contract suites and the
 /// `tests/e2e/` journeys. The crate's unit tests stay in the crate's project.
-const PROJECTS: [&str; 5] = [
+const PROJECTS: [&str; 6] = [
     "notignored",
     "notignored-integration",
     "notignored-e2e",
     "notignored-sdk-python",
     "notignored-sdk-npm",
+    "github-workflows",
 ];
 
 /// The crate's own projects: the crate and its test tiers. What CI's
@@ -252,7 +253,7 @@ fn the_crates_coverage_combines_every_test_tier() {
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
     const CRATE_AND_TIERS: &[&str] = &CRATE_PROJECTS;
-    let cases: [(&str, &[&str]); 12] = [
+    let cases: [(&str, &[&str]); 14] = [
         (
             "src/lib.rs",
             &[
@@ -291,6 +292,11 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
         // The orchestrator's own config changes what every target *is*, so it
         // has to reach every project — the one case where scoping would be wrong.
         ("nx.json", &PROJECTS),
+        (".github/macos-policy.mjs", &["github-workflows"]),
+        (
+            ".github/workflows/ci.yml",
+            &["github-workflows", "notignored-integration"],
+        ),
     ];
     for (file, expected) in cases {
         assert_eq!(
@@ -992,7 +998,16 @@ fn an_affected_run_executes_against_an_explicit_base() {
     for (file, expected) in [
         ("tests/e2e/cli.rs", &["notignored-e2e"][..]),
         ("tests/ci_contract.rs", &["notignored-integration"][..]),
-        ("src/lib.rs", &PROJECTS[..]),
+        (
+            "src/lib.rs",
+            &[
+                "notignored",
+                "notignored-integration",
+                "notignored-e2e",
+                "notignored-sdk-python",
+                "notignored-sdk-npm",
+            ][..],
+        ),
     ] {
         let (dir, base) = scratch_workspace_with(true);
         write(dir.path(), file, "// changed\n");
