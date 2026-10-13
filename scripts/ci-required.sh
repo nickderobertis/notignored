@@ -157,7 +157,8 @@ skip_allowed() {
     "needs.changes.outputs.macos == 'true'")
       changes_line="$(payload_line changes)"
       changes_result="$(printf '%s' "$changes_line" | cut -f2)"
-      local macos="$(printf '%s' "$changes_line" | cut -f4)"
+      local macos
+      macos="$(printf '%s' "$changes_line" | cut -f4)" || die "cannot parse Mac classifier output" "pass toJSON(needs) unaltered"
       if [ "$changes_result" = success ] && [ "$macos" = '"false"' ]; then
         return 0
       fi

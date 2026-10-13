@@ -68,6 +68,7 @@ for _ in {1..100}; do
   sleep 0.05
 done
 [ -f "$work/port" ] || die "local transport did not start"
-NOTIGNORED_RELEASE_BASE_URL="http://127.0.0.1:$(cat "$work/port")" run sh "$root/scripts/install.sh" --version "v$version" --to "$work/archive"
+port="$(cat "$work/port")" || die "cannot read staged transport port"
+NOTIGNORED_RELEASE_BASE_URL="http://127.0.0.1:$port" run sh "$root/scripts/install.sh" --version "v$version" --to "$work/archive"
 PATH="$work/archive:$PATH" run bash "$root/scripts/smoke-published.sh" --expect-version "$version" --label "staged archive"
 echo 'stage-release: all staged install surfaces passed'

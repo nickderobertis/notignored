@@ -326,17 +326,7 @@ jobs:
             exit 1
           fi
 
-          # Pinned to what `npm view` just reported so the version asserted below
-
-          # is the one that was installed, even if latest moves mid-run. That
-
-          # pin is also why this install retries: `npm view` and the install
-
-          # resolve independently, so a version published minutes ago can be on
-
-          # the edge one read and not the other — the same race that reddened
-
-          # three releases, which scripts/retry-install.sh records.
+          # Pin the install and assertion to the same observed registry version.
 
           bash scripts/retry-install.sh \
             --label "npm notignored-cli $version on $RUNNER_OS/$RUNNER_ARCH" \

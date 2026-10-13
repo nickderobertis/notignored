@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { report } from "@onebudgetspec/sdk";
+import { eventClasses } from "./event-classes.mjs";
 import { sourceDigest } from "./workflow-graph.mjs";
 
 try {
@@ -18,9 +19,9 @@ try {
   const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
   if (
     !Array.isArray(telemetry.eventClasses) ||
-    telemetry.eventClasses.length !== 12 ||
+    telemetry.eventClasses.length !== eventClasses.length ||
     telemetry.eventClasses.some((value) => typeof value !== "string") ||
-    new Set(telemetry.eventClasses).size !== 12 ||
+    eventClasses.some(([id]) => !telemetry.eventClasses.includes(id)) ||
     !Array.isArray(telemetry.scenarios) ||
     !telemetry.scenarios.length ||
     !Array.isArray(telemetry.lifecycleCounts) ||
@@ -44,12 +45,33 @@ try {
     if (
       !lifecycle ||
       !Array.isArray(lifecycle.runs) ||
-      !isCount(lifecycle.count)
+      !isCount(lifecycle.count) ||
+      lifecycle.runs.some(
+        (run) =>
+          !run ||
+          !Array.isArray(run.rows) ||
+          run.rows.some(
+            (row) =>
+              typeof row.enabled !== "boolean" ||
+              typeof row.macos !== "boolean",
+          ),
+      ) ||
+      lifecycle.count !==
+        lifecycle.runs.filter((run) =>
+          run.rows.some((row) => row.enabled && row.macos),
+        ).length
     )
       throw new Error("invalid lifecycle measurement");
   }
   if (!isCount(telemetry.jobsPerRun) || !isCount(telemetry.runsPerChange))
     throw new Error("invalid recorded count");
+  if (
+    telemetry.jobsPerRun !==
+      Math.max(...telemetry.jobCounts.map((row) => row.count)) ||
+    telemetry.runsPerChange !==
+      Math.max(...telemetry.lifecycleCounts.map((row) => row.count))
+  )
+    throw new Error("aggregate measurement differs from detail");
   const field = {
     "jobs-per-run": "jobsPerRun",
     "runs-per-change": "runsPerChange",

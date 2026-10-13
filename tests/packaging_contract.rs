@@ -1418,7 +1418,8 @@ fn darwin_staging_retains_both_architectures_and_precedes_publication() {
     let scripts = scripts(&mac).join("\n");
     for required in [
         "rustup target add \"${release_targets[@]}\"",
-        "maturin==$(cat .maturin-version)",
+        "bash scripts/setup-misc-tools.sh",
+        "bash scripts/dev-tool.sh maturin build",
         "scripts/stage-release.py --target",
         "scripts/stage-release.sh staged/aarch64-apple-darwin",
         "scripts/stage-release.sh staged/x86_64-apple-darwin",

@@ -130,6 +130,7 @@ jobs:
           node-version: "22"
       - name: Install the latest published package
         id: install
+        # llmlint: ignore-block[comments_earn_their_place] Historical workflow source is the Linux/Windows preservation reference; retain its original install-step comments so the comparison cannot silently weaken commands.
         run: >
           version="$(npm view notignored-cli version 2>/dev/null | tr -d '\r')"
 
@@ -157,6 +158,7 @@ jobs:
             --action "the platform package for this runner is missing or unpublished; check the notignored-cli-* packages" \
             -- npm install -g --prefer-online "notignored-cli@${version}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+        # llmlint: ignore-end[comments_earn_their_place]
       - name: Smoke-test what npm served
         env:
           VERSION: ${{ steps.install.outputs.version }}

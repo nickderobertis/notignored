@@ -934,15 +934,14 @@ jobs:
         run: |
           read -r -a release_targets <<< "$RELEASE_TARGETS"
           rustup target add "${release_targets[@]}"
-          uv venv --quiet "$RUNNER_TEMP/maturin"
-          uv pip install --quiet --python "$RUNNER_TEMP/maturin" "maturin==$(cat .maturin-version)"
+          bash scripts/setup-misc-tools.sh
           sudo softwareupdate --install-rosetta --agree-to-license
           uv python install cpython-3.12-macos-aarch64-none cpython-3.12-macos-x86_64-none
       - name: Build and stage both architectures from one binary each
         run: |
           read -r -a release_targets <<< "$RELEASE_TARGETS"
           for target in "${release_targets[@]}"; do
-            "$RUNNER_TEMP/maturin/bin/maturin" build --release --locked --target "$target" --out "darwin-wheels/$target"
+            bash scripts/dev-tool.sh maturin build --release --locked --target "$target" --out "darwin-wheels/$target"
             python3 scripts/stage-release.py --target "$target" --wheel darwin-wheels/"$target"/*.whl --out "staged/$target"
           done
       - name: Install and run the arm64 staged products

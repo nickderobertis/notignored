@@ -92,15 +92,18 @@ def pack(target: str, wheel: Path, out: Path) -> None:
     arch = architecture(payload)
     if not target.startswith(arch + "-"):
         raise ValueError(f"wheel executable architecture {arch} differs from {target}")
-    if "apple" in target:
-        platform_pattern = rf"macosx_\d+_\d+_{'arm64' if arch == Architecture.AARCH64 else 'x86_64'}"
-        signature = b"\xcf\xfa\xed\xfe"
-    elif "windows" in target:
-        platform_pattern = "win_amd64"
-        signature = b"MZ"
-    else:
-        platform_pattern = rf"(?:manylinux_\d+_\d+|manylinux\d+|linux)_{arch}"
-        signature = b"\x7fELF"
+    match target.split("-"):
+        case [_, "apple", "darwin"]:
+            platform_pattern = rf"macosx_\d+_\d+_{'arm64' if arch == Architecture.AARCH64 else 'x86_64'}"
+            signature = b"\xcf\xfa\xed\xfe"
+        case [_, "pc", "windows", "msvc"]:
+            platform_pattern = "win_amd64"
+            signature = b"MZ"
+        case [_, "unknown", "linux", "gnu"]:
+            platform_pattern = rf"(?:manylinux_\d+_\d+|manylinux\d+|linux)_{arch}"
+            signature = b"\x7fELF"
+        case _:
+            raise ValueError(f"unsupported target: {target}")
     if not payload.startswith(signature):
         raise ValueError("executable operating-system format differs from target")
     if not tags or any(not re.fullmatch(rf"py3-none-{platform_pattern}", tag) for tag in tags):
