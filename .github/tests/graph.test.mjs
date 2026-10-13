@@ -10,7 +10,8 @@ import {
 import { test } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
+import { createHash } from "node:crypto";
 import {
   evaluate,
   expand,
@@ -482,10 +483,42 @@ test("reusable calls reject corrupted locked provenance and source before counti
       "semanticSha256",
       "source",
       "fixture",
+      "arch-command",
+      "arch-output",
     ]) {
       for (const [name, text] of Object.entries(originals))
         writeFileSync(`${root}/.github/fixtures/reusable/${name}`, text);
-      if (mutation === "source") {
+      if (mutation.startsWith("arch-")) {
+        const workflow = parse(originals["screencomp-v0.4.2.yml"]);
+        if (mutation === "arch-command")
+          workflow.jobs.arches.steps.find((step) => step.id === "read").run =
+            workflow.jobs.arches.steps
+              .find((step) => step.id === "read")
+              .run.replace('-n "$ARCHES_OVERRIDE"', '-z "$ARCHES_OVERRIDE"');
+        else
+          workflow.jobs.arches.outputs.matrix =
+            "$" + "{{ steps.read.outputs.missing }}";
+        const text = stringify(workflow);
+        const source = JSON.parse(originals["source.json"]);
+        const lock = JSON.parse(originals["lock.json"]);
+        source.source = text;
+        lock.sourceSha256 = createHash("sha256").update(text).digest("hex");
+        lock.semanticSha256 = createHash("sha256")
+          .update(JSON.stringify(parse(text)))
+          .digest("hex");
+        writeFileSync(
+          `${root}/.github/fixtures/reusable/source.json`,
+          JSON.stringify(source),
+        );
+        writeFileSync(
+          `${root}/.github/fixtures/reusable/lock.json`,
+          JSON.stringify(lock),
+        );
+        writeFileSync(
+          `${root}/.github/fixtures/reusable/screencomp-v0.4.2.yml`,
+          text,
+        );
+      } else if (mutation === "source") {
         const source = JSON.parse(originals["source.json"]);
         source.source += "\n# changed source\n";
         writeFileSync(
@@ -516,7 +549,9 @@ test("reusable calls reject corrupted locked provenance and source before counti
             scenario,
             root,
           ),
-        /unresolved reusable workflow/,
+        mutation.startsWith("arch-")
+          ? /unresolved reusable architecture/
+          : /unresolved reusable workflow/,
         mutation,
       );
     }

@@ -596,10 +596,38 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
             .arg(&wheel),
     );
 
+    let stage = scratch.path().join("staged");
+    run(
+        "stage the release artifact",
+        Command::new("python3")
+            .current_dir(repo_root())
+            .arg("scripts/stage-release.py")
+            .args(["--target", host_target(), "--wheel"])
+            .arg(&wheel)
+            .arg("--out")
+            .arg(&stage),
+    );
+    run(
+        "verify native staged payloads on every released host platform",
+        Command::new("python3")
+            .current_dir(repo_root())
+            .arg("scripts/stage-release.py")
+            .arg("--verify")
+            .arg("--out")
+            .arg(&stage),
+    );
     // Drive the release's actual staging and install commands over this wheel;
     // transport is loopback, while packing, installation and CLI execution are real.
     if cfg!(unix) {
-        for mutation in ["member", "metadata", "tag", "architecture", "format", "zip"] {
+        for mutation in [
+            "member",
+            "metadata",
+            "tag",
+            "architecture",
+            "format",
+            "zip",
+            "filename",
+        ] {
             let broken = scratch.path().join(format!("{mutation}.whl"));
             run(
                 "make a malformed real wheel",
@@ -656,6 +684,7 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
                 "architecture" => "architecture",
                 "format" => "operating-system format",
                 "zip" => "not a zip",
+                "filename" => "wheel filename",
                 _ => unreachable!("the mutation vocabulary is fixed above"),
             };
             assert!(
@@ -681,17 +710,6 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
             .expect("run unsupported staging target");
         assert!(!refused.status.success());
         assert!(String::from_utf8_lossy(&refused.stderr).contains("unsupported target"));
-        let stage = scratch.path().join("staged");
-        run(
-            "stage the release artifact",
-            Command::new("python3")
-                .current_dir(repo_root())
-                .arg("scripts/stage-release.py")
-                .args(["--target", host_target(), "--wheel"])
-                .arg(&wheel)
-                .arg("--out")
-                .arg(&stage),
-        );
         let manifest: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(stage.join("manifest.json")).expect("read payload manifest"),
         )
@@ -821,6 +839,50 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
             assert!(String::from_utf8_lossy(&refused.stderr).contains("ACTION:"));
         }
 
+        for (directory, name) in [
+            ("archives", "archive"),
+            ("wheels", "wheel"),
+            ("npm-artifacts", "npm"),
+        ] {
+            let artifact = stage
+                .join(directory)
+                .join(good[name].as_str().expect("artifact filename"));
+            let original = std::fs::read(&artifact).expect("read staged artifact");
+            run(
+                "remove the real packaged binary member",
+                Command::new("python3").arg("-c").arg(r#"
+import io,sys,tarfile,zipfile
+path,kind=sys.argv[1:]
+if kind == 'wheel':
+    with zipfile.ZipFile(path) as source:
+        members=[(member,source.read(member)) for member in source.infolist() if '.data/scripts/' not in member.filename]
+    with zipfile.ZipFile(path,'w') as dest:
+        for member,data in members: dest.writestr(member,data)
+else:
+    with tarfile.open(path) as source:
+        members=[(member,source.extractfile(member).read() if member.isfile() else None) for member in source.getmembers() if member.name not in ('notignored','package/bin/notignored')]
+    with tarfile.open(path,'w:gz') as dest:
+        for member,data in members: dest.addfile(member,io.BytesIO(data) if data is not None else None)
+"#).arg(&artifact).arg(name),
+            );
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(["--verify", "--out"])
+                .arg(&stage)
+                .output()
+                .expect("verify artifact without its payload member");
+            assert!(
+                !refused.status.success(),
+                "missing {name} payload was accepted"
+            );
+            let error = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                error.contains("notignored") && error.contains("ACTION:"),
+                "wrong missing-member error: {error}"
+            );
+            std::fs::write(&artifact, original).expect("restore packaged member");
+        }
         let staged_wheel = stage
             .join("wheels")
             .join(wheel.file_name().expect("wheel filename"));

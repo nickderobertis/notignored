@@ -67,6 +67,8 @@ const hostedRunners = new Set([
   "macos-latest",
   "macos-15-intel",
 ]);
+const archResolutionScript =
+  'set -euo pipefail\nif [ -n "$ARCHES_OVERRIDE" ]; then\n  matrix="$ARCHES_OVERRIDE"   # explicit override (no committed config to read)\nelse\n  matrix="$(screencomp arches --format json)"\nfi\nif [ -z "$matrix" ] || [ "$matrix" = "[]" ]; then\n  echo "::error::no [capture].arches configured in screencomp.toml; add e.g. arches = [\\"x86_64\\"], or pass the workflow\'s \'arches\' input" >&2\n  exit 1\nfi\necho "matrix=$matrix" >>"$GITHUB_OUTPUT"\n';
 const archCache = new Map();
 const yamlCache = new Map();
 function yamlFile(path) {
@@ -404,6 +406,13 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
       else if (id === "guard" && name === "release-plz.yml")
         outputs = guardOutputs(job, scenario.releasePlz ?? true, root);
       else if (id === "arches" && name === reusable) {
+        if (
+          job.steps.find((step) => step.id === "read")?.run !==
+          archResolutionScript
+        )
+          throw new Error(
+            "unresolved reusable architecture resolution command",
+          );
         const config = readFileSync(`${root}/screencomp.toml`, "utf8");
         let arches = archCache.get(config);
         if (!arches) {
@@ -429,7 +438,26 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
           )
             throw new Error("unresolved reusable arch override");
         }
-        outputs.matrix = JSON.stringify(arches);
+        if (
+          !Array.isArray(arches) ||
+          !arches.length ||
+          arches.some((arch) => typeof arch !== "string")
+        )
+          throw new Error("unresolved reusable configured architectures");
+        outputs = Object.fromEntries(
+          Object.entries(job.outputs).map(([field, expression]) => [
+            field,
+            resolve(expression, {
+              steps: { read: { outputs: { matrix: JSON.stringify(arches) } } },
+            }),
+          ]),
+        );
+        if (
+          !Object.values(outputs).every(
+            (value) => typeof value === "string" && value,
+          )
+        )
+          throw new Error("unresolved reusable architecture output mapping");
       } else if (job.outputs)
         throw new Error(`${name}/${id}: unresolved job outputs`);
       completed[id] = { result: enabled ? "success" : "skipped", outputs };

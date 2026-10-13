@@ -130,7 +130,16 @@ def pack(target: str, wheel: Path, out: Path) -> None:
     package = Path(command(["node", "scripts/npm-build.mjs", "platform", "--target", target, "--binary", str(binary), "--out", str(out / "npm")]))
     npm = out / "npm-artifacts"
     npm.mkdir(exist_ok=True)
-    command(["npm", "pack", "--pack-destination", str(npm)], package)
+    npm_executable = shutil.which("npm")
+    if npm_executable is None:
+        raise ValueError("npm is not installed")
+    npm_command = [npm_executable]
+    if Path(npm_executable).suffix.lower() == ".cmd":
+        npm_cli = Path(npm_executable).parent / "node_modules/npm/bin/npm-cli.js"
+        if not npm_cli.is_file():
+            raise ValueError("npm installation lacks its JavaScript CLI")
+        npm_command = ["node", str(npm_cli)]
+    command([*npm_command, "pack", "--pack-destination", str(npm)], package)
     tarballs = list(npm.glob("*.tgz"))
     if len(tarballs) != 1:
         raise ValueError("npm pack must produce exactly one tarball")
