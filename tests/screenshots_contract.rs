@@ -10,8 +10,7 @@
 //!   versions of a text renderer reflow every shot, so a drifted pin turns the
 //!   strict gate into "CI is red and nobody knows why".
 //! - `[guard].paths` names files that decide what a scene shows. A path that has
-//!   been renamed away silently stops guarding, and the local pre-push guard goes
-//!   quiet rather than failing.
+//!   been renamed away silently disappears from the visual review scope.
 //! - the committed baseline and the committed README images are two halves of one
 //!   capture; a baseline blessed without the images (or vice versa) publishes a
 //!   README showing output the gate is no longer checking.
@@ -135,7 +134,7 @@ fn every_guarded_path_still_exists() {
         assert!(
             path.exists(),
             "screencomp.toml guards {entry:?}, which no longer exists — a renamed \
-             file stops the pre-push guard silently"
+             file disappears from the visual review scope silently"
         );
     }
     // The things that decide what a scene shows: both renderers, the CLI surface,
@@ -215,14 +214,11 @@ fn the_readme_embeds_every_scene_and_the_hero_gif() {
     );
 }
 
-/// The capture must not inherit git's hook environment.
+/// The capture must not inherit an invoking Git process's environment.
 ///
-/// `.githooks/pre-push` runs `scripts/screenshots.sh`, and git exports `GIT_DIR`
-/// (and friends) to the hooks it runs. Inherited, they aim the throwaway
-/// repository the `diff` and `pr-comment` scenes are driven inside back at the
-/// developer's checkout: `--diff` then reports "not inside a git work tree" and
-/// both scenes capture that instead of the review case — so the guard blocks
-/// every screenshot-relevant push on drift it created itself.
+/// Inherited repository-local variables aim the throwaway repositories used by
+/// the `diff` and `pr-comment` scenes back at the developer's checkout. Both
+/// manual and CI captures must instead render the intended review case.
 ///
 /// Asserted as text because the behaviour cannot be: reproducing it needs
 /// `freeze`, a release build, and a real capture, all of which are out of the

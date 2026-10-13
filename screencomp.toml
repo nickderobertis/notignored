@@ -18,8 +18,8 @@ embed_limit = 10             # embed images inline when <= N shots differ (0 dis
 # gallery is flat.
 
 [guard]
-# Local pre-push guard (.githooks/pre-push): re-capture only when something that
-# can change a rendered scene changes — what a directive *is*, which ones a scan
+# Visual review scope: files that can change a rendered scene — what a
+# directive *is*, which ones a scan
 # finds, how either renderer prints one, the CLI surface the scenes drive, the
 # capture machinery itself, or the vendored font.
 paths = [

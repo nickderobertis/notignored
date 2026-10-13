@@ -39,11 +39,9 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-# Git exports GIT_DIR (and friends) to every hook it runs, and `.githooks/pre-push`
-# runs this script. Inherited, they aim the throwaway repository built below — and
-# the `--diff` scenes driven inside it — back at this checkout, so the capture the
-# pre-push guard classifies is not the one CI takes. Determinism is the contract:
-# drop them, the way the git *config* is neutralized further down.
+# An invoking Git process can export repository-local environment variables.
+# Inherited, they aim the throwaway repositories and their `--diff` scenes back
+# at this checkout. Drop them so manual and CI captures use the same repositories.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR \
   GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH
 
