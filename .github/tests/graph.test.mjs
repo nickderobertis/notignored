@@ -22,6 +22,7 @@ import {
   workflows,
 } from "../workflow-graph.mjs";
 import { classifyHistory, history, payload } from "./policy.test.mjs";
+import { coverageValidator } from "../telemetry-coverage.mjs";
 
 import {
   deliveries,
@@ -520,7 +521,58 @@ test("matrix expansion and published expression evaluator resolve runners; unres
       /unresolved|unclassified|Unrecognized/,
     );
   }
+  // A reusable caller with a matrix would run its callee once per row; both
+  // the recorder and the coverage inventory refuse it rather than count one.
+  const caller = {
+    name: "Caller",
+    on: { push: null },
+    jobs: {
+      call: {
+        uses: graphCaller().uses,
+        strategy: { matrix: { arch: ["x86_64", "aarch64"] } },
+      },
+    },
+  };
+  assert.throws(
+    () => runWorkflow("caller.yml", caller, scenario),
+    /caller\.yml\/call: unsupported reusable caller strategy/,
+  );
+  const root = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "macos-caller-"),
+  );
+  try {
+    mkdirSync(`${root}/.github/workflows`, { recursive: true });
+    writeFileSync(`${root}/.github/workflows/caller.yml`, stringify(caller));
+    assert.throws(
+      () =>
+        coverageValidator(root)(
+          {
+            id: "base-push/x",
+            event: "push",
+            ref: "refs/heads/main",
+            runs: [
+              {
+                workflow: "caller.yml",
+                event: "push",
+                ref: "refs/heads/main",
+                rows: [],
+              },
+            ],
+          },
+          "base-push",
+        ),
+      /caller\.yml\/call: unsupported reusable caller strategy/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
+
+function graphCaller() {
+  return Object.values(workflows()["visual-docs.yml"].jobs).find(
+    (job) => job.uses,
+  );
+}
 
 test("Linux and Windows commands and event lanes remain in their original jobs", () => {
   const graph = workflows();

@@ -21,6 +21,10 @@ export function coverageValidator(root = ".") {
     const rows = [];
     for (const [id, job] of Object.entries(workflow.jobs)) {
       if (job.uses) {
+        if (job.strategy !== undefined)
+          throw new Error(
+            `${name}/${id}: unsupported reusable caller strategy`,
+          );
         const called = calledWorkflow(job.uses, root);
         rows.push(
           ...inventory(job.uses, called, [...stack, name]).map((row) => ({

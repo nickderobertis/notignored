@@ -385,6 +385,12 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
         (explicitStatus || results.every((r) => r === "success")) &&
         evaluate(condition, context, results).coerceString() === "true";
       if (job.uses) {
+        // A caller matrix would run the called workflow once per row; no caller
+        // here has one, so refuse it rather than count a single instance.
+        if (job.strategy !== undefined)
+          throw new Error(
+            `${name}/${id}: unsupported reusable caller strategy`,
+          );
         const called = calledWorkflow(job.uses, root);
         const inputs = {
           ...defaults(called),
