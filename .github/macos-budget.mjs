@@ -9,9 +9,11 @@ import {
   variants,
   variantKey,
   lifecycleEvents,
+  lifecycleSources,
+  uncoveredSubscriptions,
 } from "./event-classes.mjs";
 import { coverageValidator } from "./telemetry-coverage.mjs";
-import { sourceDigest } from "./workflow-graph.mjs";
+import { sourceDigest, workflows } from "./workflow-graph.mjs";
 
 try {
   const { values } = parseArgs({
@@ -74,6 +76,9 @@ try {
     )
   )
     throw new Error("incomplete scenario workload");
+  const uncovered = uncoveredSubscriptions(workflows(root));
+  if (uncovered.length)
+    throw new Error(`unmeasured subscriptions: ${uncovered.join(", ")}`);
   const validateCoverage = coverageValidator(root);
   for (const scenario of telemetry.scenarios) {
     const event = eventClasses.find(([id]) => scenario.id.startsWith(`${id}/`));
@@ -86,7 +91,7 @@ try {
         `${event[0]}/${variantKey({ ...scenario, fork: scenario.ownership === "fork" })}`
     )
       throw new Error("invalid scenario measurement");
-    validateCoverage(scenario);
+    validateCoverage(scenario, event[0]);
   }
   const expectedJobs = telemetry.scenarios.flatMap((scenario) =>
     scenario.runs.map((run) => ({
@@ -106,16 +111,6 @@ try {
     )
   )
     throw new Error("incomplete lifecycle workload");
-  const lifecycleSources = {
-    "ordinary-pr-push": "pr-synchronize",
-    "ordinary-base-merge": "base-push",
-    "version-only-release-pr": "pr-opened",
-    "release-base-merge": "release-merge",
-    "release-tag": "release-tag",
-    "release-published": "release-published",
-    "automatic-smoke": "downstream",
-    schedule: "scheduled",
-  };
   const comparable = (runs, omitMac = false) =>
     runs.map(({ workflow, event, rows }) => ({
       workflow,

@@ -23,7 +23,14 @@ import {
 } from "../workflow-graph.mjs";
 import { classifyHistory, history, payload } from "./policy.test.mjs";
 
-import { eventClasses, variants, variantKey } from "../event-classes.mjs";
+import {
+  deliveries,
+  eventClasses,
+  lifecycleSources,
+  uncoveredSubscriptions,
+  variants,
+  variantKey,
+} from "../event-classes.mjs";
 
 function macRows(run) {
   return run.rows.filter((row) => row.enabled && row.macos);
@@ -34,6 +41,7 @@ test("actual workflow/call graph routes the complete event and publish workload 
   const h = history();
   try {
     const graph = workflows();
+    assert.deepEqual(uncoveredSubscriptions(graph), []);
     const scenarios = [],
       lifecycles = [];
     for (const { diff, fork, vars, cratePublish } of variants()) {
@@ -56,7 +64,9 @@ test("actual workflow/call graph routes the complete event and publish workload 
           cratePublish,
           workflow: "Release",
         };
-        const runs = fanout(scenario);
+        const runs = deliveries(scenario, id).flatMap((delivery) =>
+          fanout({ ...scenario, ...delivery }),
+        );
         for (const run of runs) {
           for (const row of macRows(run))
             assert.ok(
@@ -134,7 +144,9 @@ test("actual workflow/call graph routes the complete event and publish workload 
         },
       ].map((s) => ({
         id: s.id,
-        runs: fanout({ ...s, vars, cratePublish, inputs: {} }),
+        runs: deliveries(s, lifecycleSources[s.id]).flatMap((delivery) =>
+          fanout({ ...s, ...delivery, vars, cratePublish, inputs: {} }),
+        ),
       }));
       lifecycles.push({
         diff,
@@ -806,6 +818,47 @@ test("actual YAML branch and tag subscriptions honor inclusion, negation and re-
           root,
         ),
       /unsupported workflow_run branch\/tag filter/,
+    );
+    // A subscription no event class delivers is named, never left unmeasured.
+    workflow.on = {
+      pull_request: { types: ["opened", "labeled"] },
+      merge_group: null,
+    };
+    assert.deepEqual(uncoveredSubscriptions({ "filtered.yml": workflow }), [
+      "filtered.yml: pull_request.labeled",
+      "filtered.yml: merge_group",
+    ]);
+    // Without listed types a pull request fires only on GitHub's defaults.
+    workflow.on = { pull_request: null };
+    writeFileSync(path, stringify(workflow));
+    for (const [action, fires] of [
+      ["opened", true],
+      ["closed", false],
+    ])
+      assert.equal(
+        fanout({ ...pr("main"), action }, root).length,
+        fires ? 1 : 0,
+        action,
+      );
+    for (const config of [
+      { types: "opened" },
+      { types: [] },
+      { branches: "main" },
+      { branches: [7] },
+    ]) {
+      workflow.on = { pull_request: config };
+      writeFileSync(path, stringify(workflow));
+      assert.throws(
+        () => fanout(pr("main"), root),
+        /filter: expected a list of names/,
+        JSON.stringify(config),
+      );
+    }
+    workflow.on = { schedule: "weekly" };
+    writeFileSync(path, stringify(workflow));
+    assert.throws(
+      () => fanout({ event: "schedule", ref: "refs/heads/main" }, root),
+      /expected cron entries/,
     );
     workflow.on = { push: { branches: ["release/?"] } };
     writeFileSync(path, stringify(workflow));

@@ -1,6 +1,7 @@
 // Validate the recorder's coverage inventory, never its job conditions or costs.
 import { execFileSync } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
+import { deliveries } from "./event-classes.mjs";
 import {
   calledWorkflow,
   expand,
@@ -88,18 +89,11 @@ export function coverageValidator(root = ".") {
     rows
       .map(key)
       .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  return (scenario) => {
+  return (scenario, classId) => {
     // Event subscriptions and their declared downstream calls define which
     // workflow inventories must be present, including jobs intentionally skipped.
     const expected = [];
-    const pending = [
-      {
-        event: scenario.event,
-        action: scenario.action,
-        ref: scenario.ref,
-        workflow: scenario.workflow,
-      },
-    ];
+    const pending = deliveries(scenario, classId);
     const seen = new Set();
     for (let i = 0; i < pending.length; i++) {
       const event = pending[i];

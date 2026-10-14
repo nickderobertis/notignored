@@ -13,6 +13,7 @@ import { data, Evaluator, Lexer, Parser } from "@actions/expressions";
 import { parse } from "yaml";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { subscribedTypes } from "./event-classes.mjs";
 
 const guardCache = new Map();
 function guardOutputs(job, tokenPresent, root) {
@@ -263,9 +264,30 @@ export function triggered(workflow, scenario) {
         ? Object.fromEntries(workflow.on.map((e) => [e, null]))
         : workflow.on;
   if (!on || !Object.hasOwn(on, scenario.event)) return false;
-  const config = on[scenario.event];
-  if (!config) return true;
-  if (config.types && !config.types.includes(scenario.action)) return false;
+  const config = on[scenario.event] ?? {};
+  if (scenario.event === "schedule") {
+    if (
+      !Array.isArray(config) ||
+      !config.length ||
+      config.some((entry) => typeof entry?.cron !== "string")
+    )
+      throw new Error("unresolved schedule trigger: expected cron entries");
+    return true;
+  }
+  if (typeof config !== "object" || Array.isArray(config))
+    throw new Error(`unresolved ${scenario.event} trigger configuration`);
+  for (const key of ["types", "branches", "tags", "workflows"])
+    if (
+      Object.hasOwn(config, key) &&
+      (!Array.isArray(config[key]) ||
+        !config[key].length ||
+        config[key].some((value) => typeof value !== "string" || !value))
+    )
+      throw new Error(
+        `unresolved ${scenario.event} ${key} filter: expected a list of names`,
+      );
+  const types = subscribedTypes(scenario.event, config);
+  if (types && !types.includes(scenario.action)) return false;
   if (
     scenario.event === "workflow_run" &&
     config.workflows &&
