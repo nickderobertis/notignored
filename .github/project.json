@@ -1,4 +1,5 @@
 {
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] this project bootstraps the private, separately locked .github tooling package its task requires, keeping every budget-only dependency inside .github; .github/package.json records the same reason.",
   "name": "github-workflows",
   "$schema": "../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",

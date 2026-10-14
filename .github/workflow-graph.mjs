@@ -642,6 +642,7 @@ export function sourceDigest(root = ".") {
       "scripts/ci-gate-tier.sh",
       "scripts/stage-release.py",
       "scripts/stage-release.sh",
+      "scripts/staged-transport.py",
       "screencomp.toml",
       "Cargo.toml",
       "Cargo.lock",

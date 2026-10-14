@@ -154,7 +154,7 @@ jobs:
         with:
           tool: just,nextest,cargo-llvm-cov
       - run: just bootstrap
-      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] the release publishes only artifacts built from a tree that passed the gate in this run; see the job's comment.
+      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit] the release publishes only artifacts built from a tree that passed the gate in this run; AGENTS.md records this tag-time re-gate as a deliberate, standing exception, and see the job's comment.
       - run: just check
 
   upload:
