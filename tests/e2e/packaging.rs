@@ -693,6 +693,34 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
             .arg("--out")
             .arg(&stage),
     );
+    // A manifest relabeled to another operating system's target of a matching
+    // architecture is refused by the executable's own format, not trusted.
+    let manifest_path = stage.join("manifest.json");
+    let original = std::fs::read_to_string(&manifest_path).expect("read payload manifest");
+    let mut relabeled: serde_json::Value =
+        serde_json::from_str(&original).expect("payload manifest JSON");
+    relabeled["target"] = serde_json::Value::from(if host_target().contains("apple") {
+        "aarch64-unknown-linux-gnu"
+    } else {
+        "aarch64-apple-darwin"
+    });
+    relabeled["architecture"] = serde_json::Value::from("aarch64");
+    std::fs::write(&manifest_path, relabeled.to_string()).expect("relabel payload manifest");
+    let refused = Command::new("python3")
+        .current_dir(repo_root())
+        .arg("scripts/stage-release.py")
+        .arg("--verify")
+        .arg("--out")
+        .arg(&stage)
+        .output()
+        .expect("verify a relabeled manifest");
+    std::fs::write(&manifest_path, &original).expect("restore payload manifest");
+    assert!(!refused.status.success(), "a relabeled manifest verified");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("operating-system format differs"),
+        "a relabeled manifest failed for the wrong reason: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
     // Drive the release's actual staging and install commands over this wheel;
     // transport is loopback, while packing, installation and CLI execution are real.
     if cfg!(unix) {

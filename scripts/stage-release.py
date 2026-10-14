@@ -96,6 +96,21 @@ def cargo_version() -> ReleaseVersion:
     return version
 
 
+def check_format(payload: bytes, target: str) -> None:
+    """Refuse an executable whose operating-system format is not the target's."""
+    match target.split("-"):
+        case [_, "apple", "darwin"]:
+            signature = b"\xcf\xfa\xed\xfe"
+        case [_, "pc", "windows", "msvc"]:
+            signature = b"MZ"
+        case [_, "unknown", "linux", "gnu"]:
+            signature = b"\x7fELF"
+        case _:
+            raise ValueError(f"unsupported target: {target}")
+    if not payload.startswith(signature):
+        raise ValueError("executable operating-system format differs from target")
+
+
 def pack(target: str, wheel: Path, out: Path) -> None:
     workflow_targets = tomllib.loads((ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"))["toolchain"]["targets"]
     if target not in workflow_targets:
@@ -120,17 +135,13 @@ def pack(target: str, wheel: Path, out: Path) -> None:
     match target.split("-"):
         case [_, "apple", "darwin"]:
             platform_pattern = rf"macosx_\d+_\d+_{'arm64' if arch == Architecture.AARCH64 else 'x86_64'}"
-            signature = b"\xcf\xfa\xed\xfe"
         case [_, "pc", "windows", "msvc"]:
             platform_pattern = "win_amd64"
-            signature = b"MZ"
         case [_, "unknown", "linux", "gnu"]:
             platform_pattern = rf"(?:manylinux_\d+_\d+|manylinux\d+|linux)_{arch}"
-            signature = b"\x7fELF"
         case _:
             raise ValueError(f"unsupported target: {target}")
-    if not payload.startswith(signature):
-        raise ValueError("executable operating-system format differs from target")
+    check_format(payload, target)
     if not tags or any(not re.fullmatch(rf"py3-none-{platform_pattern}", tag) for tag in tags):
         raise ValueError("wheel platform tags differ from target")
     if not wheel.name.startswith(dist + "-") or not any(wheel.name == dist + "-" + tag + ".whl" for tag in tags):
@@ -240,6 +251,7 @@ def verify_staged(out: Path) -> None:
         if member is None:
             raise ValueError("npm binary is missing")
         npm_payload = member.read()
+    check_format(archive_payload, manifest.target)
     if architecture(archive_payload) != manifest.architecture:
         raise ValueError("manifest architecture differs from executable payload")
     actual = PayloadHashes(*(hashlib.sha256(payload).hexdigest() for payload in (archive_payload, wheel_payload, npm_payload)))
