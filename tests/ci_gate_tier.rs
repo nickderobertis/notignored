@@ -230,6 +230,49 @@ fn the_changes_job_scopes_against_the_same_base() {
 
 /// What the script must refuse: anything it would otherwise have to guess at,
 /// named so the run's log says which input was wrong.
+/// The release-prep host budgets build the crate twice (the pool maintenance
+/// pass), so the release pull request runs them after its full sweep and no
+/// other event runs them at all.
+#[test]
+fn only_the_release_pull_request_runs_the_release_prep_budgets() {
+    let workflow = ci();
+    for (event, expected) in [
+        (
+            &[("GATE_EVENT", "push"), ("GATE_BEFORE", BEFORE)][..],
+            &["just check-affected"][..],
+        ),
+        (
+            &[
+                ("GATE_EVENT", "pull_request"),
+                ("GATE_HEAD_REF", "feat/release-plz-notes"),
+            ][..],
+            &["just check-affected"][..],
+        ),
+        (
+            &[
+                ("GATE_EVENT", "pull_request"),
+                ("GATE_HEAD_REF", "release-plz-2026-10-07T09-12-44Z"),
+            ][..],
+            &["just check", "just budgets-release"][..],
+        ),
+    ] {
+        let (succeeded, outputs, stderr) = tier(event);
+        assert!(succeeded, "{stderr}");
+        let runs: Vec<String> = routed(workflow.get("jobs").get("gate"), &outputs)
+            .into_iter()
+            .map(|(run, _)| run)
+            .filter(|run| run.starts_with("just check") || run.starts_with("just budgets"))
+            .collect();
+        assert_eq!(
+            runs, expected,
+            "for {event:?} the gate job's gate and budget steps are out of order or \
+             on the wrong event\n\
+             ACTION: `just budgets-release` runs after `just check` on the release pull \
+             request alone"
+        );
+    }
+}
+
 #[test]
 fn the_tier_script_refuses_what_it_cannot_route() {
     for (case, event, named) in [

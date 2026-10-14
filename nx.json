@@ -62,7 +62,8 @@
       "{workspaceRoot}/tests/js-toolchain/package.json",
       "{workspaceRoot}/tests/js-toolchain/package-lock.json",
       "{workspaceRoot}/scripts/setup-js.sh"
-    ]
+    ],
+    "production": ["default"]
   },
   "targetDefaults": {
     "bootstrap": { "cache": false },
@@ -74,6 +75,16 @@
     "check": {
       "cache": false,
       "dependsOn": ["format-check", "lint", "test"]
-    }
+    },
+    "budgets": {
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/**/*",
+        "^production",
+        { "dependentTasksOutputFiles": "**/telemetry/*.json" },
+        { "externalDependencies": ["@onebudgetspec/cli"] }
+      ]
+    },
+    "budgets-host": { "cache": false }
   }
 }
