@@ -208,6 +208,11 @@ def pack(target: str, wheel: Path, out: Path) -> None:
     print(f"stage-release: {target} archive/wheel/npm payloads agree")
 
 
+def archive_names(path: Path) -> list[str]:
+    with tarfile.open(path) as archive:
+        return archive.getnames()
+
+
 def verify_staged(out: Path) -> None:
     doc = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     if not isinstance(doc, dict):
@@ -238,10 +243,14 @@ def verify_staged(out: Path) -> None:
     for filename in (manifest.archive, manifest.wheel, manifest.npm):
         if not isinstance(filename, str) or Path(filename).name != filename:
             raise ValueError("artifact filename must be a basename")
-    binary_name = "notignored.exe" if "windows" in manifest.target else "notignored"
+    # Resolve the executable by the file name its own target staged it under, so
+    # a manifest relabeled across operating systems is refused by the payload's
+    # format below rather than by a lookup of a name the stage never held.
+    executables = [name for name in archive_names(out / "archives" / manifest.archive) if name in ("notignored", "notignored.exe")]
+    if len(executables) != 1:
+        raise ValueError("archive must hold exactly one notignored executable")
+    binary_name = executables[0]
     with tarfile.open(out / "archives" / manifest.archive) as archive:
-        if binary_name not in archive.getnames():
-            raise ValueError(f"archive has no {binary_name} executable for {manifest.target}")
         member = archive.extractfile(binary_name)
         if member is None:
             raise ValueError("archive binary is missing")
@@ -254,6 +263,8 @@ def verify_staged(out: Path) -> None:
             raise ValueError("npm binary is missing")
         npm_payload = member.read()
     check_format(archive_payload, manifest.target)
+    if binary_name != ("notignored.exe" if "windows" in manifest.target else "notignored"):
+        raise ValueError(f"executable name {binary_name} differs from target {manifest.target}")
     if architecture(archive_payload) != manifest.architecture:
         raise ValueError("manifest architecture differs from executable payload")
     actual = PayloadHashes(*(hashlib.sha256(payload).hexdigest() for payload in (archive_payload, wheel_payload, npm_payload)))
