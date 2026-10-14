@@ -42,6 +42,10 @@ files:
     # manifest is judged.
     - "Cargo.lock"
     - "tests/js-toolchain/package-lock.json"
+    # The private .github workflow-tooling package's own lock: the task that
+    # added it requires that package stay separate and locked inside .github, and
+    # a generated lockfile cannot carry a site directive. Its manifest is judged.
+    - ".github/package-lock.json"
     # Rendered screenshots and their digest baseline: `just screenshots` writes
     # every byte of them, and each SVG carries the vendored font base64-encoded
     # inside it. Judging them costs a megabyte of the judge's context per
