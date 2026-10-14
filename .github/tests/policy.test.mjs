@@ -248,6 +248,22 @@ test("real classifier over git histories admits only same-repository semantic re
       assert.equal(unknown.isReleaseOnly, false, name);
       assert.match(unknown.reason, new RegExp(`unrecognised event: "${name}"`));
     }
+    // Identity fields must be owner/name strings; matching non-strings never
+    // authorize a release-only omission.
+    for (const forged of [7, true, "", "notignored"]) {
+      const event = payload();
+      event.repository = { full_name: forged };
+      event.pull_request.head.repo = { full_name: forged };
+      event.pull_request.base.repo = { full_name: forged };
+      assert.equal(
+        classifyHistory(h, event).macosRequired,
+        true,
+        JSON.stringify(forged),
+      );
+    }
+    const numericRef = payload();
+    numericRef.pull_request.head.ref = 7;
+    assert.equal(classifyHistory(h, numericRef).macosRequired, true);
     for (const name of [7, "", null, ["push"]])
       assert.equal(
         classifyHistory(h, { ...payload(), event_name: name }).macosRequired,

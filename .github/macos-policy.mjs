@@ -132,8 +132,11 @@ export function classify(event, base, head, cwd = process.cwd()) {
   try {
     const pr = event.pull_request;
     const repository = event.repository?.full_name;
+    const name = (value) =>
+      typeof value === "string" && /^[^/\s]+\/[^/\s]+$/.test(value);
     if (
-      !repository ||
+      !name(repository) ||
+      typeof pr.head?.ref !== "string" ||
       repository !== pr.head?.repo?.full_name ||
       repository !== pr.base?.repo?.full_name ||
       !pr.head?.ref?.startsWith(releaseBranchPrefix)
