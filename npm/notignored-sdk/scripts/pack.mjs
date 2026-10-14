@@ -17,6 +17,10 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// npm rejects anything that is not semver, and a version with a stray specifier
+// would publish under a name no consumer could ask for. The grammar is the one
+// every other packager and probe in the repository shares.
+import { isReleaseVersion } from "../../../scripts/release-version.mjs";
 
 const PROJECT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(PROJECT, "..", "..");
@@ -35,10 +39,6 @@ function attempt(what, action, step) {
     die(`${what}: ${error.message}`, action);
   }
 }
-
-// npm rejects anything that is not semver, and a version with a stray specifier
-// would publish under a name no consumer could ask for.
-const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 // The crate version, from the root Cargo.toml [package] section. A hand parser
 // rather than a TOML dependency, and scoped to that section so a dependency's
@@ -62,7 +62,7 @@ function cargoVersion() {
       'restore the `version = "X.Y.Z"` line release-plz maintains there',
     );
   }
-  if (!VERSION.test(found[1])) {
+  if (!isReleaseVersion(found[1])) {
     die(
       `'${found[1]}' is not a version npm can index`,
       "fix the `version` in Cargo.toml [package]; it must read X.Y.Z",

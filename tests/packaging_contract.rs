@@ -1403,6 +1403,31 @@ fn the_floating_major_tag_moves_only_when_nothing_failed() {
     );
 }
 
+/// The pinned toolchain installs exactly the released targets.
+///
+/// `rust-toolchain.toml` is what `rustup` provisions on every runner and what
+/// `scripts/stage-release.py` accepts a target from, so a target listed there
+/// and nowhere else — or released and not installable — is drift this catches.
+#[test]
+fn the_pinned_toolchain_installs_exactly_the_released_targets() {
+    let toolchain = read("rust-toolchain.toml");
+    let list = toolchain
+        .split_once("targets = [")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(list, _)| list)
+        .expect("rust-toolchain.toml declares a targets list");
+    let pinned: BTreeSet<&str> = list
+        .split(',')
+        .map(|item| item.trim().trim_matches('"'))
+        .filter(|item| !item.is_empty())
+        .collect();
+    let released: BTreeSet<&str> = TARGETS.iter().map(|(target, _)| *target).collect();
+    assert_eq!(
+        pinned, released,
+        "rust-toolchain.toml targets differ from the released targets"
+    );
+}
+
 /// The single Mac job builds and proves the one released Darwin architecture,
 /// arm64, natively — no Intel target, no Rosetta, no x86_64 cross-compile —
 /// and its three installed forms precede Linux attaching bytes to the draft.

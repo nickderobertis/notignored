@@ -253,7 +253,7 @@ fn the_crates_coverage_combines_every_test_tier() {
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
     const CRATE_AND_TIERS: &[&str] = &CRATE_PROJECTS;
-    let cases: [(&str, &[&str]); 14] = [
+    let cases: [(&str, &[&str]); 15] = [
         (
             "src/lib.rs",
             &[
@@ -293,6 +293,18 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
         // has to reach every project — the one case where scoping would be wrong.
         ("nx.json", &PROJECTS),
         (".github/macos-policy.mjs", &["github-workflows"]),
+        // The one version grammar: the crate's packagers, the workflow
+        // classifier, and the TypeScript SDK's packer all import it.
+        (
+            "scripts/release-version.mjs",
+            &[
+                "notignored",
+                "notignored-integration",
+                "notignored-e2e",
+                "notignored-sdk-npm",
+                "github-workflows",
+            ],
+        ),
         (
             ".github/workflows/ci.yml",
             &["github-workflows", "notignored-integration"],

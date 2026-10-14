@@ -32,7 +32,12 @@
     "test": {
       "command": "node --test --experimental-test-coverage --test-coverage-include='dist/**' --test-coverage-lines=95 --test-coverage-functions=95 'test/*.test.mjs'",
       "options": { "cwd": "npm/notignored-sdk" },
-      "inputs": ["default", "jsToolchain", "crateSource"],
+      "inputs": [
+        "default",
+        "jsToolchain",
+        "crateSource",
+        "{workspaceRoot}/scripts/release-version.mjs"
+      ],
       "dependsOn": ["build"]
     },
     "check": {
