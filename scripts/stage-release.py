@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def command(args: list[str], cwd: Path = ROOT) -> str:
-    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=False)
+    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     if result.returncode:
         raise ValueError(f"{' '.join(args)} failed: {(result.stdout + result.stderr).strip()}")
     return result.stdout.strip()
@@ -89,7 +89,7 @@ def architecture(binary: bytes) -> Architecture:
 
 def cargo_version() -> ReleaseVersion:
     """The crate version, checked against the repository's one release grammar."""
-    version = tomllib.loads((ROOT / "Cargo.toml").read_text()).get("package", {}).get("version")
+    version = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8")).get("package", {}).get("version")
     if not isinstance(version, str):
         raise ValueError("Cargo.toml [package] has no version string")
     command(["node", "scripts/release-version.mjs", "validate", "--kind", "release", "--value", version])
@@ -97,7 +97,7 @@ def cargo_version() -> ReleaseVersion:
 
 
 def pack(target: str, wheel: Path, out: Path) -> None:
-    workflow_targets = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["targets"]
+    workflow_targets = tomllib.loads((ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"))["toolchain"]["targets"]
     if target not in workflow_targets:
         raise ValueError(f"unsupported target: {target}")
     version = cargo_version()
@@ -151,7 +151,7 @@ def pack(target: str, wheel: Path, out: Path) -> None:
         for name in ("README.md", "LICENSE", "CHANGELOG.md"):
             archive.add(ROOT / name, arcname=name)
     checksum = hashlib.sha256(asset.read_bytes()).hexdigest()
-    (assets / f"{stem}.sha256").write_text(f"{checksum}  {asset.name}\n")
+    (assets / f"{stem}.sha256").write_text(f"{checksum}  {asset.name}\n", encoding="utf-8")
     package = Path(command(["node", "scripts/npm-build.mjs", "platform", "--target", target, "--binary", str(binary), "--out", str(out / "npm")]))
     npm = out / "npm-artifacts"
     npm.mkdir(exist_ok=True)
@@ -193,12 +193,12 @@ def pack(target: str, wheel: Path, out: Path) -> None:
     if len(set(asdict(hashes).values())) != 1:
         raise ValueError("archive/wheel/npm payload hashes differ")
     manifest = ArtifactManifest(target, version, f"v{version}", arch, hashes, asset.name, wheel.name, tgz.name)
-    (out / "manifest.json").write_text(json.dumps(asdict(manifest), indent=2) + "\n")
+    (out / "manifest.json").write_text(json.dumps(asdict(manifest), indent=2) + "\n", encoding="utf-8")
     print(f"stage-release: {target} archive/wheel/npm payloads agree")
 
 
 def verify_staged(out: Path) -> None:
-    doc = json.loads((out / "manifest.json").read_text())
+    doc = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     if not isinstance(doc, dict):
         raise ValueError("staged manifest must be an object")
     expected = {field.name for field in fields(ArtifactManifest)}
@@ -219,7 +219,7 @@ def verify_staged(out: Path) -> None:
     doc["architecture"] = Architecture(doc["architecture"])
     manifest = ArtifactManifest(hashes=hashes, **doc)
     version = cargo_version()
-    targets = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["targets"]
+    targets = tomllib.loads((ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"))["toolchain"]["targets"]
     if manifest.target not in targets or manifest.version != version or manifest.tag != f"v{version}":
         raise ValueError("invalid staged manifest target/version/tag")
     if not manifest.target.startswith(manifest.architecture + "-"):

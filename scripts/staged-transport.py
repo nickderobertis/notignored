@@ -42,7 +42,7 @@ def main() -> None:
         ) as server:
             # Publish the port atomically so a reader never sees a partial number.
             partial = args.port_file.with_name(args.port_file.name + ".partial")
-            partial.write_text(str(server.server_port))
+            partial.write_text(str(server.server_port), encoding="utf-8")
             os.replace(partial, args.port_file)
             server.serve_forever()
     except (OSError, ValueError) as error:
