@@ -29,12 +29,11 @@ fn host_target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
         ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-        ("macos", "x86_64") => "x86_64-apple-darwin",
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         (os, arch) => panic!(
             "no released package for {os}/{arch}\n\
-             ACTION: run this suite on one of the five targets release.yml builds, \
+             ACTION: run this suite on one of the four targets release.yml builds, \
              or add {os}/{arch} to that matrix, to scripts/npm-build.mjs, and to \
              npm/notignored/bin/notignored.js"
         ),
@@ -385,6 +384,65 @@ fn the_npm_launcher_explains_a_missing_platform_package() {
     assert!(
         stderr.contains("pip install notignored-cli"),
         "the launcher did not offer another way to install:\n{stderr}"
+    );
+}
+
+/// On an Intel Mac the launcher refuses with the reason, rather than listing the
+/// packages it does ship or hunting for a `darwin-x64` package that no release
+/// carries any more.
+///
+/// The installed launcher runs under real node; the one double is the host's
+/// identity, which a preload sets the way node reports it on an Intel Mac.
+#[test]
+fn the_npm_launcher_refuses_intel_macos_with_the_reason() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let launcher = npm_build(
+        "launcher",
+        &[
+            "--out",
+            scratch.path().join("dist").to_str().expect("a UTF-8 path"),
+        ],
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(launcher.join("package.json")).unwrap())
+            .expect("the stamped launcher manifest is valid JSON");
+    let optional = manifest["optionalDependencies"]
+        .as_object()
+        .expect("the launcher declares its platform packages");
+    assert!(
+        optional.contains_key("notignored-cli-darwin-arm64")
+            && !optional.contains_key("notignored-cli-darwin-x64"),
+        "the launcher must depend on the arm64 Darwin package only: {optional:?}"
+    );
+    let tarball = npm_pack(&launcher, &scratch.path().join("tarballs"));
+    let prefix = scratch.path().join("prefix");
+    let install = npm_install(&prefix, &[&tarball], &["--omit=optional"]);
+    assert!(
+        install.status.success(),
+        "npm install failed\n{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let intel = scratch.path().join("intel-mac.cjs");
+    std::fs::write(
+        &intel,
+        "Object.defineProperty(process, 'platform', { value: 'darwin' });\n\
+         Object.defineProperty(process, 'arch', { value: 'x64' });\n",
+    )
+    .expect("write the host-identity preload");
+    let output = installed_npm_command(&prefix)
+        .arg("--version")
+        .env(
+            "NODE_OPTIONS",
+            format!("--require={}", intel.to_str().expect("a UTF-8 path")),
+        )
+        .output()
+        .expect("run the launcher");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Intel macOS is no longer supported") && stderr.contains("cargo install"),
+        "the launcher did not explain the Intel macOS refusal:\n{stderr}"
     );
 }
 

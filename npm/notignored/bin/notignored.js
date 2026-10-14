@@ -24,7 +24,6 @@ const { spawnSync } = require("node:child_process");
 const PACKAGES = {
   "linux-x64": "notignored-cli-linux-x64",
   "linux-arm64": "notignored-cli-linux-arm64",
-  "darwin-x64": "notignored-cli-darwin-x64",
   "darwin-arm64": "notignored-cli-darwin-arm64",
   "win32-x64": "notignored-cli-win32-x64",
 };
@@ -43,6 +42,15 @@ function fail(message) {
 
 function binaryPath() {
   const key = `${process.platform}-${process.arch}`;
+  // Releases ship an Apple Silicon build only, so an Intel Mac gets a reason
+  // rather than the generic unsupported-platform list.
+  if (key === "darwin-x64") {
+    fail(
+      "Intel macOS is no longer supported: releases ship an Apple Silicon " +
+        "(darwin-arm64) build only. Install from source instead: " +
+        "'cargo install --git https://github.com/nickderobertis/notignored --locked'"
+    );
+  }
   const pkg = PACKAGES[key];
   // llmlint: ignore-block[changed_behavior_has_e2e] reaching this branch means running
   // where no prebuilt package exists, and a test can only get there by lying to node

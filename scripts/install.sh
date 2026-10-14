@@ -16,7 +16,8 @@
 # GitHub only — never to a mirror, whoever runs it.
 # Set GITHUB_TOKEN to lift the GitHub API rate limit when resolving "latest".
 #
-# Covers Linux and macOS (x86_64, arm64) and Windows x86_64 under a POSIX shell
+# Covers Linux (x86_64, arm64), Apple Silicon macOS (arm64; Intel macOS is no
+# longer supported) and Windows x86_64 under a POSIX shell
 # (Git Bash / MSYS / WSL). For native Windows PowerShell or an unpublished
 # target, use `cargo install --git https://github.com/nickderobertis/notignored
 # --locked`.
@@ -100,6 +101,11 @@ detect_target() {
         arm64|aarch64) cpu="aarch64" ;;
         *) err "unsupported architecture: $arch (use: cargo install --git https://github.com/$REPO --locked)" ;;
     esac
+    # Releases ship an Apple Silicon build only; say so rather than 404 on a
+    # Darwin x86_64 asset that no longer exists.
+    if [ "$suffix" = "apple-darwin" ] && [ "$cpu" = "x86_64" ]; then
+        err "Intel macOS is no longer supported: releases ship an Apple Silicon (arm64) build only (use: cargo install --git https://github.com/$REPO --locked)"
+    fi
     if [ "$suffix" = "pc-windows-msvc" ] && [ "$cpu" != "x86_64" ]; then
         err "no prebuilt Windows binary for $cpu (use: cargo install --git https://github.com/$REPO --locked)"
     fi

@@ -48,7 +48,7 @@ export function history() {
       name: "notignored-cli",
       version: "0.1.0",
       description: "CLI",
-      optionalDependencies: { "notignored-cli-darwin-x64": "0.1.0" },
+      optionalDependencies: { "notignored-cli-darwin-arm64": "0.1.0" },
     }),
   );
   const extra = {
@@ -125,7 +125,7 @@ export function history() {
           name: "notignored-cli",
           version: "0.2.0",
           description: "CLI",
-          optionalDependencies: { "notignored-cli-darwin-x64": "0.2.0" },
+          optionalDependencies: { "notignored-cli-darwin-arm64": "0.2.0" },
         }),
       );
     }

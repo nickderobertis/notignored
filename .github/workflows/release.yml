@@ -166,7 +166,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux/Windows runners; the two Darwin targets share macos-build.
+          # Linux/Windows runners; the arm64 Darwin target is built in macos-build.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
@@ -257,7 +257,8 @@ jobs:
   # Ungated: a GitHub Release always publishes, whatever PYPI_PUBLISH and
   # NPM_PUBLISH say, so this leg always has something to install.
   #
-  # Three legs, not four: `install.sh`'s ZIP branch needs `unzip` under a POSIX
+  # Linux only: Darwin installs run against staged archives in macos-build, and
+  # `install.sh`'s ZIP branch needs `unzip` under a POSIX
   # shell, which the Windows image does not ship — the Windows install path the
   # README documents is `cargo install`, covered by ci.yml on windows-latest.
   verify-install:
@@ -427,8 +428,8 @@ jobs:
   # here means a broken release, not a blocked publish — the wheel is public
   # either way, so this is what turns "we uploaded something" into "it works".
   #
-  # Registry delivery stays on Linux/Windows. Both Darwin architectures install
-  # and execute local wheels in macos-build before publication, including when
+  # Registry delivery stays on Linux/Windows. The arm64 Darwin wheel is installed
+  # and executed locally in macos-build before publication, including when
   # registry publishing is disabled.
   verify-pypi:
     name: verify-pypi (${{ matrix.os }})
@@ -908,16 +909,17 @@ jobs:
       - name: Move the floating major tag onto this release
         run: bash scripts/update-major-tag.sh --tag "$GITHUB_REF_NAME"
 
-  # One Apple Silicon runner builds each Darwin target once through maturin,
-  # then reuses that wheel's compiled payload for its archive and npm package.
-  # Both architectures are installed and executed before any publication.
+  # One Apple Silicon runner builds the Darwin target once through maturin, then
+  # reuses that wheel's compiled payload for its archive and npm package, and
+  # installs and executes them before any publication. Intel macOS is no longer
+  # released: arm64 is the only Darwin target, built natively.
   macos-build:
     needs: [test, build-sdk-npm]
     runs-on: macos-latest
     permissions:
       contents: read
     env:
-      RELEASE_TARGETS: x86_64-apple-darwin aarch64-apple-darwin
+      RELEASE_TARGETS: aarch64-apple-darwin
       RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v4
@@ -931,14 +933,13 @@ jobs:
         with:
           name: sdk-npm
           path: staged-sdk
-      - name: Install both Darwin toolchains and the pinned packager
+      - name: Install the Darwin toolchain and the pinned packager
         run: |
           read -r -a release_targets <<< "$RELEASE_TARGETS"
           rustup target add "${release_targets[@]}"
           just setup-misc-tools
-          sudo softwareupdate --install-rosetta --agree-to-license
-          uv python install cpython-3.12-macos-aarch64-none cpython-3.12-macos-x86_64-none
-      - name: Build and stage both architectures from one binary each
+          uv python install cpython-3.12-macos-aarch64-none
+      - name: Build and stage the arm64 products from one binary
         run: |
           read -r -a release_targets <<< "$RELEASE_TARGETS"
           for target in "${release_targets[@]}"; do
@@ -947,18 +948,9 @@ jobs:
           done
       - name: Install and run the arm64 staged products
         run: |
+          test "$(uname -m)" = arm64
           python="$(uv python find cpython-3.12-macos-aarch64-none)"
           bash scripts/stage-release.sh staged/aarch64-apple-darwin "$python" "$GITHUB_WORKSPACE"/staged-sdk/*.tgz
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          architecture: x64
-      - name: Install and run the x86_64 staged products under Rosetta
-        run: |
-          test "$(node -p process.arch)" = x64
-          python="$(uv python find cpython-3.12-macos-x86_64-none)"
-          arch -x86_64 "$python" -c 'import platform; assert platform.machine() == "x86_64"'
-          arch -x86_64 /bin/bash scripts/stage-release.sh staged/x86_64-apple-darwin "$python" "$GITHUB_WORKSPACE"/staged-sdk/*.tgz
       - name: Collect the verified platform artifacts for Linux delivery
         run: |
           mkdir -p release-wheels release-npm release-archives

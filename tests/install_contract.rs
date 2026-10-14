@@ -68,15 +68,18 @@ fn render(template: &str, target: &str) -> String {
         .replace("$target", target)
 }
 
-/// The five targets `release.yml` builds, with the archive extension each one's
+/// The four targets `release.yml` builds, with the archive extension each one's
 /// upload carries.
 const PUBLISHED_TARGETS: &[(&str, &str)] = &[
     ("x86_64-unknown-linux-gnu", "tar.gz"),
     ("aarch64-unknown-linux-gnu", "tar.gz"),
-    ("x86_64-apple-darwin", "tar.gz"),
     ("aarch64-apple-darwin", "tar.gz"),
     ("x86_64-pc-windows-msvc", "zip"),
 ];
+
+/// Targets v0.1.11 published that no release builds any more: Intel macOS was
+/// discontinued, and the installer refuses it instead of requesting its name.
+const DISCONTINUED_TARGETS: &[&str] = &["x86_64-apple-darwin"];
 
 #[test]
 fn the_installer_and_the_release_workflow_agree_on_the_archive_name() {
@@ -144,8 +147,9 @@ fn every_url_the_installer_builds_names_a_published_asset() {
     let published = published_asset_names();
     assert_eq!(
         published.len(),
-        PUBLISHED_TARGETS.len() * 2,
-        "the release manifest should hold an archive and a checksum per target"
+        (PUBLISHED_TARGETS.len() + DISCONTINUED_TARGETS.len()) * 2,
+        "the release manifest should hold an archive and a checksum per target, \
+         current or discontinued"
     );
 
     for (target, extension) in PUBLISHED_TARGETS {
@@ -169,10 +173,15 @@ fn the_release_workflow_publishes_checksums_for_every_target() {
         workflow.contains("checksum: sha256"),
         "release.yml must publish SHA-256 checksums"
     );
+    for target in DISCONTINUED_TARGETS {
+        assert!(
+            !workflow.contains(target),
+            "release.yml still names discontinued target {target}"
+        );
+    }
     for target in [
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
-        "x86_64-apple-darwin",
         "aarch64-apple-darwin",
         "x86_64-pc-windows-msvc",
     ] {

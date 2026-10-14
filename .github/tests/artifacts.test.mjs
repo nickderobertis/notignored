@@ -4,27 +4,52 @@ import { test } from "node:test";
 import { parse } from "yaml";
 import { workflows, runWorkflow } from "../workflow-graph.mjs";
 
-test("both Darwin architectures retain exact-run artifacts and pre-publication native installers", () => {
+test("the Darwin release is native arm64 only, with exact-run artifacts and pre-publication installers", () => {
   const release = workflows()["release.yml"].jobs;
   const mac = release["macos-build"];
   const darwin = mac.env.RELEASE_TARGETS.split(/\s+/).sort();
   const baseline = parse(
     readFileSync(".github/fixtures/baseline/release.yml", "utf8"),
   );
+  // Intel macOS is discontinued: of the baseline's Darwin targets only arm64
+  // remains, and every other baseline target is still released.
+  const baselineTargets = baseline.jobs.upload.strategy.matrix.include.map(
+    (row) => row.target,
+  );
+  assert.ok(baselineTargets.includes("x86_64-apple-darwin"));
   assert.deepEqual(
     darwin,
-    baseline.jobs.upload.strategy.matrix.include
-      .map((row) => row.target)
+    baselineTargets
       .filter((target) => target.endsWith("apple-darwin"))
+      .filter((target) => target !== "x86_64-apple-darwin")
       .sort(),
   );
+  assert.deepEqual(darwin, ["aarch64-apple-darwin"]);
+  for (const id of ["upload", "build-wheels", "build-npm"])
+    assert.deepEqual(
+      [
+        ...release[id].strategy.matrix.include.map((row) => row.target),
+        ...darwin,
+      ].sort(),
+      baselineTargets
+        .filter((target) => target !== "x86_64-apple-darwin")
+        .sort(),
+      `${id} lost or gained a released target`,
+    );
   const run = mac.steps.map((step) => step.run ?? "").join("\n");
   for (const target of darwin)
     assert.ok(run.includes(`scripts/stage-release.sh staged/${target}`));
-  assert.match(run, /arch -x86_64 \/bin\/bash scripts\/stage-release.sh/);
-  assert.match(run, /uv python find cpython-3.12-macos-x86_64-none/);
-  assert.match(run, /softwareupdate --install-rosetta/);
-  assert.ok(mac.steps.some((step) => step.with?.architecture === "x64"));
+  assert.match(run, /test "\$\(uname -m\)" = arm64/);
+  const source = readFileSync(".github/workflows/release.yml", "utf8");
+  for (const intel of [
+    /x86_64-apple-darwin/,
+    /arch -x86_64/,
+    /install-rosetta/,
+    /macos-15-intel/,
+    /cpython-3\.12-macos-x86_64/,
+  ])
+    assert.doesNotMatch(source, intel);
+  assert.ok(!mac.steps.some((step) => step.with?.architecture === "x64"));
   for (const id of [
     "publish-release",
     "publish-pypi",

@@ -15,7 +15,7 @@
 //!     `dynamic = ["version"]`, the npm packages via `scripts/npm-build.mjs`, the
 //!     Python SDK via `scripts/python-sdk-build.mjs`, and both committed
 //!     manifests carry placeholders so neither can become a second source;
-//!   * the **five targets** are the same in the binary, wheel, and npm matrices,
+//!   * the **four targets** are the same in the binary, wheel, and npm matrices,
 //!     in the platform-package names, and in the launcher's resolution map;
 //!   * the **publish gating** is the two repository variables and the two repo
 //!     secrets, with the build jobs deliberately left ungated so a packaging
@@ -40,10 +40,9 @@ use workflow_yaml::{parse, read, repo_root, run_steps, Node};
 
 /// The Rust targets every release matrix builds, paired with the npm platform
 /// package each one produces.
-const TARGETS: [(&str, &str); 5] = [
+const TARGETS: [(&str, &str); 4] = [
     ("x86_64-unknown-linux-gnu", "notignored-cli-linux-x64"),
     ("aarch64-unknown-linux-gnu", "notignored-cli-linux-arm64"),
-    ("x86_64-apple-darwin", "notignored-cli-darwin-x64"),
     ("aarch64-apple-darwin", "notignored-cli-darwin-arm64"),
     ("x86_64-pc-windows-msvc", "notignored-cli-win32-x64"),
 ];
@@ -113,9 +112,9 @@ const PINNED_INSTALLS: [(&str, &str); 5] = [
 /// One leg per *installable artifact*, not per OS: `pip install` and `npm
 /// install -g` each resolve a different wheel and a different platform package
 /// per platform **and architecture**, and only a runner of that pair can prove
-/// the right one was picked. `macos-latest` is arm64, so `macos-15-intel` is
-/// what covers `x86_64-apple-darwin` — without it, `notignored-cli-darwin-x64`
-/// is published and never installed. The one released target still with no leg,
+/// the right one was picked. The arm64 Darwin products are installed from their
+/// staged artifacts in `macos-build` before publication instead, so registry
+/// delivery spends no Mac runner. The one released target still with no leg,
 /// `aarch64-unknown-linux-gnu`, is covered by the build matrices and by
 /// `tests/e2e/packaging.rs` on whichever host runs it.
 const VERIFY_RUNNERS: [&str; 2] = ["ubuntu-latest", "windows-latest"];
@@ -465,10 +464,10 @@ fn every_secret_the_pipeline_uses_is_provisioned() {
     }
 }
 
-/// The three matrices build the same five targets.
+/// The three matrices build the same four targets.
 ///
 /// A wheel matrix that quietly lost a target ships a release where `pip install`
-/// works on four platforms and falls back to a source build on the fifth — with
+/// works on three platforms and falls back to a source build on the fourth — with
 /// no Rust toolchain there to do it.
 #[test]
 fn the_binary_wheel_and_npm_matrices_cover_the_same_targets() {
@@ -491,7 +490,7 @@ fn the_binary_wheel_and_npm_matrices_cover_the_same_targets() {
             .collect();
         assert_eq!(
             all, expected,
-            "`{name}` no longer builds the five released targets"
+            "`{name}` no longer builds the four released targets"
         );
     }
 }
@@ -1127,7 +1126,7 @@ fn the_committed_sdk_manifest_publishes_dist_at_a_placeholder_version() {
     );
 }
 
-/// The five platform packages are named the same in all three places.
+/// The four platform packages are named the same in all three places.
 ///
 /// The launcher's `optionalDependencies` decide what npm downloads, its
 /// `PACKAGES` map decides what the shim resolves, and `npm-build.mjs` decides
@@ -1404,10 +1403,11 @@ fn the_floating_major_tag_moves_only_when_nothing_failed() {
     );
 }
 
-/// The single Mac job retains both released architectures and their three
-/// installed forms, before Linux attaches bytes to the immutable draft.
+/// The single Mac job builds and proves the one released Darwin architecture,
+/// arm64, natively — no Intel target, no Rosetta, no x86_64 cross-compile —
+/// and its three installed forms precede Linux attaching bytes to the draft.
 #[test]
-fn darwin_staging_retains_both_architectures_and_precedes_publication() {
+fn darwin_staging_is_native_arm64_only_and_precedes_publication() {
     let mac = job("macos-build");
     assert_eq!(mac.get("runs-on").scalar(), "macos-latest");
     assert!(mac.find("strategy").is_none());
@@ -1422,11 +1422,27 @@ fn darwin_staging_retains_both_architectures_and_precedes_publication() {
         "bash scripts/dev-tool.sh maturin build",
         "scripts/stage-release.py --target",
         "scripts/stage-release.sh staged/aarch64-apple-darwin",
-        "scripts/stage-release.sh staged/x86_64-apple-darwin",
-        "arch -x86_64",
-        "softwareupdate --install-rosetta",
+        "test \"$(uname -m)\" = arm64",
     ] {
         assert!(scripts.contains(required), "Mac staging lost {required}");
+    }
+    assert_eq!(
+        mac.get("env").get("RELEASE_TARGETS").scalar(),
+        "aarch64-apple-darwin"
+    );
+    let release = read(RELEASE);
+    for intel in [
+        "x86_64-apple-darwin",
+        "arch -x86_64",
+        "install-rosetta",
+        "macos-15-intel",
+        "macos-x86_64",
+        "architecture: x64",
+    ] {
+        assert!(
+            !release.contains(intel),
+            "release.yml still carries Intel macOS work: {intel}"
+        );
     }
     for name in [
         "publish-release",

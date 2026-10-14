@@ -65,7 +65,6 @@ const hostedRunners = new Set([
   "ubuntu-24.04-arm",
   "windows-latest",
   "macos-latest",
-  "macos-15-intel",
 ]);
 const archResolutionScript =
   'set -euo pipefail\nif [ -n "$ARCHES_OVERRIDE" ]; then\n  matrix="$ARCHES_OVERRIDE"   # explicit override (no committed config to read)\nelse\n  matrix="$(screencomp arches --format json)"\nfi\nif [ -z "$matrix" ] || [ "$matrix" = "[]" ]; then\n  echo "::error::no [capture].arches configured in screencomp.toml; add e.g. arches = [\\"x86_64\\"], or pass the workflow\'s \'arches\' input" >&2\n  exit 1\nfi\necho "matrix=$matrix" >>"$GITHUB_OUTPUT"\n';
