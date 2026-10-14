@@ -185,6 +185,14 @@ export function expand(matrix = {}, context = {}) {
   if (typeof matrix === "string") matrix = resolve(matrix, context);
   if (!matrix || typeof matrix !== "object" || Array.isArray(matrix))
     throw new Error("unresolved matrix");
+  const isMapping = (row) =>
+    row !== null && typeof row === "object" && !Array.isArray(row);
+  for (const key of ["include", "exclude"])
+    if (
+      Object.hasOwn(matrix, key) &&
+      (!Array.isArray(matrix[key]) || !matrix[key].every(isMapping))
+    )
+      throw new Error(`unresolved matrix ${key}: expected a list of mappings`);
   if (
     Object.keys(matrix).every((k) => ["include", "exclude"].includes(k)) &&
     matrix.include?.length

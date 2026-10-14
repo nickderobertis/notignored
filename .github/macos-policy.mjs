@@ -96,6 +96,16 @@ function semantic(path, text) {
   }
   throw new Error(`non-release file: ${path}`);
 }
+// The automatic and manual non-PR events the workflows subscribe to; none of
+// them carries a pull request whose Mac lane could be owed.
+const knownNonPrEvents = new Set([
+  "push",
+  "release",
+  "workflow_run",
+  "repository_dispatch",
+  "schedule",
+  "workflow_dispatch",
+]);
 export function classify(event, base, head, cwd = process.cwd()) {
   const ordinary = (reason) => ({
     isReleaseOnly: false,
@@ -104,12 +114,20 @@ export function classify(event, base, head, cwd = process.cwd()) {
   });
   if (!event || typeof event !== "object" || Array.isArray(event))
     return ordinary("malformed PR payload");
-  if (event.event_name && event.event_name !== "pull_request")
-    return {
-      isReleaseOnly: false,
-      macosRequired: false,
-      reason: "non-PR event",
-    };
+  if (Object.hasOwn(event, "event_name")) {
+    const name = event.event_name;
+    if (typeof name !== "string" || !name)
+      return ordinary("malformed event name");
+    if (knownNonPrEvents.has(name))
+      return {
+        isReleaseOnly: false,
+        macosRequired: false,
+        reason: `non-PR event: ${name}`,
+      };
+    // An event this policy has never classified fails closed.
+    if (name !== "pull_request")
+      return ordinary(`unrecognised event: ${JSON.stringify(name)}`);
+  }
   if (!event.pull_request) return ordinary("unknown PR payload");
   try {
     const pr = event.pull_request;

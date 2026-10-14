@@ -226,10 +226,34 @@ test("real classifier over git histories admits only same-repository semantic re
       true,
     );
     assert.equal(classifyHistory(h, payload(), h.base).macosRequired, true);
-    assert.equal(
-      classifyHistory(h, { event_name: "schedule" }).macosRequired,
-      false,
-    );
+    for (const name of [
+      "push",
+      "release",
+      "workflow_run",
+      "repository_dispatch",
+      "schedule",
+      "workflow_dispatch",
+    ]) {
+      const known = classifyHistory(h, {}, h.heads.source, h.base, {
+        GITHUB_EVENT_NAME: name,
+      });
+      assert.equal(known.macosRequired, false, name);
+      assert.match(known.reason, new RegExp(`non-PR event: ${name}`));
+    }
+    for (const name of ["merge_group", "pull_request_target", "invented"]) {
+      const unknown = classifyHistory(h, {}, h.heads.source, h.base, {
+        GITHUB_EVENT_NAME: name,
+      });
+      assert.equal(unknown.macosRequired, true, name);
+      assert.equal(unknown.isReleaseOnly, false, name);
+      assert.match(unknown.reason, new RegExp(`unrecognised event: "${name}"`));
+    }
+    for (const name of [7, "", null, ["push"]])
+      assert.equal(
+        classifyHistory(h, { ...payload(), event_name: name }).macosRequired,
+        true,
+        JSON.stringify(name),
+      );
   } finally {
     h.close();
   }

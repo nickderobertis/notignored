@@ -470,6 +470,17 @@ test("matrix expansion and published expression evaluator resolve runners; unres
     }),
     [{ os: "windows-latest", target: "x64" }, { os: "macos-latest" }],
   );
+  for (const matrix of [
+    { include: [7] },
+    { include: { os: "macos-latest" } },
+    { os: ["ubuntu-latest"], exclude: [null] },
+    { os: ["ubuntu-latest"], include: [["macos-latest"]] },
+  ])
+    assert.throws(
+      () => expand(matrix),
+      /unresolved matrix (include|exclude): expected a list of mappings/,
+      JSON.stringify(matrix),
+    );
   assert.equal(
     evaluate(
       "needs.mac.result == 'success' && !cancelled()",
