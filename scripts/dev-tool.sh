@@ -32,6 +32,10 @@ ruff | mypy | pyright | ty)
   CANDIDATES=("$ROOT/.dev/$TOOL/bin/$TOOL" "$ROOT/.dev/$TOOL/Scripts/$TOOL.exe")
   INSTALLER="just setup-python-tools"
   ;;
+maturin)
+  CANDIDATES=("$ROOT/.dev/$TOOL/bin/$TOOL" "$ROOT/.dev/$TOOL/Scripts/$TOOL.exe")
+  INSTALLER="just setup-misc-tools"
+  ;;
 *)
   echo "dev-tool: '$TOOL' is not one of the pinned dev tools" >&2
   echo "ACTION: add it to a scripts/setup-*.sh installer first, then to the table here" >&2

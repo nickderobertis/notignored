@@ -1502,3 +1502,53 @@ fn darwin_staging_is_native_arm64_only_and_precedes_publication() {
 fn scripts_for_darwin_upload(upload: &Node) -> String {
     scripts(upload).join("\n")
 }
+
+/// Every tool a release job runs through `scripts/dev-tool.sh` is one that
+/// script resolves. Its table is the contract, so the real script is run from a
+/// copy with nothing installed: a tool it knows fails as not installed, naming
+/// the installer, where one it does not know is refused outright — which on a
+/// release runner is a release that cannot build.
+#[test]
+fn release_dev_tools_are_ones_dev_tool_resolves() {
+    let jobs = jobs();
+    let mut tools = BTreeSet::new();
+    for name in jobs.keys() {
+        for script in scripts(jobs.get(name)) {
+            for (at, _) in script.match_indices("scripts/dev-tool.sh ") {
+                let rest = &script[at + "scripts/dev-tool.sh ".len()..];
+                let tool = rest.split_whitespace().next().unwrap_or_default();
+                tools.insert(tool.to_string());
+            }
+        }
+    }
+    assert!(
+        tools.contains("maturin"),
+        "release.yml no longer builds a wheel through dev-tool.sh: {tools:?}"
+    );
+    for tool in &tools {
+        let problem = dev_tool_problem(tool);
+        assert!(problem.is_none(), "release.yml runs `{tool}`: {problem:?}");
+    }
+    assert!(
+        dev_tool_problem("not-a-pinned-tool").is_some(),
+        "an unknown tool went unrefused, so this check cannot fail"
+    );
+}
+
+/// Why the real `scripts/dev-tool.sh`, run from an empty checkout, does not
+/// resolve `tool` — or `None` when it knows the tool and only lacks the install.
+fn dev_tool_problem(tool: &str) -> Option<String> {
+    let root = tempfile::tempdir().expect("a scratch checkout");
+    std::fs::create_dir(root.path().join("scripts")).expect("a scripts dir");
+    let script = root.path().join("scripts/dev-tool.sh");
+    std::fs::copy(repo_root().join("scripts/dev-tool.sh"), &script).expect("copy dev-tool.sh");
+    let output = std::process::Command::new("bash")
+        .arg(&script)
+        .arg(tool)
+        .arg("--version")
+        .output()
+        .expect("bash runs dev-tool.sh");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    (output.status.code() != Some(1) || !stderr.contains("is not installed"))
+        .then(|| format!("exit {:?}: {stderr}", output.status.code()))
+}
