@@ -177,6 +177,15 @@ export function evaluate(expression, context, results = []) {
   ]).parse();
   return new Evaluator(ast, datum(context), functions).evaluate();
 }
+// A job condition holds by the evaluator's own truthiness, which its `!`
+// operator applies: a non-zero number or non-empty string runs the job.
+export function conditionHolds(condition, context, results = []) {
+  const source = String(condition).replace(/^\$\{\{\s*|\s*\}\}$/g, "");
+  const result = evaluate(`!(!(${source}))`, context, results);
+  if (result.kind !== data.Kind.Boolean)
+    throw new Error(`unresolved condition ${JSON.stringify(condition)}`);
+  return result.value;
+}
 export function resolve(value, context) {
   if (typeof value !== "string") return value;
   if (/^\$\{\{[\s\S]*\}\}$/.test(value)) {
@@ -435,7 +444,7 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
       );
       const enabled =
         (explicitStatus || results.every((r) => r === "success")) &&
-        evaluate(condition, context, results).coerceString() === "true";
+        conditionHolds(condition, context, results);
       if (job.uses) {
         // A caller matrix would run the called workflow once per row; no caller
         // here has one, so refuse it rather than count a single instance.

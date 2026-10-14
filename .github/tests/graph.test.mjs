@@ -555,6 +555,31 @@ test("matrix expansion and published expression evaluator resolve runners; unres
     ref: "refs/heads/main",
     policy: { macosRequired: false },
   };
+  // A Mac job's condition runs it by the evaluator's truthiness: a non-zero
+  // number or non-empty string is a scheduled Mac job, not a silent zero.
+  for (const [condition, runs] of [
+    ["1", true],
+    ["'macos'", true],
+    ["vars.MAC_LANE", true],
+    [`\${{ github.ref }}`, true],
+    ["0", false],
+    ["''", false],
+    ["vars.UNSET", false],
+    ["github.event_name == 'pull_request'", false],
+  ]) {
+    const rows = runWorkflow(
+      "conditions.yml",
+      {
+        name: "Conditions",
+        on: { push: null },
+        jobs: {
+          mac: { "runs-on": "macos-latest", if: condition, steps: [] },
+        },
+      },
+      { ...scenario, vars: { MAC_LANE: "on" } },
+    );
+    assert.equal(rows[0].enabled && rows[0].macos, runs, condition);
+  }
   for (const job of [
     // biome-ignore lint/suspicious/noTemplateCurlyInString: This fixture is an Actions expression, not a JavaScript template.
     { "runs-on": "${{ needs.unknown.outputs.os }}" },
