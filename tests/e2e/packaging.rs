@@ -837,6 +837,9 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
                 .arg(scratch.path().join("sdk")),
         ));
         let sdk_tgz = npm_pack(&sdk, &scratch.path().join("sdk-tarballs"));
+        // Every staging run's scratch lands here, so cleanup is observable.
+        let stage_tmp = scratch.path().join("stage-tmp");
+        std::fs::create_dir(&stage_tmp).expect("create staging scratch");
         let verify = || {
             let mut command = Command::new("bash");
             command
@@ -844,8 +847,28 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
                 .arg("scripts/stage-release.sh")
                 .arg(&stage)
                 .arg("python3")
-                .arg(&sdk_tgz);
+                .arg(&sdk_tgz)
+                .env("TMPDIR", &stage_tmp);
             command
+        };
+        // After a run, its scratch tree is gone and its loopback transport —
+        // the one serving this stage's archives — is no longer running.
+        let assert_cleaned_up = |after: &str| {
+            let leftovers: Vec<_> = std::fs::read_dir(&stage_tmp)
+                .expect("read staging scratch")
+                .map(|entry| entry.expect("scratch entry").file_name())
+                .filter(|name| name.to_string_lossy().starts_with("notignored-stage."))
+                .collect();
+            assert!(leftovers.is_empty(), "{after} left {leftovers:?}");
+            let archives = stage.join("archives");
+            let processes = run("list processes", Command::new("ps").args(["-eo", "args"]));
+            assert!(
+                !processes
+                    .lines()
+                    .any(|line| line.contains("staged-transport.py")
+                        && line.contains(archives.to_str().expect("a UTF-8 path"))),
+                "{after} left the staged transport running"
+            );
         };
         #[cfg(unix)]
         {
@@ -1180,8 +1203,10 @@ os.replace(path+'.new',path)
             "failure should name the checksum: {}",
             String::from_utf8_lossy(&failure.stderr)
         );
+        assert_cleaned_up("an installer failure after the transport started");
         std::fs::write(checksum, original).expect("restore checksum");
         run("recover after restoring staged checksum", &mut verify());
+        assert_cleaned_up("a successful staged install");
     }
 
     // The wheel's console command, on the venv's PATH exactly as `pip install`
