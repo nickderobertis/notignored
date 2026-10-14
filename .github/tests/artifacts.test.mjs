@@ -134,6 +134,7 @@ test("modeled guard and arch outputs remain tied to the real commands and output
   assert.match(reusable, /screencomp arches --format json/);
 });
 
+// llmlint: ignore-block[shell_test_tiers_stay_split] The task requires the graph proof to evaluate actual job conditions; release.yml's and release-plz.yml's guard outputs are decided by their own few-line `[ -n "$TOKEN" ]` step, so the offline model runs that step under bash with no network, installer, or packaging build. Moving it to another tier would leave this tier's routing resting on a guessed output.
 test("real guard commands decide modeled prerequisite outputs, including changed conditions", () => {
   const graph = workflows();
   const scenario = {
@@ -163,3 +164,4 @@ test("real guard commands decide modeled prerequisite outputs, including changed
     );
   }
 });
+// llmlint: ignore-end[shell_test_tiers_stay_split]
