@@ -19,6 +19,7 @@ import {
   fanout,
   runWorkflow,
   sourceDigest,
+  stepEnv,
   workflows,
 } from "../workflow-graph.mjs";
 import { classifyHistory, history, payload } from "./policy.test.mjs";
@@ -1016,12 +1017,12 @@ test("production affected step and modeled crate routing agree over real source,
     git("commit", "-qm", "base");
     const base = git("rev-parse", "HEAD");
     const ci = workflows()["ci.yml"];
-    const script = ci.jobs.changes.steps.find(
+    const affectedStep = ci.jobs.changes.steps.find(
       (step) => step.id === "affected",
-    ).run;
-    const tierScript = ci.jobs.changes.steps.find(
-      (step) => step.id === "tier",
-    ).run;
+    );
+    const tierStep = ci.jobs.changes.steps.find((step) => step.id === "tier");
+    const script = affectedStep.run;
+    const tierScript = tierStep.run;
     const env = Object.fromEntries(
       Object.entries(process.env).filter(([name]) => !name.startsWith("NX_")),
     );
@@ -1056,9 +1057,13 @@ test("production affected step and modeled crate routing agree over real source,
             encoding: "utf8",
             env: {
               ...env,
-              GATE_EVENT: event,
-              GATE_HEAD_REF: branch,
-              GATE_BEFORE: namedBase,
+              ...stepEnv(tierStep, {
+                github: {
+                  event_name: event,
+                  head_ref: branch,
+                  event: { before: namedBase },
+                },
+              }),
               GITHUB_OUTPUT: output,
             },
           },
@@ -1081,8 +1086,9 @@ test("production affected step and modeled crate routing agree over real source,
             env: {
               ...env,
               CI: "1",
-              TIER: selected.tier,
-              NOTIGNORED_NX_BASE_SHA: selected.base,
+              ...stepEnv(affectedStep, {
+                steps: { [tierStep.id]: { outputs: selected } },
+              }),
               GITHUB_OUTPUT: output,
               GITHUB_BASE_REF: "",
               NOTIGNORED_NX_BASE_REF: "",
@@ -1178,3 +1184,46 @@ test("real reusable resolver accepts an explicit architecture and rejects malfor
 });
 
 // llmlint: ignore-end[shell_test_tiers_stay_split]
+
+test("ci.yml's changes outputs route through their own bindings; a drifted one is an error", () => {
+  const ci = workflows()["ci.yml"];
+  const scenario = {
+    event: "pull_request",
+    action: "opened",
+    ref: "refs/pull/1/merge",
+    pr: payload("feature").pull_request,
+    policy: { macosRequired: false, reason: "draft PR" },
+    vars: {},
+  };
+  const rows = runWorkflow("ci.yml", ci, scenario);
+  assert.equal(macRows({ rows }).length, 0);
+  assert.equal(
+    macRows({
+      rows: runWorkflow("ci.yml", ci, {
+        ...scenario,
+        policy: { macosRequired: true, reason: "ordinary" },
+      }),
+    }).length,
+    1,
+  );
+  for (const [output, binding] of [
+    ["macos", `\${{ steps.policy.outputs.mac }}`],
+    ["macos-reason", `\${{ steps.classify.outputs.reason }}`],
+    ["crate", `\${{ steps.tier.outputs.crate }}`],
+  ]) {
+    const drifted = structuredClone(ci);
+    drifted.jobs.changes.outputs[output] = binding;
+    assert.throws(
+      () => runWorkflow("ci.yml", drifted, scenario),
+      new RegExp(`changes: output ${output} .* resolves to nothing`),
+    );
+  }
+  const unnamed = structuredClone(ci);
+  unnamed.jobs.changes.steps = unnamed.jobs.changes.steps.filter(
+    (step) => step.id !== "policy",
+  );
+  assert.throws(
+    () => runWorkflow("ci.yml", unnamed, scenario),
+    /changes: no step matching/,
+  );
+});

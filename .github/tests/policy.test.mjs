@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { parse } from "yaml";
+import { stepEnv } from "../workflow-graph.mjs";
 
 const policy = resolve(".github/macos-policy.mjs");
 // A registry crate that happens to share the repository crate's name. Only its
@@ -436,6 +437,7 @@ export function workflowClassify(
   event,
   head = h.heads.version,
   eventName = "pull_request",
+  edit = (text) => text,
 ) {
   const path = join(h.dir, "event.json");
   writeFileSync(
@@ -449,7 +451,9 @@ export function workflowClassify(
     join(h.dir, "scripts/release-version.mjs"),
     readFileSync(resolve("scripts/release-version.mjs")),
   );
-  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+  const workflow = parse(
+    edit(readFileSync(".github/workflows/ci.yml", "utf8")),
+  );
   const step = workflow.jobs.changes.steps.find((step) => step.id === "policy");
   const output = join(h.dir, "workflow-output");
   writeFileSync(output, "");
@@ -462,8 +466,22 @@ export function workflowClassify(
       GITHUB_OUTPUT: output,
       RUNNER_TEMP: h.dir,
       GITHUB_EVENT_NAME: eventName,
-      POLICY_BASE: h.base,
-      POLICY_HEAD: head,
+      ...stepEnv(step, {
+        github: {
+          event_name: eventName,
+          event:
+            event && typeof event === "object" && event.pull_request
+              ? {
+                  ...event,
+                  pull_request: {
+                    ...event.pull_request,
+                    base: { ...event.pull_request.base, sha: h.base },
+                    head: { ...event.pull_request.head, sha: head },
+                  },
+                }
+              : {},
+        },
+      }),
     },
   });
   return Object.fromEntries(
@@ -491,6 +509,31 @@ test("actual changes policy step agrees with the classifier, including unknown P
       assert.equal(step.macos, String(policy.macosRequired));
       assert.equal(step.reason, policy.reason);
     }
+    // The step's own `env:` bindings carry the refs; a binding that reads the
+    // wrong one loses the release-only verdict instead of passing unseen.
+    for (const [from, to] of [
+      [
+        `POLICY_BASE: \${{ github.event.pull_request.base.sha }}`,
+        `POLICY_BASE: \${{ github.event.pull_request.head.sha }}`,
+      ],
+      [
+        `POLICY_HEAD: \${{ github.event.pull_request.head.sha }}`,
+        `POLICY_HEAD: \${{ github.event.pull_request.head.ref }}`,
+      ],
+    ]) {
+      const drifted = workflowClassify(
+        h,
+        payload(),
+        h.heads.version,
+        "pull_request",
+        (text) => {
+          assert.ok(text.includes(from), from);
+          return text.replace(from, to);
+        },
+      );
+      assert.equal(drifted.macos, "true", to);
+    }
+    assert.equal(workflowClassify(h, payload()).macos, "false");
     const draft = workflowClassify(h, payload("feature", false, true));
     assert.equal(draft.macos, "false");
     assert.equal(

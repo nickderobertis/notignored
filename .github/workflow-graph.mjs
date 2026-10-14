@@ -182,6 +182,53 @@ export function resolve(value, context) {
     evaluate(expr, context).coerceString(),
   );
 }
+// A step's `env:` resolved through the evaluator, so a test that runs the
+// step's script hands it what the workflow would rather than what the test
+// assumes. A missing property is null, which Actions writes as "".
+export function stepEnv(step, context) {
+  const env = {};
+  for (const [key, value] of Object.entries(step.env ?? {})) {
+    const resolved = resolve(value, context);
+    if (resolved !== null && typeof resolved === "object")
+      throw new Error(`unresolved step env ${key}: ${JSON.stringify(value)}`);
+    env[key] = resolved === null ? "" : String(resolved);
+  }
+  return env;
+}
+// ci.yml's `changes` outputs, resolved from its own `outputs:` bindings over
+// what its classifier and affected steps print, so a miswired binding changes
+// the routed graph instead of being bypassed by a synthesized value.
+function changesOutputs(job, scenario) {
+  const stepId = (pattern) => {
+    const step = job.steps.find((step) => pattern.test(step.run ?? ""));
+    if (!step?.id) throw new Error(`changes: no step matching ${pattern}`);
+    return step.id;
+  };
+  const pr = scenario.event === "pull_request";
+  const steps = {
+    [stepId(/macos-policy\.mjs classify/)]: {
+      outputs: {
+        macos: String(pr && scenario.policy.macosRequired),
+        reason: pr
+          ? String(scenario.policy.reason ?? "unstated")
+          : `non-PR event: ${scenario.event}`,
+      },
+    },
+    [stepId(/just affected-crate/)]: {
+      outputs: { crate: String(scenario.crate ?? true) },
+    },
+  };
+  const outputs = {};
+  for (const [key, value] of Object.entries(job.outputs ?? {})) {
+    const resolved = resolve(value, { steps });
+    if (typeof resolved !== "string" || !resolved)
+      throw new Error(
+        `changes: output ${key} ${JSON.stringify(value)} resolves to nothing`,
+      );
+    outputs[key] = resolved;
+  }
+  return outputs;
+}
 export function expand(matrix = {}, context = {}) {
   if (typeof matrix === "string") matrix = resolve(matrix, context);
   if (!matrix || typeof matrix !== "object" || Array.isArray(matrix))
@@ -449,12 +496,7 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
       }
       let outputs = {};
       if (id === "changes" && name === "ci.yml")
-        outputs = {
-          crate: String(scenario.crate ?? true),
-          macos: String(
-            scenario.policy.macosRequired && scenario.event === "pull_request",
-          ),
-        };
+        outputs = changesOutputs(job, scenario);
       else if (id === "guard" && name === "release.yml")
         outputs = guardOutputs(job, scenario.cratePublish ?? true, root);
       else if (id === "guard" && name === "release-plz.yml")
