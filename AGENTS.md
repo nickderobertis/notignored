@@ -316,7 +316,8 @@ is off.
 
 **Darwin installs are staged before publication.** Local installs prove packaging,
 while Linux and Windows registry probes prove delivery; neither substitutes for
-the other.
+the other. macOS ships arm64 only — Intel was discontinued, and `install.sh` and
+the npm launcher refuse it by name rather than fetch an asset that is not there.
 
 **The GitHub Release is the third install surface, and it is verified the same
 way.** `taiki-e/upload-rust-binary-action` derives *both* published names from the
@@ -330,7 +331,7 @@ with `version: local`, which compiles from source and downloads nothing. Both
 markers in `install.sh` are now rendered per target and held against a real
 release's asset listing (`tests/fixtures/release-assets/`), which no template here
 can talk into agreeing with it, and `release.yml`'s `verify-install` plus the
-sweep's `github-release` job install from the live Release. The live Release installer runs on Linux; both Darwin installers run against
+sweep's `github-release` job install from the live Release. The live Release installer runs on Linux; the arm64 Darwin installer runs against
 staged archives before publication. The ZIP branch needs `unzip` under a POSIX
 shell, which the Windows image lacks, so Windows keeps `cargo install`.
 
