@@ -663,7 +663,12 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
         Command::new("python3")
             // Locale-dependent text I/O is an error here, as it is in effect
             // on a Windows runner whose default codec is not UTF-8.
-            .args(["-X", "warn_default_encoding", "-W", "error::EncodingWarning"])
+            .args([
+                "-X",
+                "warn_default_encoding",
+                "-W",
+                "error::EncodingWarning",
+            ])
             .current_dir(repo_root())
             .arg("scripts/stage-release.py")
             .args(["--target", host_target(), "--wheel"])
@@ -676,7 +681,12 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
         Command::new("python3")
             // Locale-dependent text I/O is an error here, as it is in effect
             // on a Windows runner whose default codec is not UTF-8.
-            .args(["-X", "warn_default_encoding", "-W", "error::EncodingWarning"])
+            .args([
+                "-X",
+                "warn_default_encoding",
+                "-W",
+                "error::EncodingWarning",
+            ])
             .current_dir(repo_root())
             .arg("scripts/stage-release.py")
             .arg("--verify")
@@ -1320,7 +1330,12 @@ fn the_stager_refuses_a_malformed_crate_version_before_staging() {
     .expect("write a malformed crate version");
     let out = checkout.path().join("staged");
     let refused = Command::new("python3")
-        .args(["-X", "warn_default_encoding", "-W", "error::EncodingWarning"])
+        .args([
+            "-X",
+            "warn_default_encoding",
+            "-W",
+            "error::EncodingWarning",
+        ])
         .current_dir(checkout.path())
         .arg("scripts/stage-release.py")
         .args([
