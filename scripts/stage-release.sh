@@ -30,7 +30,7 @@ python="$2"
 sdk="${3:-}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 stage="$(cd "$stage" && pwd)"
-version="$(node --input-type=module -e '
+manifest_fields="$(node --input-type=module -e '
   import { readFileSync } from "node:fs";
   import { pathToFileURL } from "node:url";
   const { isReleaseVersion } = await import(pathToFileURL(process.argv[2]).href);
@@ -40,18 +40,23 @@ version="$(node --input-type=module -e '
       || manifest.tag !== "v" + manifest.version
       || !manifest.hashes || Object.keys(manifest.hashes).sort().join() !== "archive,npm,wheel"
       || Object.values(manifest.hashes).some(hash => !/^[0-9a-f]{64}$/.test(hash))
-      || new Set(Object.values(manifest.hashes)).size !== 1) throw new Error("invalid staged manifest");
-  console.log(manifest.version);
+      || new Set(Object.values(manifest.hashes)).size !== 1
+      || [manifest.wheel, manifest.npm].some(name => typeof name !== "string"
+        || !/^[^/\\]+$/.test(name) || name === "." || name === "..")) throw new Error("invalid staged manifest");
+  console.log([manifest.version, manifest.wheel, manifest.npm].join("\n"));
 ' "$stage/manifest.json" "$root/scripts/release-version.mjs")"
+# Install exactly the artifacts the manifest names and stage-release.py verifies,
+# never whatever else a glob would find beside them.
+{ read -r version; read -r wheel; read -r npm_artifact; } <<< "$manifest_fields"
 work="$(mktemp -d "${TMPDIR:-/tmp}/notignored-stage.XXXXXXXX")"
 trap 'rm -rf "$work"' EXIT
 run python3 "$root/scripts/stage-release.py" --verify --out "$stage"
 run uv venv --quiet --python "$python" "$work/venv"
-run uv pip install --quiet --offline --python "$work/venv" "$stage"/wheels/*.whl
+run uv pip install --quiet --offline --python "$work/venv" "$stage/wheels/$wheel"
 PATH="$work/venv/bin:$PATH" run bash "$root/scripts/smoke-published.sh" --expect-version "$version" --label "staged wheel"
 launcher="$(node "$root/scripts/npm-build.mjs" launcher --out "$work/npm")"
 (cd "$launcher" && npm pack --silent --pack-destination "$work" >/dev/null)
-run npm install --offline --no-audit --no-fund --prefix "$work/npm-install" "$stage"/npm-artifacts/*.tgz "$work"/*.tgz
+run npm install --offline --no-audit --no-fund --prefix "$work/npm-install" "$stage/npm-artifacts/$npm_artifact" "$work"/*.tgz
 PATH="$work/npm-install/node_modules/.bin:$PATH" run bash "$root/scripts/smoke-published.sh" --expect-version "$version" --label "staged npm"
 if [ -n "$sdk" ]; then
   run npm install --offline --no-audit --no-fund --prefix "$work/npm-install" "$sdk"

@@ -873,6 +873,7 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            // llmlint: ignore-block[e2e_not_mocked] the wrapper delays, then execs, the real interpreter, so the real transport still serves the real artifacts; startup starvation cannot be produced on demand any other way, and this is the journey that reproduced the hosted five-second failure.
             let shim_dir = scratch.path().join("delayed-python");
             std::fs::create_dir(&shim_dir).expect("create interpreter wrapper directory");
             let shim = shim_dir.join("python3");
@@ -892,6 +893,7 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
                 &std::env::var_os("PATH").expect("PATH"),
             ));
             let wrapper_path = std::env::join_paths(&paths).expect("wrapper PATH");
+            // llmlint: ignore-end[e2e_not_mocked]
             run(
                 "install and execute staged forms after delayed real server startup",
                 verify()
@@ -1205,7 +1207,24 @@ os.replace(path+'.new',path)
         );
         assert_cleaned_up("an installer failure after the transport started");
         std::fs::write(checksum, original).expect("restore checksum");
-        run("recover after restoring staged checksum", &mut verify());
+        // Stray artifacts beside the verified ones are never installed: only
+        // the files the manifest names, which the verifier checked, are.
+        let strays = [
+            stage
+                .join("wheels")
+                .join("notignored_cli-0.0.1-py3-none-any.whl"),
+            stage.join("npm-artifacts").join("stray-0.0.1.tgz"),
+        ];
+        for stray in &strays {
+            std::fs::write(stray, b"not a verified artifact").expect("plant a stray artifact");
+        }
+        run(
+            "recover after restoring staged checksum, beside stray artifacts",
+            &mut verify(),
+        );
+        for stray in &strays {
+            std::fs::remove_file(stray).expect("remove the stray artifact");
+        }
         assert_cleaned_up("a successful staged install");
     }
 
