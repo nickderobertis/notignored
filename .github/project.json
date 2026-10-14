@@ -19,8 +19,8 @@
     "lint": {
       "command": "node .github/tooling-check.mjs lint"
     },
-    "schema-check": {
-      "command": "node .github/tooling-check.mjs schema-check"
+    "shape-check": {
+      "command": "node .github/tooling-check.mjs shape-check"
     },
     "test": {
       "command": "node --test .github/tests/*.test.mjs",
@@ -45,7 +45,7 @@
       "dependsOn": [
         "format-check",
         "lint",
-        "schema-check",
+        "shape-check",
         "budgets"
       ]
     }

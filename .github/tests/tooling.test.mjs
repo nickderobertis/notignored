@@ -31,9 +31,9 @@ test("the tooling wrapper refuses drift, malformed files and invalid job shapes 
     ["unknown", {}, /unknown tooling check/],
     ["format-check", { "data.json": '{"a":1}\n' }, /JSON formatting drift/],
     ["lint", { "broken.mjs": "export const = ;\n" }, /broken\.mjs/],
-    ["schema-check", { "dup.yml": "a: 1\na: 2\n" }, /Map keys must be unique/],
+    ["shape-check", { "dup.yml": "a: 1\na: 2\n" }, /Map keys must be unique/],
     [
-      "schema-check",
+      "shape-check",
       {
         "workflows/ci.yml":
           "jobs:\n  required:\n    runs-on: ubuntu-latest\n    needs: lint\n",
@@ -41,7 +41,7 @@ test("the tooling wrapper refuses drift, malformed files and invalid job shapes 
       /required\.needs must be a list/,
     ],
     [
-      "schema-check",
+      "shape-check",
       { "workflows/ci.yml": `${validCi}  shapeless:\n    steps: []\n` },
       /invalid job type: shapeless/,
     ],
@@ -51,7 +51,7 @@ test("the tooling wrapper refuses drift, malformed files and invalid job shapes 
     assert.match(result.stderr, message);
     assert.match(result.stderr, /ACTION: fix the named syntax\/shape/);
   }
-  const accepted = refusal("schema-check", { "workflows/ci.yml": validCi });
+  const accepted = refusal("shape-check", { "workflows/ci.yml": validCi });
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.match(accepted.stdout, /schema-check passed/);
+  assert.match(accepted.stdout, /shape-check passed/);
 });

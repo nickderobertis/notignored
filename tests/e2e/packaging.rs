@@ -688,6 +688,10 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
             "format",
             "zip",
             "filename",
+            "unknown-format",
+            "truncated",
+            "machine",
+            "pe-signature",
         ] {
             let broken = scratch.path().join(format!("{mutation}.whl"));
             run(
@@ -721,6 +725,18 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
                     payload=bytearray(payload)
                     payload[:4]=b'\x7fELF'
                     struct.pack_into('<H',payload,18,62 if machine == 0x01000007 else 183)
+            elif mutation == 'unknown-format':
+                payload=b'\x00\x01\x02\x03'+payload[4:]
+            elif mutation == 'truncated':
+                payload=payload[:6]
+            elif mutation == 'machine':
+                payload=bytearray(payload)
+                if payload[:4] == b'\x7fELF':
+                    struct.pack_into('<H',payload,18,3)
+                else:
+                    struct.pack_into('<I',payload,4,7)
+            elif mutation == 'pe-signature':
+                payload=b'MZ'+bytes(62)
         elif name.endswith('/METADATA') and mutation == 'metadata':
             payload=payload.replace(b'Name: notignored-cli',b'Name: wrong-cli')
         elif name.endswith('/WHEEL') and mutation == 'tag':
@@ -746,6 +762,10 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
                 "format" => "operating-system format",
                 "zip" => "not a zip",
                 "filename" => "wheel filename",
+                "unknown-format" => "unrecognized executable format",
+                "truncated" => "truncated executable header",
+                "machine" => "unsupported executable machine",
+                "pe-signature" => "invalid pe signature",
                 _ => unreachable!("the mutation vocabulary is fixed above"),
             };
             assert!(
@@ -970,6 +990,82 @@ assert found, 'real SDK entry point was not present'
             );
             assert!(String::from_utf8_lossy(&refused.stderr).contains("ACTION:"));
         }
+        // The Python verifier is its own entry point, so each shape it refuses
+        // is driven at it directly rather than through the shell's pre-check.
+        let (other_target, other_arch) = if host_target().starts_with("x86_64-") {
+            ("aarch64-unknown-linux-gnu", "aarch64")
+        } else {
+            ("x86_64-unknown-linux-gnu", "x86_64")
+        };
+        let host_arch = if other_arch == "aarch64" {
+            "x86_64"
+        } else {
+            "aarch64"
+        };
+        let with = |changes: &[(&str, serde_json::Value)]| {
+            let mut changed = good.clone();
+            for (field, value) in changes {
+                changed[*field] = value.clone();
+            }
+            changed
+        };
+        let mut missing = good.clone();
+        missing
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("npm");
+        let mut extra = good.clone();
+        extra["extra"] = serde_json::json!("x");
+        let mut short_hashes = good.clone();
+        short_hashes["hashes"]
+            .as_object_mut()
+            .expect("hashes object")
+            .remove("npm");
+        for (manifest, expected) in [
+            (serde_json::json!([]), "must be an object"),
+            (missing, "fields differ"),
+            (extra, "fields differ"),
+            (short_hashes, "invalid staged manifest hashes"),
+            (with(&[("target", serde_json::json!(7))]), "must be strings"),
+            (
+                with(&[("architecture", serde_json::json!("riscv64"))]),
+                "unknown staged manifest architecture",
+            ),
+            (
+                with(&[("architecture", serde_json::json!(other_arch))]),
+                "manifest architecture differs from target",
+            ),
+            (
+                with(&[
+                    ("target", serde_json::json!(other_target)),
+                    ("architecture", serde_json::json!(other_arch)),
+                ]),
+                "manifest architecture differs from executable payload",
+            ),
+        ] {
+            std::fs::write(
+                &manifest_path,
+                serde_json::to_vec(&manifest).expect("serialize bad manifest"),
+            )
+            .expect("write bad manifest");
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(["--verify", "--out"])
+                .arg(&stage)
+                .output()
+                .expect("verify malformed manifest directly");
+            let error = String::from_utf8_lossy(&refused.stderr);
+            assert!(!refused.status.success(), "{manifest} was accepted");
+            assert!(
+                error.contains(expected) && error.contains("ACTION:"),
+                "{manifest} failed for the wrong reason: {error}"
+            );
+        }
+        assert_eq!(
+            good["architecture"], host_arch,
+            "the staged manifest records the host's architecture"
+        );
         std::fs::write(&manifest_path, original_manifest).expect("restore staged manifest");
         for (assets, port) in [
             (

@@ -8,7 +8,7 @@ No registry or forge writes happen here.
 
 import argparse
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 import hashlib
 import json
@@ -64,18 +64,27 @@ class ArtifactManifest:
 
 
 def architecture(binary: bytes) -> Architecture:
-    match binary[:4]:
-        case b"\x7fELF":
-            return {62: Architecture.X86_64, 183: Architecture.AARCH64}[struct.unpack_from("<H", binary, 18)[0]]
-        case b"\xcf\xfa\xed\xfe":
-            return {0x01000007: Architecture.X86_64, 0x0100000C: Architecture.AARCH64}[struct.unpack_from("<I", binary, 4)[0]]
-        case _:
-            if binary[:2] != b"MZ":
-                raise ValueError("unrecognized executable format")
-            offset = struct.unpack_from("<I", binary, 60)[0]
-            if binary[offset : offset + 4] != b"PE\x00\x00":
-                raise ValueError("invalid PE signature")
-            return {0x8664: Architecture.X86_64}[struct.unpack_from("<H", binary, offset + 4)[0]]
+    try:
+        match binary[:4]:
+            case b"\x7fELF":
+                machine = struct.unpack_from("<H", binary, 18)[0]
+                known = {62: Architecture.X86_64, 183: Architecture.AARCH64}
+            case b"\xcf\xfa\xed\xfe":
+                machine = struct.unpack_from("<I", binary, 4)[0]
+                known = {0x01000007: Architecture.X86_64, 0x0100000C: Architecture.AARCH64}
+            case _:
+                if binary[:2] != b"MZ":
+                    raise ValueError("unrecognized executable format")
+                offset = struct.unpack_from("<I", binary, 60)[0]
+                if binary[offset : offset + 4] != b"PE\x00\x00":
+                    raise ValueError("invalid PE signature")
+                machine = struct.unpack_from("<H", binary, offset + 4)[0]
+                known = {0x8664: Architecture.X86_64}
+    except struct.error:
+        raise ValueError("truncated executable header") from None
+    if machine not in known:
+        raise ValueError(f"unsupported executable machine {machine:#x}")
+    return known[machine]
 
 
 def pack(target: str, wheel: Path, out: Path) -> None:
@@ -183,12 +192,21 @@ def verify_staged(out: Path) -> None:
     doc = json.loads((out / "manifest.json").read_text())
     if not isinstance(doc, dict):
         raise ValueError("staged manifest must be an object")
+    expected = {field.name for field in fields(ArtifactManifest)}
+    if set(doc) != expected:
+        raise ValueError(f"staged manifest fields differ from {sorted(expected)}")
     raw_hashes = doc.pop("hashes")
-    if not isinstance(raw_hashes, dict) or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in raw_hashes.values()):
+    if (
+        not isinstance(raw_hashes, dict)
+        or set(raw_hashes) != {field.name for field in fields(PayloadHashes)}
+        or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in raw_hashes.values())
+    ):
         raise ValueError("invalid staged manifest hashes")
     hashes = PayloadHashes(**raw_hashes)
     if any(not isinstance(value, str) for value in doc.values()):
         raise ValueError("staged manifest fields must be strings")
+    if doc["architecture"] not in set(Architecture):
+        raise ValueError(f"unknown staged manifest architecture {doc['architecture']}")
     doc["architecture"] = Architecture(doc["architecture"])
     manifest = ArtifactManifest(hashes=hashes, **doc)
     version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]

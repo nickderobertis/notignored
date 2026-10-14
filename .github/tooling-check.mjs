@@ -11,10 +11,10 @@ function files(dir) {
 }
 try {
   const mode = process.argv[2];
-  if (!["format", "format-check", "lint", "schema-check"].includes(mode))
+  if (!["format", "format-check", "lint", "shape-check"].includes(mode))
     throw new Error("unknown tooling check");
   for (const path of files(".github")) {
-    if (path.endsWith(".mjs") && ["lint", "schema-check"].includes(mode))
+    if (path.endsWith(".mjs") && ["lint", "shape-check"].includes(mode))
       execFileSync("node", ["--check", path], { stdio: "pipe" });
     if (path.endsWith(".json")) {
       const text = readFileSync(path, "utf8");
@@ -27,7 +27,9 @@ try {
     if (/\.ya?ml$/.test(path))
       parse(readFileSync(path, "utf8"), { uniqueKeys: true });
   }
-  if (mode === "schema-check") {
+  // Not a schema validation: every file parses, and ci.yml's jobs keep the
+  // shapes the required-check aggregate and the graph model rely on.
+  if (mode === "shape-check") {
     const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
     if (!Array.isArray(workflow.jobs.required.needs))
       throw new Error("required.needs must be a list of job ids");
