@@ -2,6 +2,7 @@ export const eventClasses = [
   ["pr-opened", "pull_request", "opened", "refs/pull/1/merge"],
   ["pr-synchronize", "pull_request", "synchronize", "refs/pull/1/merge"],
   ["pr-reopened", "pull_request", "reopened", "refs/pull/1/merge"],
+  ["pr-ready-for-review", "pull_request", "ready_for_review", "refs/pull/1/merge"],
   ["base-push", "push", "", "refs/heads/main"],
   ["release-merge", "push", "", "refs/heads/main"],
   ["release-tag", "push", "", "refs/tags/v0.2.0"],

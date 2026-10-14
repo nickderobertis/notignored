@@ -329,7 +329,7 @@ test("actual workflow/call graph routes the complete event and publish workload 
       assert.match(result.stderr, /incomplete (workflow|job) coverage/);
     }
     for (const malformed of [
-      { ...validTelemetry, eventClasses: "abcdefghijkl" },
+      { ...validTelemetry, eventClasses: "x".repeat(eventClasses.length) },
       { ...validTelemetry, scenarios: "not-an-array" },
       { ...validTelemetry, lifecycleCounts: [] },
       { ...validTelemetry, jobCounts: undefined },

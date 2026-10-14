@@ -3,11 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
-  # The default activity types, without `ready_for_review`: lifting a draft
-  # pushes no commit, so the runs from while it was a draft already report on
-  # its head, and a run on the lift would only repeat them.
+  # The default activity types plus `ready_for_review`: `required` waits on the
+  # one Mac job, which can still be queued on the shared pool when a draft is
+  # lifted, so the lift starts a run of its own (cancelling the draft's) that
+  # the merge path can wait on for a verdict on that head.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Least privilege: most jobs only need to read the repo.
 permissions:
