@@ -87,11 +87,20 @@ def architecture(binary: bytes) -> Architecture:
     return known[machine]
 
 
+def cargo_version() -> ReleaseVersion:
+    """The crate version, checked against the repository's one release grammar."""
+    version = tomllib.loads((ROOT / "Cargo.toml").read_text()).get("package", {}).get("version")
+    if not isinstance(version, str):
+        raise ValueError("Cargo.toml [package] has no version string")
+    command(["node", "scripts/release-version.mjs", "validate", "--kind", "release", "--value", version])
+    return version
+
+
 def pack(target: str, wheel: Path, out: Path) -> None:
     workflow_targets = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["targets"]
     if target not in workflow_targets:
         raise ValueError(f"unsupported target: {target}")
-    version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
+    version = cargo_version()
     dist = f"notignored_cli-{version}"
     binary_name = "notignored.exe" if "windows" in target else "notignored"
     binary_member = f"{dist}.data/scripts/{binary_name}"
@@ -209,7 +218,7 @@ def verify_staged(out: Path) -> None:
         raise ValueError(f"unknown staged manifest architecture {doc['architecture']}")
     doc["architecture"] = Architecture(doc["architecture"])
     manifest = ArtifactManifest(hashes=hashes, **doc)
-    version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
+    version = cargo_version()
     targets = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["targets"]
     if manifest.target not in targets or manifest.version != version or manifest.tag != f"v{version}":
         raise ValueError("invalid staged manifest target/version/tag")

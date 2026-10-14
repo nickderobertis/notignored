@@ -1289,6 +1289,55 @@ fn the_staging_scripts_refuse_malformed_arguments_with_an_action() {
     }
 }
 
+/// The stager refuses a crate version outside the repository's release grammar
+/// before it names any artifact after it.
+#[test]
+fn the_stager_refuses_a_malformed_crate_version_before_staging() {
+    let checkout = tempfile::tempdir().expect("a scratch checkout");
+    std::fs::create_dir(checkout.path().join("scripts")).expect("create scripts");
+    for script in ["stage-release.py", "release-version.mjs"] {
+        std::fs::copy(
+            repo_root().join("scripts").join(script),
+            checkout.path().join("scripts").join(script),
+        )
+        .expect("copy the real script");
+    }
+    std::fs::copy(
+        repo_root().join("rust-toolchain.toml"),
+        checkout.path().join("rust-toolchain.toml"),
+    )
+    .expect("copy the pinned toolchain");
+    std::fs::write(
+        checkout.path().join("Cargo.toml"),
+        "[package]\nname = \"notignored\"\nversion = \"01.2.3/../x\"\n",
+    )
+    .expect("write a malformed crate version");
+    let out = checkout.path().join("staged");
+    let refused = Command::new("python3")
+        .current_dir(checkout.path())
+        .arg("scripts/stage-release.py")
+        .args([
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "--wheel",
+            "missing.whl",
+            "--out",
+        ])
+        .arg(&out)
+        .output()
+        .expect("run the stager");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("invalid release version") && stderr.contains("ACTION:"),
+        "{stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "the stager wrote output for a malformed version"
+    );
+}
+
 /// Every argument the package builder refuses, and what it tells the caller.
 ///
 /// These are the boundaries `scripts/npm-build.mjs` guards: an option it does not
