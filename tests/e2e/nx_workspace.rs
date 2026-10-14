@@ -32,7 +32,8 @@ const PROJECTS: [&str; 6] = [
 ];
 
 /// What a change to the crate's sources reaches: the crate, its tiers, and the
-/// two SDKs whose suites drive its binary.
+/// two SDKs whose suites drive its binary. Only the Unix-only journeys read it.
+#[cfg(unix)]
 const SOURCE_PROJECTS: [&str; 5] = [
     "notignored",
     "notignored-integration",
