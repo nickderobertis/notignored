@@ -160,6 +160,17 @@ export function classify(event, base, head, cwd = process.cwd()) {
       return ordinary(`unrecognised event: ${JSON.stringify(name)}`);
   }
   if (!event.pull_request) return ordinary("unknown PR payload");
+  const draft = event.pull_request.draft;
+  // A draft cannot merge, and marking it ready starts a run of its own, so the
+  // one Mac job is spent on that run rather than on every draft push. Anything
+  // but a real boolean asks for Mac coverage.
+  if (typeof draft !== "boolean") return ordinary("malformed draft flag");
+  if (draft)
+    return {
+      isReleaseOnly: false,
+      macosRequired: false,
+      reason: "draft PR: Mac lane deferred to ready_for_review",
+    };
   try {
     const pr = event.pull_request;
     const repository = event.repository?.full_name;

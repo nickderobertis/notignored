@@ -2,7 +2,12 @@ export const eventClasses = [
   ["pr-opened", "pull_request", "opened", "refs/pull/1/merge"],
   ["pr-synchronize", "pull_request", "synchronize", "refs/pull/1/merge"],
   ["pr-reopened", "pull_request", "reopened", "refs/pull/1/merge"],
-  ["pr-ready-for-review", "pull_request", "ready_for_review", "refs/pull/1/merge"],
+  [
+    "pr-ready-for-review",
+    "pull_request",
+    "ready_for_review",
+    "refs/pull/1/merge",
+  ],
   ["base-push", "push", "", "refs/heads/main"],
   ["release-merge", "push", "", "refs/heads/main"],
   ["release-tag", "push", "", "refs/tags/v0.2.0"],
@@ -39,6 +44,8 @@ export function variants() {
 // The event class whose recorded scenario each lifecycle event must reproduce.
 export const lifecycleSources = {
   "ordinary-pr-push": "pr-synchronize",
+  "draft-pr-opened": "pr-opened",
+  "draft-pr-ready": "pr-ready-for-review",
   "ordinary-base-merge": "base-push",
   "version-only-release-pr": "pr-opened",
   "release-base-merge": "release-merge",
@@ -47,16 +54,35 @@ export const lifecycleSources = {
   "automatic-smoke": "downstream",
   schedule: "scheduled",
 };
-export const lifecycleEvents = [
-  "ordinary-pr-push",
-  "ordinary-base-merge",
+// The ordinary pull request reaches review one of two ways: pushed to a pull
+// request already open for review, or opened as a draft and then marked ready.
+// A draft's runs defer the Mac lane, so their recorded scenario is compared with
+// it omitted.
+export const lifecycleRoutes = {
+  ready: ["ordinary-pr-push"],
+  "draft-first": ["draft-pr-opened", "draft-pr-ready"],
+};
+export const macDeferredLifecycleEvents = new Set([
+  "draft-pr-opened",
   "version-only-release-pr",
-  "release-base-merge",
-  "release-tag",
-  "release-published",
-  "automatic-smoke",
-  "schedule",
-];
+]);
+export function lifecycleEvents(route) {
+  const opening = lifecycleRoutes[route];
+  if (!opening) throw new Error(`unknown lifecycle route: ${route}`);
+  return [
+    ...opening,
+    "ordinary-base-merge",
+    "version-only-release-pr",
+    "release-base-merge",
+    "release-tag",
+    "release-published",
+    "automatic-smoke",
+    "schedule",
+  ];
+}
+export function lifecycleKey(lifecycle) {
+  return `${variantKey(lifecycle)}/${lifecycle.route}`;
+}
 
 // Merging a pull request into the base branch is two deliveries: the push to
 // main and the merged pull request's `closed` event.

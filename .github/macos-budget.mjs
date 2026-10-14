@@ -9,7 +9,10 @@ import {
   variants,
   variantKey,
   lifecycleEvents,
+  lifecycleKey,
+  lifecycleRoutes,
   lifecycleSources,
+  macDeferredLifecycleEvents,
   uncoveredSubscriptions,
 } from "./event-classes.mjs";
 import { coverageValidator } from "./telemetry-coverage.mjs";
@@ -106,8 +109,12 @@ try {
     throw new Error("job measurement differs from scenario rows");
   if (
     !sameSet(
-      telemetry.lifecycleCounts.map(variantKey),
-      expectedVariants.map(variantKey),
+      telemetry.lifecycleCounts.map(lifecycleKey),
+      expectedVariants.flatMap((variant) =>
+        Object.keys(lifecycleRoutes).map((route) =>
+          lifecycleKey({ ...variant, route }),
+        ),
+      ),
     )
   )
     throw new Error("incomplete lifecycle workload");
@@ -123,10 +130,11 @@ try {
     if (
       !validRuns(lifecycle.runs) ||
       !isCount(lifecycle.count) ||
+      !Object.hasOwn(lifecycleRoutes, lifecycle.route) ||
       !Array.isArray(lifecycle.eventScenarios) ||
       !sameSet(
         lifecycle.eventScenarios.map((event) => event.id),
-        lifecycleEvents,
+        lifecycleEvents(lifecycle.route),
       ) ||
       !isDeepStrictEqual(
         lifecycle.runs,
@@ -147,7 +155,7 @@ try {
         !validRuns(event.runs) ||
         !isDeepStrictEqual(
           comparable(event.runs),
-          comparable(scenario.runs, releasePr),
+          comparable(scenario.runs, macDeferredLifecycleEvents.has(event.id)),
         )
       )
         throw new Error("lifecycle event differs from recorded scenarios");

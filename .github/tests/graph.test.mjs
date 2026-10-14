@@ -27,6 +27,8 @@ import { coverageValidator } from "../telemetry-coverage.mjs";
 import {
   deliveries,
   eventClasses,
+  lifecycleEvents,
+  lifecycleRoutes,
   lifecycleSources,
   uncoveredSubscriptions,
   variants,
@@ -87,11 +89,30 @@ test("actual workflow/call graph routes the complete event and publish workload 
         }
         scenarios.push({ ...scenario, runs });
       }
-      const lifecycle = [
+      const draft = payload("feature/mac-policy", fork, true);
+      const draftPolicy = classifyHistory(h, draft, h.heads[diff]);
+      const lifecycleScenarios = [
         {
           id: "ordinary-pr-push",
           event: "pull_request",
           action: "synchronize",
+          ref: "refs/pull/1/merge",
+          pr: ordinary.pull_request,
+          policy: ordinaryPolicy,
+        },
+        {
+          id: "draft-pr-opened",
+          event: "pull_request",
+          action: "opened",
+          ref: "refs/pull/1/merge",
+          pr: draft.pull_request,
+          policy: draftPolicy,
+        },
+        {
+          // Marking the draft ready delivers it with draft: false.
+          id: "draft-pr-ready",
+          event: "pull_request",
+          action: "ready_for_review",
           ref: "refs/pull/1/merge",
           pr: ordinary.pull_request,
           policy: ordinaryPolicy,
@@ -149,14 +170,33 @@ test("actual workflow/call graph routes the complete event and publish workload 
           fanout({ ...s, ...delivery, vars, cratePublish, inputs: {} }),
         ),
       }));
-      lifecycles.push({
-        diff,
-        fork,
-        vars,
-        cratePublish,
-        eventScenarios: lifecycle,
-        runs: lifecycle.flatMap((event) => event.runs),
-      });
+      for (const route of Object.keys(lifecycleRoutes)) {
+        const lifecycle = lifecycleEvents(route).map((id) =>
+          lifecycleScenarios.find((event) => event.id === id),
+        );
+        lifecycles.push({
+          diff,
+          fork,
+          vars,
+          cratePublish,
+          route,
+          eventScenarios: lifecycle,
+          runs: lifecycle.flatMap((event) => event.runs),
+        });
+      }
+      const ciRun = (id) =>
+        lifecycleScenarios
+          .find((event) => event.id === id)
+          .runs.find((run) => run.workflow === "ci.yml");
+      const requiredRows = (run) =>
+        run.rows.filter((row) => row.display === "required" && row.enabled);
+      assert.equal(macRows(ciRun("draft-pr-opened")).length, 0);
+      assert.equal(requiredRows(ciRun("draft-pr-opened")).length, 1);
+      assert.deepEqual(
+        macRows(ciRun("draft-pr-ready")).map((row) => row.job),
+        ["macos"],
+      );
+      assert.equal(requiredRows(ciRun("draft-pr-ready")).length, 1);
     }
     for (const kind of ["source", "dependency", "metadata"]) {
       const scenario = {
@@ -332,6 +372,13 @@ test("actual workflow/call graph routes the complete event and publish workload 
       { ...validTelemetry, eventClasses: "x".repeat(eventClasses.length) },
       { ...validTelemetry, scenarios: "not-an-array" },
       { ...validTelemetry, lifecycleCounts: [] },
+      {
+        ...validTelemetry,
+        lifecycleCounts: validTelemetry.lifecycleCounts.map((row) => ({
+          ...row,
+          route: "invented",
+        })),
+      },
       { ...validTelemetry, jobCounts: undefined },
       { ...validTelemetry, scenarios: validTelemetry.scenarios.slice(1) },
       { ...validTelemetry, jobCounts: validTelemetry.jobCounts.slice(1) },

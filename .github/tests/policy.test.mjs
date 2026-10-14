@@ -159,11 +159,16 @@ export function history() {
     close: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
-export function payload(branch = "release-plz-2026-10-13", fork = false) {
+export function payload(
+  branch = "release-plz-2026-10-13",
+  fork = false,
+  draft = false,
+) {
   const repo = { full_name: "nickderobertis/notignored" };
   return {
     repository: repo,
     pull_request: {
+      draft,
       title: "chore: release",
       user: { login: "nickderobertis" },
       head: {
@@ -465,7 +470,10 @@ export function workflowClassify(
     readFileSync(output, "utf8")
       .trim()
       .split("\n")
-      .map((line) => line.split("=")),
+      .map((line) => [
+        line.slice(0, line.indexOf("=")),
+        line.slice(line.indexOf("=") + 1),
+      ]),
   );
 }
 test("actual changes policy step agrees with the classifier, including unknown PRs and non-PR events", () => {
@@ -478,11 +486,17 @@ test("actual changes policy step agrees with the classifier, including unknown P
       {},
       "{",
     ]) {
-      assert.equal(
-        workflowClassify(h, event).macos,
-        String(classifyHistory(h, event).macosRequired),
-      );
+      const policy = classifyHistory(h, event);
+      const step = workflowClassify(h, event);
+      assert.equal(step.macos, String(policy.macosRequired));
+      assert.equal(step.reason, policy.reason);
     }
+    const draft = workflowClassify(h, payload("feature", false, true));
+    assert.equal(draft.macos, "false");
+    assert.equal(
+      draft.reason,
+      "draft PR: Mac lane deferred to ready_for_review",
+    );
     assert.equal(
       workflowClassify(h, {}, h.heads.source, "push").macos,
       "false",
@@ -491,6 +505,77 @@ test("actual changes policy step agrees with the classifier, including unknown P
       workflowClassify(h, payload(), h.heads.dependency).macos,
       "true",
     );
+  } finally {
+    h.close();
+  }
+});
+
+test("a draft PR defers its Mac lane to ready_for_review; a malformed draft flag never does", () => {
+  const h = history();
+  try {
+    // Every head, ownership and branch: a draft never requests Mac coverage.
+    for (const [branch, fork] of [
+      ["feature", false],
+      ["feature", true],
+      [undefined, false],
+      [undefined, true],
+    ])
+      for (const head of [
+        h.heads.source,
+        h.heads.version,
+        h.heads.dependency,
+      ]) {
+        const deferred = classifyHistory(
+          h,
+          payload(branch, fork, true),
+          head,
+          h.base,
+          { GITHUB_EVENT_NAME: "pull_request" },
+        );
+        assert.deepEqual(deferred, {
+          isReleaseOnly: false,
+          macosRequired: false,
+          reason: "draft PR: Mac lane deferred to ready_for_review",
+        });
+      }
+    // Marking it ready delivers the same pull request with draft: false, which
+    // is an ordinary pull request again.
+    const ready = { ...payload("feature"), action: "ready_for_review" };
+    assert.equal(
+      classifyHistory(h, ready, h.heads.source, h.base, {
+        GITHUB_EVENT_NAME: "pull_request",
+      }).macosRequired,
+      true,
+    );
+    assert.equal(
+      classifyHistory(
+        h,
+        { ...payload(), action: "ready_for_review" },
+        h.heads.version,
+        h.base,
+        { GITHUB_EVENT_NAME: "pull_request" },
+      ).isReleaseOnly,
+      true,
+    );
+    // Absent or non-boolean draft flags fail closed, even on a release branch
+    // whose diff would otherwise be release-only.
+    for (const flag of [undefined, null, "true", 1, {}]) {
+      const event = payload();
+      if (flag === undefined) delete event.pull_request.draft;
+      else event.pull_request.draft = flag;
+      const policy = classifyHistory(h, event, h.heads.version, h.base, {
+        GITHUB_EVENT_NAME: "pull_request",
+      });
+      assert.deepEqual(
+        policy,
+        {
+          isReleaseOnly: false,
+          macosRequired: true,
+          reason: "malformed draft flag",
+        },
+        JSON.stringify(flag),
+      );
+    }
   } finally {
     h.close();
   }

@@ -40,6 +40,7 @@ jobs:
     outputs:
       crate: ${{ steps.affected.outputs.crate }}
       macos: ${{ steps.policy.outputs.macos }}
+      macos-reason: ${{ steps.policy.outputs.reason }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,6 +62,7 @@ jobs:
             import { readFileSync } from "node:fs";
             const policy = JSON.parse(readFileSync(process.argv[1]));
             console.log("macos=" + policy.macosRequired);
+            console.log("reason=" + String(policy.reason).replace(/[\r\n]+/g, " "));
           ' "$RUNNER_TEMP/macos-policy.json" >> "$GITHUB_OUTPUT"
       - name: Which tier this event gates on
         id: tier

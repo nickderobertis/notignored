@@ -77,8 +77,9 @@ done
 command -v node >/dev/null 2>&1 || die "node is not on PATH; it is what reads the \`needs\` payload" \
   "install Node.js (just bootstrap requires it), then re-run"
 
-# The payload as one line per job: id, result, and `changes`' crate output (the
-# only output a rule reads) as JSON, or `absent`. Its shape is checked here, so a
+# The payload as one line per job: id, result, `changes`' crate and macos
+# outputs (the only outputs a rule reads) as JSON, or `absent`, and the
+# classifier's stated reason for the summary. Its shape is checked here, so a
 # truncated or reshaped payload is a named failure rather than zero jobs.
 if ! table="$(
   # shellcheck disable=SC2016 # JavaScript, whose `${...}` templates are for node to expand
@@ -118,7 +119,11 @@ if ! table="$(
       }
       const crate = Object.hasOwn(outputs, "crate") ? JSON.stringify(outputs.crate) : "absent";
       const macos = Object.hasOwn(outputs, "macos") ? JSON.stringify(outputs.macos) : "absent";
-      console.log(`${job}\t${result}\t${crate}\t${macos}`);
+      // Printed in the summary, never judged: control characters become spaces.
+      const why = typeof outputs["macos-reason"] === "string" && outputs["macos-reason"].trim()
+        ? outputs["macos-reason"].replace(/[\u0000-\u001f\u007f]/g, " ")
+        : "unstated";
+      console.log(`${job}\t${result}\t${crate}\t${macos}\t${why}`);
     }
   ' 2>&1
 )"; then
@@ -230,7 +235,8 @@ if [ "$failures" -gt 0 ]; then
   exit 1
 fi
 if [ "$(printf '%s' "$(payload_line macos)" | cut -f2)" = skipped ]; then
-  echo "ci-required: every covered job passed or intentionally skipped; Mac lane omitted by classifier (no Mac proof claimed)"
+  why="$(payload_line changes | cut -f5)"
+  echo "ci-required: every covered job passed or intentionally skipped; Mac lane omitted by classifier (no Mac proof claimed): macOS did not run — ${why:-unstated}"
 else
   echo "ci-required: every covered job succeeded or was skipped for its own condition"
 fi

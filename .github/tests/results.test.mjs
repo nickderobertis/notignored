@@ -17,7 +17,18 @@ function outcomes(event, { macos = "true", crate = "true" } = {}) {
           : "success";
       return [
         id,
-        { result, outputs: id === "changes" ? { crate, macos } : {} },
+        {
+          result,
+          outputs:
+            id === "changes"
+              ? {
+                  crate,
+                  macos,
+                  "macos-reason":
+                    "draft PR: Mac lane deferred to ready_for_review",
+                }
+              : {},
+        },
       ];
     }),
   );
@@ -42,8 +53,9 @@ test("production required verdict preserves intentional skips and fails every mi
         if (macos === "false")
           assert.match(
             passed.stdout,
-            /omitted by classifier \(no Mac proof claimed\)/,
+            /omitted by classifier \(no Mac proof claimed\): macOS did not run — draft PR: Mac lane deferred to ready_for_review/,
           );
+        else assert.doesNotMatch(passed.stdout, /omitted|did not run/);
         for (const result of ["failure", "cancelled"]) {
           for (const job of ci.jobs.required.needs) {
             const broken = structuredClone(needs);
@@ -79,4 +91,15 @@ test("production required verdict preserves intentional skips and fails every mi
     0,
     "failed prerequisite authorized skip",
   );
+});
+test("the omission summary states the classifier's reason, or that none was given", () => {
+  const needs = outcomes("pull_request", { macos: "false" });
+  needs.changes.outputs["macos-reason"] = "draft PR:\tforged\nline";
+  const forged = verdict(needs);
+  assert.equal(forged.status, 0, forged.stderr);
+  assert.match(forged.stdout, /macOS did not run — draft PR: forged line\n$/);
+  delete needs.changes.outputs["macos-reason"];
+  const unstated = verdict(needs);
+  assert.equal(unstated.status, 0, unstated.stderr);
+  assert.match(unstated.stdout, /macOS did not run — unstated\n$/);
 });
