@@ -995,6 +995,9 @@ assert found, 'real SDK entry point was not present'
             ("tag", serde_json::json!("v999.0.0")),
             ("architecture", serde_json::json!("unknown")),
             ("archive", serde_json::json!("../outside.tar.gz")),
+            ("wheel", serde_json::json!("../outside.whl")),
+            ("wheel", serde_json::json!("split\nname.whl")),
+            ("npm", serde_json::json!("tab\tname.tgz")),
             ("hashes", serde_json::json!({})),
             (
                 "hashes",
@@ -1013,7 +1016,14 @@ assert found, 'real SDK entry point was not present'
                 !refused.status.success(),
                 "invalid manifest {field} was accepted"
             );
-            assert!(String::from_utf8_lossy(&refused.stderr).contains("ACTION:"));
+            let error = String::from_utf8_lossy(&refused.stderr);
+            assert!(error.contains("ACTION:"));
+            if ["wheel", "npm"].contains(&field) {
+                assert!(
+                    error.contains("invalid staged manifest"),
+                    "the stager did not refuse the {field} name itself: {error}"
+                );
+            }
         }
         // The Python verifier is its own entry point, so each shape it refuses
         // is driven at it directly rather than through the shell's pre-check.

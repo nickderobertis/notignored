@@ -42,7 +42,7 @@ manifest_fields="$(node --input-type=module -e '
       || Object.values(manifest.hashes).some(hash => !/^[0-9a-f]{64}$/.test(hash))
       || new Set(Object.values(manifest.hashes)).size !== 1
       || [manifest.wheel, manifest.npm].some(name => typeof name !== "string"
-        || !/^[^/\\]+$/.test(name) || name === "." || name === "..")) throw new Error("invalid staged manifest");
+        || !/^[^/\\\x00-\x1f\x7f]+$/.test(name) || name === "." || name === "..")) throw new Error("invalid staged manifest");
   console.log([manifest.version, manifest.wheel, manifest.npm].join("\n"));
 ' "$stage/manifest.json" "$root/scripts/release-version.mjs")"
 # Install exactly the artifacts the manifest names and stage-release.py verifies,
