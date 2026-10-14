@@ -163,5 +163,19 @@ test("real guard commands decide modeled prerequisite outputs, including changed
       "actual changed condition must control routing",
     );
   }
+  // The secret each guard reads comes from its own binding: with every modeled
+  // secret set, a binding to one the scenario does not model reads empty.
+  const present = { ...scenario, cratePublish: true, releasePlz: true };
+  for (const [name, job] of [
+    ["release.yml", "publish-crate"],
+    ["release-plz.yml", "release-plz"],
+  ]) {
+    const run = (input) =>
+      runWorkflow(name, input, present).find((row) => row.job === job).enabled;
+    assert.equal(run(graph[name]), true);
+    const rebound = structuredClone(graph[name]);
+    rebound.jobs.guard.steps[0].env.TOKEN = `\${{ secrets.UNMODELED_TOKEN }}`;
+    assert.equal(run(rebound), false, `${name} guard ignored its binding`);
+  }
 });
 // llmlint: ignore-end[shell_test_tiers_stay_split]

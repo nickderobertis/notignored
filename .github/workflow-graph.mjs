@@ -16,11 +16,16 @@ import { join } from "node:path";
 import { subscribedTypes } from "./event-classes.mjs";
 
 const guardCache = new Map();
-function guardOutputs(job, tokenPresent, root) {
+// A guard decides from whether its secret is set; the scenario says which
+// modeled secret is, and the step's own `env:` binding decides what it reads.
+function guardOutputs(job, secret, tokenPresent, root) {
   const step = job.steps.find((step) => step.id === "check");
   if (!step?.run || Object.keys(step.env ?? {}).join() !== "TOKEN")
     throw new Error("unresolved guard command or environment");
-  const key = JSON.stringify([step.run, job.outputs, tokenPresent]);
+  const { TOKEN } = stepEnv(step, {
+    secrets: { [secret]: tokenPresent ? "present" : "" },
+  });
+  const key = JSON.stringify([step.run, job.outputs, TOKEN]);
   if (guardCache.has(key)) return guardCache.get(key);
   const scratch = mkdtempSync(
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "macos-guard-"),
@@ -33,7 +38,7 @@ function guardOutputs(job, tokenPresent, root) {
       stdio: "pipe",
       env: {
         PATH: process.env.PATH,
-        TOKEN: tokenPresent ? "present" : "",
+        TOKEN,
         GITHUB_OUTPUT: output,
       },
     });
@@ -498,9 +503,19 @@ export function runWorkflow(name, workflow, scenario, root = ".", stack = []) {
       if (id === "changes" && name === "ci.yml")
         outputs = changesOutputs(job, scenario);
       else if (id === "guard" && name === "release.yml")
-        outputs = guardOutputs(job, scenario.cratePublish ?? true, root);
+        outputs = guardOutputs(
+          job,
+          "CARGO_REGISTRY_TOKEN",
+          scenario.cratePublish ?? true,
+          root,
+        );
       else if (id === "guard" && name === "release-plz.yml")
-        outputs = guardOutputs(job, scenario.releasePlz ?? true, root);
+        outputs = guardOutputs(
+          job,
+          "RELEASE_PLZ_TOKEN",
+          scenario.releasePlz ?? true,
+          root,
+        );
       else if (id === "arches" && name === reusable) {
         if (
           job.steps.find((step) => step.id === "read")?.run !==
