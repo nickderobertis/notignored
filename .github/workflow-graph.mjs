@@ -274,7 +274,22 @@ export function triggered(workflow, scenario) {
       !filter(patterns, scenario.ref.replace(/^refs\/(heads|tags)\//, ""))
     )
       return false;
-  }
+  } else if (
+    ["pull_request", "pull_request_target"].includes(scenario.event) &&
+    config.branches &&
+    !config.tags
+  ) {
+    // Pull request branch filters match the base branch the PR targets.
+    const base = scenario.pr?.base?.ref;
+    if (typeof base !== "string" || !base)
+      throw new Error(
+        `${scenario.event} branch filter needs the pull request base ref`,
+      );
+    if (!filter(config.branches, base)) return false;
+  } else if (config.branches || config.tags)
+    throw new Error(
+      `unsupported ${scenario.event} branch/tag filter; resolve explicitly`,
+    );
   if (
     config.paths ||
     config["paths-ignore"] ||

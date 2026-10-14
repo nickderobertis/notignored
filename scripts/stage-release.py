@@ -21,7 +21,7 @@ import tomllib
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
-from typing import TypeAlias
+from typing import NoReturn, TypeAlias
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -221,8 +221,20 @@ def verify_staged(out: Path) -> None:
     print("stage-release: staged payload hashes verified")
 
 
+class Arguments(argparse.ArgumentParser):
+    """Argument errors carry the same next action as every other refusal."""
+
+    def error(self, message: str) -> NoReturn:
+        print(
+            f"stage-release: {message}\nACTION: pack with --target TRIPLE --wheel PATH --out DIR, "
+            "or verify with --verify --out DIR",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = Arguments(description=__doc__)
     parser.add_argument("--target")
     parser.add_argument("--wheel", type=Path)
     parser.add_argument("--verify", action="store_true")

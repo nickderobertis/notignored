@@ -2,22 +2,20 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-// Release identifiers use the npm packager's established grammar.
+// One grammar per ecosystem, shared by the packagers, the classifier and the
+// provider probes so none of them admits a version the others would refuse.
+// https://semver.org/ and https://packaging.python.org/en/latest/specifications/version-specifiers/
 export const RELEASE_VERSION =
-	/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+const PYTHON_METADATA_VERSION =
+	/^(?:[1-9]\d*!)?(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))*(?:(?:a|b|rc)(?:0|[1-9]\d*))?(?:\.post(?:0|[1-9]\d*))?(?:\.dev(?:0|[1-9]\d*))?(?:\+[a-z0-9]+(?:\.[a-z0-9]+)*)?$/;
 
-export const isReleaseVersion = (value) =>
-	typeof value === "string" &&
-	!/[\r\n]/.test(value) &&
-	RELEASE_VERSION.test(value);
+const matches = (pattern, value) =>
+	typeof value === "string" && !/[\r\n]/.test(value) && pattern.test(value);
 
-// Managed Python metadata already admits dotted forms such as 0.0.0.dev0.
-const PYTHON_METADATA_VERSION = /^\d+\.\d+\.\d+(?:[-+.][\w.-]+)?$/;
+export const isReleaseVersion = (value) => matches(RELEASE_VERSION, value);
 export const isPythonMetadataVersion = (value) =>
-	isReleaseVersion(value) ||
-	(typeof value === "string" &&
-		!/[\r\n]/.test(value) &&
-		PYTHON_METADATA_VERSION.test(value));
+	matches(PYTHON_METADATA_VERSION, value);
 
 if (
 	process.argv[1] &&
@@ -28,22 +26,13 @@ if (
 			allowPositionals: true,
 			options: { kind: { type: "string" }, value: { type: "string" } },
 		});
-		// Provider probes use strict registry grammars; the established artifact
-		// and classifier field grammar above stays backward compatible.
-		// https://semver.org/ and https://packaging.python.org/en/latest/specifications/version-specifiers/
-		const semver =
-			/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
-		const python =
-			/^(?:[1-9]\d*!)?(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))*(?:(?:a|b|rc)(?:0|[1-9]\d*))?(?:\.post(?:0|[1-9]\d*))?(?:\.dev(?:0|[1-9]\d*))?(?:\+[a-z0-9]+(?:\.[a-z0-9]+)*)?$/;
-		const matches = (pattern, value) =>
-			typeof value === "string" && !/[\r\n]/.test(value) && pattern.test(value);
 		const validators = {
 			tag: (value) =>
 				typeof value === "string" &&
 				value.startsWith("v") &&
-				matches(semver, value.slice(1)),
-			release: (value) => matches(semver, value),
-			python: (value) => matches(python, value),
+				isReleaseVersion(value.slice(1)),
+			release: isReleaseVersion,
+			python: isPythonMetadataVersion,
 		};
 		if (
 			positionals.join() !== "validate" ||

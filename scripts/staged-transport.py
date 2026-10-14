@@ -4,8 +4,10 @@
 import argparse
 import functools
 import http.server
+import os
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 
 class Assets(http.server.SimpleHTTPRequestHandler):
@@ -17,8 +19,16 @@ class Assets(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+class Arguments(argparse.ArgumentParser):
+    """Argument errors carry the same next action as every other refusal."""
+
+    def error(self, message: str) -> NoReturn:
+        print(f"staged-transport: {message}\nACTION: pass ASSET_DIR PORT_FILE", file=sys.stderr)
+        sys.exit(2)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = Arguments(description=__doc__)
     parser.add_argument("assets", type=Path)
     parser.add_argument("port_file", type=Path)
     args = parser.parse_args()
@@ -30,7 +40,10 @@ def main() -> None:
         with http.server.ThreadingHTTPServer(
             ("127.0.0.1", 0), functools.partial(Assets, directory=str(args.assets))
         ) as server:
-            args.port_file.write_text(str(server.server_port))
+            # Publish the port atomically so a reader never sees a partial number.
+            partial = args.port_file.with_name(args.port_file.name + ".partial")
+            partial.write_text(str(server.server_port))
+            os.replace(partial, args.port_file)
             server.serve_forever()
     except (OSError, ValueError) as error:
         print(f"staged-transport: {error}\nACTION: supply an existing asset directory and a new writable port-file path", file=sys.stderr)

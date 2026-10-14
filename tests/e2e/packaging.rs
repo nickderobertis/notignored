@@ -423,6 +423,7 @@ fn the_npm_launcher_refuses_intel_macos_with_the_reason() {
         String::from_utf8_lossy(&install.stderr)
     );
 
+    // llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] no runner here or in CI is an Intel Mac, and the release no longer has one, so the host's identity is the one boundary that cannot be real. Only process.platform/arch are set, by a preload, before the real installed launcher runs unchanged under real node.
     let intel = scratch.path().join("intel-mac.cjs");
     std::fs::write(
         &intel,
@@ -438,6 +439,7 @@ fn the_npm_launcher_refuses_intel_macos_with_the_reason() {
         )
         .output()
         .expect("run the launcher");
+    // llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -853,6 +855,7 @@ with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as ch
                     .env("PATH", &wrapper_path)
                     .env("STAGED_REAL_PYTHON", python.trim()),
             );
+            // llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] the layer under test is stage-release.sh, and this is fault injection into its input: a real packed SDK artifact with a wrong export, which the staging verifier must refuse and clean up after. Nothing between the script and that artifact is replaced, and no public SDK input can make the real scan return a wrong report.
             let bad_sdk = scratch.path().join("sdk-wrong-report.tgz");
             run(
                 "corrupt the real SDK artifact's exported report",
@@ -893,6 +896,7 @@ assert found, 'real SDK entry point was not present'
                 error.contains("ignores") && error.contains("ACTION:"),
                 "wrong SDK error: {error}"
             );
+            // llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
             assert!(
                 std::fs::read_dir(&sdk_work)
                     .expect("SDK scratch")
@@ -1104,6 +1108,36 @@ os.replace(path+'.new',path)
 }
 
 // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+/// Malformed arguments to the staging scripts are refused with the next action,
+/// not argparse's bare usage line: the release log is the only diagnosis a Mac
+/// staging failure gets.
+#[test]
+fn the_staging_scripts_refuse_malformed_arguments_with_an_action() {
+    for (script, args) in [
+        ("scripts/stage-release.py", vec!["--target", "x"]),
+        ("scripts/stage-release.py", vec!["--out", "x", "--bogus"]),
+        ("scripts/staged-transport.py", vec![]),
+        ("scripts/staged-transport.py", vec!["a", "b", "--bogus"]),
+    ] {
+        let refused = Command::new("python3")
+            .current_dir(repo_root())
+            .arg(script)
+            .args(&args)
+            .output()
+            .expect("run a staging script");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert_eq!(
+            refused.status.code(),
+            Some(2),
+            "{script} {args:?}: {stderr}"
+        );
+        assert!(
+            stderr.contains("ACTION:"),
+            "{script} {args:?} gave no next action: {stderr}"
+        );
+    }
+}
 
 /// Every argument the package builder refuses, and what it tells the caller.
 ///

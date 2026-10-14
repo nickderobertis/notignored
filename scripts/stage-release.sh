@@ -79,6 +79,12 @@ done
 # llmlint: ignore[changed_behavior_has_e2e] OS startup starvation is outside the deterministic transport API. Real delayed-transport recovery and artifact failures prove installation and cleanup; replacing the transport to force this deadline would mock the layer under test.
 [ -s "$work/port" ] || { cat "$work/server.log" >&2; die "local transport did not start within 30 seconds"; }
 port="$(cat "$work/port")" || die "cannot read staged transport port"
+# llmlint: ignore-block[changed_behavior_has_e2e] the real transport publishes its port atomically and numerically, so only a replaced transport could write a bad one, which would mock the layer under test; this guard keeps a corrupt port file from reaching the installer URL.
+case "$port" in
+  '' | *[!0-9]*) die "staged transport wrote a non-numeric port: $port" ;;
+esac
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "staged transport wrote an out-of-range port: $port"
+# llmlint: ignore-end[changed_behavior_has_e2e]
 NOTIGNORED_RELEASE_BASE_URL="http://127.0.0.1:$port" run sh "$root/scripts/install.sh" --version "v$version" --to "$work/archive"
 PATH="$work/archive:$PATH" run bash "$root/scripts/smoke-published.sh" --expect-version "$version" --label "staged archive"
 echo 'stage-release: all staged install surfaces passed'

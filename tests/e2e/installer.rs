@@ -629,6 +629,7 @@ fn on_intel_macos_the_installer_refuses_with_the_reason() {
     let release = publish("v9.9.9", false, true);
     let target = tempfile::tempdir().unwrap();
     let bin = path_with(&[&["curl"], HASHERS].concat());
+    // llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] no runner here or in CI is an Intel Mac, and the release no longer has one, so `uname` — the host's identity — is the one boundary that cannot be real. The real installer runs unchanged against a real release server, which proves it requested nothing.
     let uname = bin.path().join("uname");
     let _ = fs::remove_file(&uname);
     fs::write(
@@ -637,6 +638,7 @@ fn on_intel_macos_the_installer_refuses_with_the_reason() {
     )
     .unwrap();
     fs::set_permissions(&uname, fs::Permissions::from_mode(0o755)).unwrap();
+    // llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
 
     let output = install_with_path(
         &release,

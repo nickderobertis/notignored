@@ -405,6 +405,44 @@ test("actual workflow/call graph routes the complete event and publish workload 
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /ACTION: run github-workflows:test/);
     }
+    // The budgets entry point turns the analyzer's verdicts into its exit
+    // status: the real registrations over fresh telemetry, the same commands
+    // registered over a tighter limit, and a registration it cannot read.
+    const checkBudgets = (cwd) =>
+      spawnSync("node", [resolve(".github/check-budgets.mjs")], {
+        cwd,
+        encoding: "utf8",
+      });
+    const within = checkBudgets(".");
+    assert.equal(within.status, 0, within.stderr);
+    assert.match(within.stdout, /notignored-macos-jobs-per-run: within/);
+    assert.match(within.stdout, /notignored-macos-runs-per-change: within/);
+    const registrations = parse(readFileSync(".github/budgets.yaml", "utf8"));
+    for (const budget of registrations.budgets) {
+      budget.command = budget.command.map((part) =>
+        part.endsWith(".mjs") || part.endsWith(".json")
+          ? resolve(part.startsWith(".github/") ? part : `.github/${part}`)
+          : part,
+      );
+      budget.threshold -= 1;
+    }
+    const tighter = `${h.dir}/tighter`;
+    mkdirSync(`${tighter}/.github`, { recursive: true });
+    writeFileSync(`${tighter}/.github/budgets.yaml`, stringify(registrations));
+    const over = checkBudgets(tighter);
+    assert.equal(over.status, 1, over.stderr);
+    assert.match(over.stdout, /notignored-macos-jobs-per-run: over \(1\/0\)/);
+    assert.match(
+      over.stdout,
+      /notignored-macos-runs-per-change: over \(2\/1\)/,
+    );
+    writeFileSync(
+      `${tighter}/.github/budgets.yaml`,
+      "schema_version: 1\nbudgets:\n  - id: broken\n",
+    );
+    const malformed = checkBudgets(tighter);
+    assert.equal(malformed.status, 1);
+    assert.match(malformed.stderr, /ACTION: run github-workflows:test/);
   } finally {
     h.close();
   }
@@ -724,7 +762,41 @@ test("actual YAML branch and tag subscriptions honor inclusion, negation and re-
         ref,
       );
     }
-    workflow.on.push.branches = ["release/?"];
+    workflow.on = {
+      pull_request: { branches: ["main", "!main-private"] },
+      workflow_run: { workflows: ["CI"], branches: ["main"] },
+    };
+    writeFileSync(path, stringify(workflow));
+    const pr = (base) => ({
+      event: "pull_request",
+      action: "opened",
+      ref: "refs/pull/1/merge",
+      pr: { ...payload().pull_request, base: { ref: base } },
+      policy: { macosRequired: false },
+    });
+    assert.deepEqual(
+      fanout(pr("main"), root).map((run) => run.workflow),
+      ["filtered.yml"],
+    );
+    assert.deepEqual(fanout(pr("main-private"), root), []);
+    assert.throws(
+      () => fanout({ ...pr("main"), pr: { base: {} } }, root),
+      /pull_request branch filter needs the pull request base ref/,
+    );
+    assert.throws(
+      () =>
+        fanout(
+          {
+            event: "workflow_run",
+            action: "completed",
+            workflow: "CI",
+            ref: "refs/heads/main",
+          },
+          root,
+        ),
+      /unsupported workflow_run branch\/tag filter/,
+    );
+    workflow.on = { push: { branches: ["release/?"] } };
     writeFileSync(path, stringify(workflow));
     assert.throws(
       () => fanout({ event: "push", ref: "refs/heads/release/a" }, root),
