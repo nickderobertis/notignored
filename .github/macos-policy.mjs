@@ -10,10 +10,36 @@ import {
 } from "../scripts/release-version.mjs";
 
 export const releaseBranchPrefix = "release-plz-";
+// The repository's own packages are identified by where they come from, never
+// by name: a registry package may share any name this repository publishes, and
+// its version is a dependency choice, not a release bump.
 const ownName = (name) =>
-  /^notignored(?:-cli|-sdk)?(?:-(?:linux|darwin|win32)-(?:x64|arm64))?$/.test(
-    name ?? "",
+  /^notignored(?:-cli|-sdk)?$/.test(typeof name === "string" ? name : "");
+// Cargo.lock records `source` only for registry and git packages; a workspace
+// or path package — the crate this repository builds — has none.
+const cargoOwn = (pkg) =>
+  !Object.hasOwn(pkg, "source") && pkg.name === "notignored";
+// uv.lock marks the project and its workspace members with a local source.
+const uvOwn = (pkg) => {
+  const source = pkg.source;
+  if (!source || typeof source !== "object" || Array.isArray(source))
+    return false;
+  const keys = Object.keys(source);
+  return (
+    keys.length === 1 &&
+    ["editable", "virtual", "directory"].includes(keys[0]) &&
+    source[keys[0]] === "." &&
+    ownName(pkg.name)
   );
+};
+// package-lock.json keys the root package "" and workspace members by their
+// repository path; everything installed from a registry lives under
+// node_modules/ and keeps its version.
+const npmLockOwn = (key, pkg) =>
+  (key === "" || !key.split("/").includes("node_modules")) &&
+  !pkg.link &&
+  !Object.hasOwn(pkg, "resolved") &&
+  ownName(pkg.name);
 function eraseVersion(object, accepts = isReleaseVersion) {
   if ("version" in object) {
     if (!accepts(object.version)) throw new Error("invalid version");
@@ -32,6 +58,14 @@ function parseToml(text) {
     ),
   );
 }
+function packages(doc) {
+  if (doc.package === undefined) return [];
+  if (!Array.isArray(doc.package)) throw new Error("malformed lock packages");
+  return doc.package;
+}
+// Each admitted path is the manifest or lockfile of a known repository package;
+// only that package's own version is erased. Dependency specifications, however
+// they are named, are compared exactly.
 function semantic(path, text) {
   if (path === "CHANGELOG.md") {
     if (!/^## \[?v?\d+\.\d+\.\d+/m.test(text))
@@ -45,14 +79,15 @@ function semantic(path, text) {
     eraseVersion(doc.package);
     return doc;
   }
-  if (path === "Cargo.lock" || path === "python/notignored-sdk/uv.lock") {
+  if (path === "Cargo.lock") {
     const doc = parseToml(text);
-    for (const pkg of doc.package ?? [])
-      if (ownName(pkg.name))
-        eraseVersion(
-          pkg,
-          path.endsWith("uv.lock") ? isPythonMetadataVersion : isReleaseVersion,
-        );
+    for (const pkg of packages(doc)) if (cargoOwn(pkg)) eraseVersion(pkg);
+    return doc;
+  }
+  if (path === "python/notignored-sdk/uv.lock") {
+    const doc = parseToml(text);
+    for (const pkg of packages(doc))
+      if (uvOwn(pkg)) eraseVersion(pkg, isPythonMetadataVersion);
     return doc;
   }
   if (
@@ -62,36 +97,32 @@ function semantic(path, text) {
     const doc = parseToml(text);
     if (!ownName(doc.project?.name)) throw new Error("unexpected project");
     eraseVersion(doc.project, isPythonMetadataVersion);
-    doc.project.dependencies = doc.project.dependencies?.map((dep) => {
-      const pin = /^notignored-cli==(.+)$/.exec(dep);
-      return pin && isPythonMetadataVersion(pin[1])
-        ? "notignored-cli==<version>"
-        : dep;
-    });
     return doc;
   }
   if (
     [
       "package.json",
-      "package-lock.json",
       "npm/notignored/package.json",
       "npm/notignored-sdk/package.json",
     ].includes(path)
   ) {
     const doc = JSON.parse(text);
+    if (!doc || typeof doc !== "object" || Array.isArray(doc))
+      throw new Error("malformed manifest");
     if (ownName(doc.name)) eraseVersion(doc);
-    for (const pkg of Object.values(doc.packages ?? {}))
-      if (ownName(pkg.name))
-        eraseVersion(
-          pkg,
-          path.endsWith("uv.lock") ? isPythonMetadataVersion : isReleaseVersion,
-        );
-    for (const field of ["dependencies", "optionalDependencies"]) {
-      for (const [name, value] of Object.entries(doc[field] ?? {})) {
-        if (ownName(name) && isReleaseVersion(value))
-          doc[field][name] = "<version>";
-      }
-    }
+    return doc;
+  }
+  if (path === "package-lock.json") {
+    const doc = JSON.parse(text);
+    if (!doc || typeof doc !== "object" || Array.isArray(doc))
+      throw new Error("malformed lockfile");
+    if (ownName(doc.name)) eraseVersion(doc);
+    const entries = doc.packages ?? {};
+    if (typeof entries !== "object" || Array.isArray(entries))
+      throw new Error("malformed lock packages");
+    for (const [key, pkg] of Object.entries(entries))
+      if (pkg && typeof pkg === "object" && npmLockOwn(key, pkg))
+        eraseVersion(pkg);
     return doc;
   }
   throw new Error(`non-release file: ${path}`);

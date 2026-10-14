@@ -15,6 +15,10 @@ import { test } from "node:test";
 import { parse } from "yaml";
 
 const policy = resolve(".github/macos-policy.mjs");
+// A registry crate that happens to share the repository crate's name. Only its
+// source tells it apart from the path package this repository builds.
+const crates = "registry+https://github.com/rust-lang/crates.io-index";
+const registryCrate = `[[package]]\nname = "notignored"\nversion = "0.0.9"\nsource = "${crates}"\n`;
 export function history() {
   const dir = mkdtempSync(
     join(
@@ -37,7 +41,7 @@ export function history() {
   );
   writeFileSync(
     join(dir, "Cargo.lock"),
-    'version = 4\n[[package]]\nname = "notignored"\nversion = "0.1.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
+    `version = 4\n[[package]]\nname = "notignored"\nversion = "0.1.0"\n${registryCrate}[[package]]\nname = "serde"\nversion = "1.0.0"\nsource = "${crates}"\n`,
   );
   writeFileSync(join(dir, "CHANGELOG.md"), "## [0.1.0]\nFirst release.\n");
   writeFileSync(join(dir, "src.rs"), "fn main() {}\n");
@@ -48,16 +52,16 @@ export function history() {
       name: "notignored-cli",
       version: "0.1.0",
       description: "CLI",
-      optionalDependencies: { "notignored-cli-darwin-arm64": "0.1.0" },
+      optionalDependencies: { "notignored-cli-darwin-arm64": "0.0.0-managed" },
     }),
   );
   const extra = {
     "pyproject.toml":
       '[project]\nname="notignored-cli"\nversion="0.1.0"\ndescription="CLI"\n',
     "python/notignored-sdk/pyproject.toml":
-      '[project]\nname="notignored-sdk"\nversion="0.1.0"\ndependencies=["notignored-cli==0.1.0", "serde>=1"]\n',
+      '[project]\nname="notignored-sdk"\nversion="0.1.0"\ndependencies=["notignored-cli==0.0.9", "serde>=1"]\n',
     "python/notignored-sdk/uv.lock":
-      'version=1\n[[package]]\nname="notignored-sdk"\nversion="0.1.0"\n[[package]]\nname="serde"\nversion="1.0.0"\n',
+      'version=1\n[[package]]\nname="notignored-sdk"\nversion="0.1.0"\nsource={editable="."}\n[[package]]\nname="notignored-cli"\nversion="0.0.9"\nsource={registry="https://pypi.org/simple"}\n[[package]]\nname="serde"\nversion="1.0.0"\nsource={registry="https://pypi.org/simple"}\n',
     "package.json": JSON.stringify({
       name: "notignored",
       version: "0.1.0",
@@ -69,13 +73,25 @@ export function history() {
       lockfileVersion: 3,
       packages: {
         "": { name: "notignored", version: "0.1.0" },
-        "node_modules/serde": { name: "serde", version: "1.0.0" },
+        "npm/notignored-sdk": { name: "notignored-sdk", version: "0.1.0" },
+        "node_modules/notignored-sdk": {
+          resolved: "npm/notignored-sdk",
+          link: true,
+        },
+        "node_modules/cli-alias": {
+          name: "notignored-cli",
+          version: "0.0.9",
+          resolved:
+            "https://registry.npmjs.org/notignored-cli/-/notignored-cli-0.0.9.tgz",
+        },
+        "node_modules/serde": { version: "1.0.0" },
       },
     }),
     "npm/notignored-sdk/package.json": JSON.stringify({
       name: "notignored-sdk",
       version: "0.1.0",
       description: "CLI",
+      devDependencies: { "notignored-cli": "0.0.9" },
     }),
   };
   for (const [path, text] of Object.entries(extra)) {
@@ -113,7 +129,7 @@ export function history() {
       );
       writeFileSync(
         join(dir, "Cargo.lock"),
-        'version = 4\n[[package]]\nname = "notignored"\nversion = "0.2.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\n',
+        `version = 4\n[[package]]\nname = "notignored"\nversion = "0.2.0"\n${registryCrate}[[package]]\nname = "serde"\nversion = "1.0.0"\nsource = "${crates}"\n`,
       );
       writeFileSync(
         join(dir, "CHANGELOG.md"),
@@ -125,7 +141,9 @@ export function history() {
           name: "notignored-cli",
           version: "0.2.0",
           description: "CLI",
-          optionalDependencies: { "notignored-cli-darwin-arm64": "0.2.0" },
+          optionalDependencies: {
+            "notignored-cli-darwin-arm64": "0.0.0-managed",
+          },
         }),
       );
     }
@@ -347,6 +365,62 @@ test("all admitted manifest forms reject non-version content and added/deleted/r
         mutation,
       );
     }
+  } finally {
+    h.close();
+  }
+});
+
+test("same-named registry dependencies keep their versions; only repository packages are erased", () => {
+  const h = history();
+  try {
+    // The repository's own packages, identified by source/path, bump alone.
+    assert.equal(classifyHistory(h, payload()).isReleaseOnly, true);
+    const admitted = [];
+    // Each edit moves only a same-named registry or dependency entry's version;
+    // its source and every other field stay as they were.
+    for (const [path, from, to] of [
+      [
+        "Cargo.lock",
+        'version = "0.0.9"\nsource = "registry+',
+        'version = "0.0.10"\nsource = "registry+',
+      ],
+      [
+        "python/notignored-sdk/uv.lock",
+        'version="0.0.9"\nsource={registry=',
+        'version="0.0.10"\nsource={registry=',
+      ],
+      [
+        "python/notignored-sdk/pyproject.toml",
+        "notignored-cli==0.0.9",
+        "notignored-cli==0.0.10",
+      ],
+      ["package-lock.json", '"version":"0.0.9"', '"version":"0.0.10"'],
+      [
+        "npm/notignored-sdk/package.json",
+        '"notignored-cli":"0.0.9"',
+        '"notignored-cli":"0.0.10"',
+      ],
+      [
+        "npm/notignored/package.json",
+        '"notignored-cli-darwin-arm64":"0.0.0-managed"',
+        '"notignored-cli-darwin-arm64":"0.0.10"',
+      ],
+    ]) {
+      for (const release of [false, true]) {
+        h.git("checkout", "-q", release ? h.heads.version : h.base);
+        const file = join(h.dir, path);
+        const text = readFileSync(file, "utf8");
+        assert.ok(text.includes(from), `${path} fixture lacks ${from}`);
+        writeFileSync(file, text.replace(from, to));
+        h.git("add", "-u");
+        h.git("commit", "-qm", `registry ${path}`);
+        const head = h.git("rev-parse", "HEAD");
+        const verdict = classifyHistory(h, payload(), head);
+        if (!verdict.macosRequired || verdict.isReleaseOnly)
+          admitted.push(`${path}${release ? " beside a release bump" : ""}`);
+      }
+    }
+    assert.deepEqual(admitted, [], "registry version edits authorized a skip");
   } finally {
     h.close();
   }
