@@ -240,6 +240,8 @@ def verify_staged(out: Path) -> None:
             raise ValueError("artifact filename must be a basename")
     binary_name = "notignored.exe" if "windows" in manifest.target else "notignored"
     with tarfile.open(out / "archives" / manifest.archive) as archive:
+        if binary_name not in archive.getnames():
+            raise ValueError(f"archive has no {binary_name} executable for {manifest.target}")
         member = archive.extractfile(binary_name)
         if member is None:
             raise ValueError("archive binary is missing")

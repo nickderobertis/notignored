@@ -693,8 +693,8 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
             .arg("--out")
             .arg(&stage),
     );
-    // A manifest relabeled to another operating system's target of a matching
-    // architecture is refused by the executable's own format, not trusted.
+    // A manifest relabeled to another operating system's target is refused,
+    // not trusted: by the executable's own format where the name is shared.
     let manifest_path = stage.join("manifest.json");
     let original = std::fs::read_to_string(&manifest_path).expect("read payload manifest");
     let mut relabeled: serde_json::Value =
@@ -716,11 +716,41 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
         .expect("verify a relabeled manifest");
     std::fs::write(&manifest_path, &original).expect("restore payload manifest");
     assert!(!refused.status.success(), "a relabeled manifest verified");
+    // Windows alone names its executable differently, so relabeling a Windows
+    // stage is refused before any payload is read: the target's executable
+    // is not in the archive.
+    let reason = if cfg!(windows) {
+        "has no notignored executable for aarch64-apple-darwin"
+    } else {
+        "operating-system format differs"
+    };
     assert!(
-        String::from_utf8_lossy(&refused.stderr).contains("operating-system format differs"),
+        String::from_utf8_lossy(&refused.stderr).contains(reason),
         "a relabeled manifest failed for the wrong reason: {}",
         String::from_utf8_lossy(&refused.stderr)
     );
+    if !cfg!(windows) {
+        // The same refusal Windows takes above, from the other side: a Unix
+        // stage relabeled to the Windows target lacks `notignored.exe`.
+        relabeled["target"] = serde_json::Value::from("x86_64-pc-windows-msvc");
+        relabeled["architecture"] = serde_json::Value::from("x86_64");
+        std::fs::write(&manifest_path, relabeled.to_string()).expect("relabel to Windows");
+        let refused = Command::new("python3")
+            .current_dir(repo_root())
+            .arg("scripts/stage-release.py")
+            .arg("--verify")
+            .arg("--out")
+            .arg(&stage)
+            .output()
+            .expect("verify a manifest relabeled to Windows");
+        std::fs::write(&manifest_path, &original).expect("restore payload manifest");
+        let error = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            !refused.status.success()
+                && error.contains("has no notignored.exe executable for x86_64-pc-windows-msvc"),
+            "a manifest relabeled to Windows was not refused by its executable name: {error}"
+        );
+    }
     // Drive the release's actual staging and install commands over this wheel;
     // transport is loopback, while packing, installation and CLI execution are real.
     if cfg!(unix) {

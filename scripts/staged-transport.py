@@ -5,6 +5,7 @@ import argparse
 import functools
 import http.server
 import os
+import socketserver
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -17,6 +18,18 @@ class Assets(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+
+class LoopbackServer(http.server.ThreadingHTTPServer):
+    """Bind without HTTPServer's reverse-DNS lookup of the bound address.
+
+    The stock server_bind calls socket.getfqdn, which can stall for tens of
+    seconds on a macOS runner; the name it computes is never used here.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = str(self.server_address[0]), int(self.server_address[1])
 
 
 class Arguments(argparse.ArgumentParser):
@@ -37,7 +50,7 @@ def main() -> None:
             raise ValueError("staged asset directory is missing")
         if not args.port_file.parent.is_dir() or args.port_file.exists():
             raise ValueError("port destination must be a new file in an existing directory")
-        with http.server.ThreadingHTTPServer(
+        with LoopbackServer(
             ("127.0.0.1", 0), functools.partial(Assets, directory=str(args.assets))
         ) as server:
             # Publish the port atomically so a reader never sees a partial number.
