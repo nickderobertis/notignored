@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Run one of the pinned dev tools `just bootstrap` installed, wherever it landed.
 #
-# `scripts/setup-python-tools.sh` writes a venv per tool (`.dev/<tool>`) and
-# `scripts/setup-js.sh` an npm tree (`.dev/js`), and each puts its binary in a
-# different place on Windows than on Unix. The SDK projects' Nx targets go
+# `scripts/setup-python-tools.sh` and `scripts/setup-misc-tools.sh` write a venv
+# per tool (`.dev/<tool>`) and `scripts/setup-js.sh` an npm tree (`.dev/js`), and
+# each puts its binary in a different place on Windows than on Unix. Nx targets go
 # through here so a project.json never has to spell one platform's path — the
 # same reason `tests/e2e/support.rs` resolves these binaries rather than naming
 # them.
@@ -31,6 +31,10 @@ biome | eslint | tsc)
 ruff | mypy | pyright | ty)
   CANDIDATES=("$ROOT/.dev/$TOOL/bin/$TOOL" "$ROOT/.dev/$TOOL/Scripts/$TOOL.exe")
   INSTALLER="just setup-python-tools"
+  ;;
+shellcheck)
+  CANDIDATES=("$ROOT/.dev/$TOOL/bin/$TOOL" "$ROOT/.dev/$TOOL/Scripts/$TOOL.exe")
+  INSTALLER="just setup-misc-tools"
   ;;
 *)
   echo "dev-tool: '$TOOL' is not one of the pinned dev tools" >&2

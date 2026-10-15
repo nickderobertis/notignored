@@ -8,7 +8,7 @@
     "format": { "executor": "nx:noop" },
     "format-check": { "executor": "nx:noop" },
     "lint": {
-      "command": "../.dev/shellcheck/bin/shellcheck measure.sh",
+      "command": "bash ../scripts/dev-tool.sh shellcheck measure.sh",
       "options": { "cwd": "pool-maintenance" },
       "inputs": ["default", "{workspaceRoot}/.shellcheck-version"]
     },
