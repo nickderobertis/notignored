@@ -228,8 +228,6 @@ fn the_changes_job_scopes_against_the_same_base() {
     }
 }
 
-/// What the script must refuse: anything it would otherwise have to guess at,
-/// named so the run's log says which input was wrong.
 /// The release-prep host budgets build the crate twice (the pool maintenance
 /// pass), so the release pull request runs them after its full sweep and no
 /// other event runs them at all.
@@ -273,6 +271,8 @@ fn only_the_release_pull_request_runs_the_release_prep_budgets() {
     }
 }
 
+/// What the script must refuse: anything it would otherwise have to guess at,
+/// named so the run's log says which input was wrong.
 #[test]
 fn the_tier_script_refuses_what_it_cannot_route() {
     for (case, event, named) in [

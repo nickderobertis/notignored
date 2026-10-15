@@ -286,7 +286,8 @@ budgets-release:
 # onevcs runs this in this repository's idle warm-pool slots. `target` is every
 # directory this repository's cargo builds write to: `.cargo/config.toml` sets
 # `target-dir = "target"`, resolved against the clone's root, and nothing else in
-# the tree sets one. A new `target-dir` joins this list in the same change.
+# the tree sets one. `tests/pool_maintenance_contract.rs` holds these paths to
+# the cargo configuration and the measurement script.
 # Prune superseded cargo builds older than 2 days, keeping each unit's newest.
 pool-maintenance:
     @cargo-prune-superseded --keep-within 2d target
