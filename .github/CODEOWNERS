@@ -21,6 +21,10 @@
 /python/notignored-sdk/  @nickderobertis
 /npm/notignored-sdk/     @nickderobertis
 
+# The pool maintenance onevcs runs, and the budget that times it.
+/onevcs.toml             @nickderobertis
+/pool-maintenance/       @nickderobertis
+
 # The orchestration and release surfaces, where a mistake is repo-wide.
 /.github/                @nickderobertis
 /scripts/                @nickderobertis

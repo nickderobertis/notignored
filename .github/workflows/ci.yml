@@ -122,6 +122,11 @@ jobs:
       - name: Quality gate (every project)
         if: steps.tier.outputs.tier == 'full'
         run: just check
+      # Builds the crate twice to time one pool maintenance pass, so it runs after
+      # the release pull request's sweep alone and no per-change gate reaches it.
+      - name: Release-prep host budgets
+        if: steps.tier.outputs.tier == 'full'
+        run: just budgets-release
       # A committed lockfile that `just bootstrap`/`just check` had to change is
       # a stale generated file; fail rather than let it drift.
       - name: Committed generated files are up to date

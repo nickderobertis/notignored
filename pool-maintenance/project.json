@@ -1,0 +1,26 @@
+{
+  "name": "pool-maintenance",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "tags": ["scope:host", "lang:bash"],
+  "targets": {
+    "bootstrap": { "command": "just _pool-maintenance-bootstrap" },
+    "format": { "executor": "nx:noop" },
+    "format-check": { "executor": "nx:noop" },
+    "lint": {
+      "command": "bash ../scripts/dev-tool.sh shellcheck measure.sh",
+      "options": { "cwd": "pool-maintenance" },
+      "inputs": ["default", "{workspaceRoot}/.shellcheck-version"]
+    },
+    "test": { "executor": "nx:noop" },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "test"]
+    },
+    "budgets-release": {
+      "command": "onebudgetspec check budgets.yaml --label host",
+      "options": { "cwd": "pool-maintenance" },
+      "cache": false
+    }
+  }
+}

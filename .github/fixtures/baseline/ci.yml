@@ -77,6 +77,9 @@ jobs:
       - name: Quality gate (every project)
         if: steps.tier.outputs.tier == 'full'
         run: just check
+      - name: Release-prep host budgets
+        if: steps.tier.outputs.tier == 'full'
+        run: just budgets-release
       - name: Committed generated files are up to date
         run: git diff --exit-code -- Cargo.lock package-lock.json
           python/notignored-sdk/uv.lock
