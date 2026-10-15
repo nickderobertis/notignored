@@ -25,7 +25,6 @@ import { PROJECT, REPO_ROOT, binary, file, run, scratch } from "./support.mjs";
 const HOST_TARGETS = {
   "linux-x64": "x86_64-unknown-linux-gnu",
   "linux-arm64": "aarch64-unknown-linux-gnu",
-  "darwin-x64": "x86_64-apple-darwin",
   "darwin-arm64": "aarch64-apple-darwin",
   "win32-x64": "x86_64-pc-windows-msvc",
 };
@@ -91,6 +90,11 @@ test("pack refuses to assemble a package with nothing compiled in it", (t) => {
     '[package]\nname = "notignored"\nversion = "9.9.9"\n',
   );
   cpSync(join(PROJECT, "scripts", "pack.mjs"), join(project, "scripts", "pack.mjs"));
+  mkdirSync(join(root, "scripts"));
+  cpSync(
+    join(REPO_ROOT, "scripts", "release-version.mjs"),
+    join(root, "scripts", "release-version.mjs"),
+  );
   cpSync(join(PROJECT, "package.json"), join(project, "package.json"));
 
   const attempt = spawnSync(
@@ -105,6 +109,34 @@ test("pack refuses to assemble a package with nothing compiled in it", (t) => {
   assert.equal(attempt.status, 1);
   assert.match(attempt.stderr, /nothing compiled at/);
   assert.match(attempt.stderr, /ACTION: build it first/);
+});
+
+test("pack refuses a crate version npm cannot index, by the repository's one grammar", (t) => {
+  for (const version of ["01.2.3", "1.2.3-..", "1.2.3+one+two"]) {
+    const root = scratch(t, "bad-version");
+    const project = join(root, "npm", "notignored-sdk");
+    mkdirSync(join(project, "scripts"), { recursive: true });
+    mkdirSync(join(root, "scripts"));
+    writeFileSync(
+      join(root, "Cargo.toml"),
+      `[package]\nname = "notignored"\nversion = "${version}"\n`,
+    );
+    cpSync(join(PROJECT, "scripts", "pack.mjs"), join(project, "scripts", "pack.mjs"));
+    cpSync(
+      join(REPO_ROOT, "scripts", "release-version.mjs"),
+      join(root, "scripts", "release-version.mjs"),
+    );
+
+    const attempt = spawnSync(
+      process.execPath,
+      ["scripts/pack.mjs", "--out", join(root, "out")],
+      { cwd: project, encoding: "utf8" },
+    );
+
+    assert.equal(attempt.status, 1, version);
+    assert.match(attempt.stderr, /is not a version npm can index/, version);
+    assert.match(attempt.stderr, /ACTION: fix the `version` in Cargo.toml/, version);
+  }
 });
 
 test("installed from its tarball, the SDK scans through the launcher npm resolved", (t) => {

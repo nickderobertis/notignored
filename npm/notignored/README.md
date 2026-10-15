@@ -19,8 +19,9 @@ Rust toolchain and compiles nothing. The binary for your platform arrives throug
 an optional dependency (`notignored-cli-<platform>-<arch>`), so npm downloads
 exactly one of them.
 
-Prebuilt binaries exist for Linux (x64, arm64), macOS (x64, arm64), and Windows
-(x64). On any other platform, install with `cargo install --git
+Prebuilt binaries exist for Linux (x64, arm64), macOS (arm64), and Windows (x64).
+macOS means Apple Silicon: Intel macOS is no longer supported. On any other
+platform, install with `cargo install --git
 https://github.com/nickderobertis/notignored --locked`.
 
 <!-- llmlint: ignore[no_redundant_instruction_pointers] this README is rendered on

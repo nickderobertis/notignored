@@ -37,7 +37,8 @@ name: Release
 #                     is switched off.
 #   * publish-pypi  — upload those wheels to notignored-cli with the PYPI_TOKEN
 #                     secret, gated on the PYPI_PUBLISH repo variable.
-#   * verify-pypi   — on Linux, both macOS architectures, and Windows,
+#   * verify-pypi   — registry delivery on Linux and Windows; Darwin staged
+#                     installs run in macos-build before publication.
 #                     pip-install the exact version just published and run
 #                     scripts/smoke-published.sh over it.
 #   * build-python-sdk / publish-python-sdk / verify-python-sdk — the same three
@@ -61,7 +62,8 @@ name: Release
 #                     publish and verify job and the immutable read-back. See
 #                     scripts/update-major-tag.sh.
 #
-# Every verify job runs the version at publish time only. `published-smoke.yml`
+# Darwin verifies staged products before publication; the other verify jobs
+# run the version at publish time only. `published-smoke.yml`
 # runs the identical scripts against whatever the registries and the Release
 # serve as `latest`, on a weekly schedule, so rot between releases surfaces
 # without one.
@@ -152,7 +154,7 @@ jobs:
         with:
           tool: just,nextest,cargo-llvm-cov
       - run: just bootstrap
-      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] the release publishes only artifacts built from a tree that passed the gate in this run; see the job's comment.
+      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit] the release publishes only artifacts built from a tree that passed the gate in this run; AGENTS.md records this tag-time re-gate as a deliberate, standing exception, and see the job's comment.
       - run: just check
 
   upload:
@@ -164,15 +166,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Native runners per target so nothing needs cross-compilation.
+          # Linux/Windows runners; the arm64 Darwin target is built in macos-build.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
@@ -224,7 +222,7 @@ jobs:
   # this cannot re-enter the pipeline. tests/e2e/github_release.rs drives the
   # script against a loopback GitHub.
   publish-release:
-    needs: upload
+    needs: [upload, upload-darwin, macos-build, build-wheels, build-npm]
     runs-on: ubuntu-latest
     # Publishing a Release is a write to it; drafts are also only listed to a
     # token that can push.
@@ -259,7 +257,8 @@ jobs:
   # Ungated: a GitHub Release always publishes, whatever PYPI_PUBLISH and
   # NPM_PUBLISH say, so this leg always has something to install.
   #
-  # Three legs, not four: `install.sh`'s ZIP branch needs `unzip` under a POSIX
+  # Linux only: Darwin installs run against staged archives in macos-build, and
+  # `install.sh`'s ZIP branch needs `unzip` under a POSIX
   # shell, which the Windows image does not ship — the Windows install path the
   # README documents is `cargo install`, covered by ci.yml on windows-latest.
   verify-install:
@@ -270,7 +269,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -357,15 +356,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Mirrors the binary `upload` matrix: native runners per target.
+          # Mirrors upload for Linux/Windows; Darwin wheels come from macos-build.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
@@ -395,7 +390,7 @@ jobs:
   # Keeping the wheels' build unconditioned above means a packaging break still
   # reddens the release while publishing is off.
   publish-pypi:
-    needs: build-wheels
+    needs: [build-wheels, macos-build]
     if: ${{ vars.PYPI_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -433,14 +428,9 @@ jobs:
   # here means a broken release, not a blocked publish — the wheel is public
   # either way, so this is what turns "we uploaded something" into "it works".
   #
-  # Four labels for five targets: `pip install` resolves a *different wheel* per
-  # platform AND architecture, so the matrix is keyed on the pair, not the OS.
-  # `macos-latest` is arm64 — `macos-15-intel` is the leg that installs the
-  # `x86_64-apple-darwin` wheel, which nothing else here does. The one target
-  # with no leg is `aarch64-unknown-linux-gnu`: setup-python's arm64 Linux
-  # support is not something a release is the place to discover. It is still
-  # built by the matrices above and installed for real by tests/e2e/packaging.rs
-  # on whichever host runs it.
+  # Registry delivery stays on Linux/Windows. The arm64 Darwin wheel is installed
+  # and executed locally in macos-build before publication, including when
+  # registry publishing is disabled.
   verify-pypi:
     name: verify-pypi (${{ matrix.os }})
     needs: publish-pypi
@@ -450,7 +440,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -554,9 +544,9 @@ jobs:
 
   # Post-publish gate: install what PyPI served and drive the SDK's public
   # surface through the binary its own dependency pulled in — the resolution this
-  # job exists to prove. One runner, unlike verify-pypi's four: the SDK is a
+  # job exists to prove. One runner: the SDK is a
   # single `py3-none-any` wheel, and the per-platform artifact underneath it is
-  # the `notignored-cli` wheel that verify-pypi already installs on all four.
+  # the CLI wheels proved by verify-pypi and macos-build.
   verify-python-sdk:
     needs: publish-python-sdk
     if: ${{ vars.PYPI_PUBLISH == 'true' }}
@@ -640,10 +630,6 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
@@ -726,7 +712,7 @@ jobs:
   # without it rather than risk that; adding it later is a one-flag change plus
   # `id-token: write` on this job.
   publish-npm:
-    needs: [build-npm, build-sdk-npm]
+    needs: [build-npm, build-sdk-npm, macos-build]
     permissions:
       contents: read
     if: ${{ vars.NPM_PUBLISH == 'true' }}
@@ -798,7 +784,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -867,7 +853,7 @@ jobs:
             const [directive] = report.ignores;
             if (report.ignores.length !== 1 || directive.tool !== "ruff"
                 || directive.rules[0] !== "E501" || directive.reason !== "smoke test") {
-              throw new Error(`installed SDK returned ${JSON.stringify(report)}`);
+              throw new Error("installed SDK returned " + JSON.stringify(report));
             }
           '
           echo "npm install + packaged-CLI smoke test passed for notignored-sdk $ver"
@@ -896,6 +882,8 @@ jobs:
   major-tag:
     needs:
       - upload
+      - upload-darwin
+      - macos-build
       - publish-release
       - verify-install
       - publish-crate
@@ -920,3 +908,88 @@ jobs:
           fetch-depth: 0
       - name: Move the floating major tag onto this release
         run: bash scripts/update-major-tag.sh --tag "$GITHUB_REF_NAME"
+
+  # One Apple Silicon runner builds the Darwin target once through maturin, then
+  # reuses that wheel's compiled payload for its archive and npm package, and
+  # installs and executes them before any publication. Intel macOS is no longer
+  # released: arm64 is the only Darwin target, built natively.
+  macos-build:
+    needs: [test, build-sdk-npm]
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      RELEASE_TARGETS: aarch64-apple-darwin
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-npm
+          path: staged-sdk
+      - name: Install the Darwin toolchain and the pinned packager
+        run: |
+          read -r -a release_targets <<< "$RELEASE_TARGETS"
+          rustup target add "${release_targets[@]}"
+          just setup-misc-tools
+          uv python install cpython-3.12-macos-aarch64-none
+      - name: Build and stage the arm64 products from one binary
+        run: |
+          read -r -a release_targets <<< "$RELEASE_TARGETS"
+          for target in "${release_targets[@]}"; do
+            bash scripts/dev-tool.sh maturin build --release --locked --target "$target" --out "darwin-wheels/$target"
+            python3 scripts/stage-release.py --target "$target" --wheel darwin-wheels/"$target"/*.whl --out "staged/$target"
+          done
+      - name: Install and run the arm64 staged products
+        run: |
+          test "$(uname -m)" = arm64
+          python="$(uv python find cpython-3.12-macos-aarch64-none)"
+          bash scripts/stage-release.sh staged/aarch64-apple-darwin "$python" "$GITHUB_WORKSPACE"/staged-sdk/*.tgz
+      - name: Collect the verified platform artifacts for Linux delivery
+        run: |
+          mkdir -p release-wheels release-npm release-archives
+          cp staged/*/wheels/*.whl release-wheels/
+          cp staged/*/npm-artifacts/*.tgz release-npm/
+          cp staged/*/archives/* release-archives/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-darwin
+          path: release-wheels/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-darwin
+          path: release-npm/*.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archives-darwin
+          path: release-archives/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-payload-manifests
+          path: staged/*/manifest.json
+
+  # Moving bytes onto the draft spends no Mac runner. Downloads are from this
+  # workflow run, so tag/head provenance cannot resolve to a previous run.
+  upload-darwin:
+    needs: macos-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: archives-darwin
+          path: staged-archives
+      - name: Attach the verified Darwin archives and checksums to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/github-release.sh await-draft --tag "$GITHUB_REF_NAME"
+          find staged-archives -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec gh release upload "$GITHUB_REF_NAME" --clobber {} +

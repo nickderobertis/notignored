@@ -94,8 +94,9 @@ distributions carry the release binary for your platform — a wheel per platfor
 on PyPI, a package per platform on npm, picked automatically — so they are the
 fastest path on a CI image with no Rust toolchain, and the only one that works
 where github.com is blocked but the package registries are not. Prebuilt targets
-are Linux (x64, arm64), macOS (x64, arm64), and Windows (x64); anywhere else,
-`cargo install` builds from source.
+are Linux (x64, arm64), macOS (arm64), and Windows (x64) — Apple Silicon only,
+as Intel macOS is no longer supported; there and anywhere else, `cargo install`
+builds from source.
 
 The installer honours `NOTIGNORED_VERSION` / `NOTIGNORED_INSTALL_DIR` (or the
 `--version` / `--to` flags), verifies the archive against the SHA-256 checksum

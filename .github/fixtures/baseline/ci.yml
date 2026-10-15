@@ -1,0 +1,284 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      crate: ${{ steps.affected.outputs.crate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: extractions/setup-just@v3
+      - name: Which tier this event gates on
+        id: tier
+        env:
+          GATE_EVENT: ${{ github.event_name }}
+          GATE_HEAD_REF: ${{ github.head_ref }}
+          GATE_BEFORE: ${{ github.event.before }}
+        run: bash scripts/ci-gate-tier.sh >> "$GITHUB_OUTPUT"
+      - name: Which projects the diff reaches
+        id: affected
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          NOTIGNORED_NX_BASE_SHA: ${{ steps.tier.outputs.base }}
+        run: |
+          if [ "$TIER" = full ]; then
+            echo "crate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "crate=$(just affected-crate)" >> "$GITHUB_OUTPUT"
+          fi
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest,cargo-llvm-cov
+      - name: Bootstrap
+        run: just bootstrap
+      - name: Which tier this event gates on
+        id: tier
+        env:
+          GATE_EVENT: ${{ github.event_name }}
+          GATE_HEAD_REF: ${{ github.head_ref }}
+          GATE_BEFORE: ${{ github.event.before }}
+        run: bash scripts/ci-gate-tier.sh >> "$GITHUB_OUTPUT"
+      - name: Quality gate (affected projects)
+        if: steps.tier.outputs.tier == 'affected'
+        env:
+          NOTIGNORED_NX_BASE_SHA: ${{ steps.tier.outputs.base }}
+        run: just check-affected
+      - name: Quality gate (every project)
+        if: steps.tier.outputs.tier == 'full'
+        run: just check
+      - name: Release-prep host budgets
+        if: steps.tier.outputs.tier == 'full'
+        run: just budgets-release
+      - name: Committed generated files are up to date
+        run: git diff --exit-code -- Cargo.lock package-lock.json
+          python/notignored-sdk/uv.lock
+  cross:
+    needs: changes
+    if: needs.changes.outputs.crate == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest
+      - name: Bootstrap
+        run: just bootstrap
+      - name: Format + lint
+        run: just fmt-check && just lint
+      - name: Tests (unit + integration + e2e)
+        run: just test-quick
+  msrv:
+    needs: changes
+    if: needs.changes.outputs.crate == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the MSRV from Cargo.toml
+        id: msrv
+        run: >
+          version="$(sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p'
+          Cargo.toml)"
+
+          [ -n "$version" ] || { echo "::error::Cargo.toml declares no
+          rust-version"; exit 1; }
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v3
+      - run: just msrv
+  deny:
+    needs: changes
+    if: needs.changes.outputs.crate == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-deny,cargo-machete
+      - run: just deps-check
+  install:
+    needs:
+      - changes
+      - gate
+    if: needs.changes.outputs.crate == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install (this revision)
+        run: cargo install --path . --locked
+      - name: Smoke-test the installed binary
+        run: >
+          notignored --version
+
+          notignored --help >/dev/null
+
+          tmp="$(mktemp -d)"
+
+          printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
+
+          notignored "$tmp" --format json | grep -q '"E501"'
+
+          # --fail-if-found must exit 1 here; anything else is a broken
+          artifact.
+
+          # `|| code=$?` keeps `set -e` from aborting on the expected failure.
+
+          code=0
+
+          notignored "$tmp" --fail-if-found || code=$?
+
+          [ "$code" -eq 1 ] || { echo "::error::expected exit 1, got $code";
+          exit 1; }
+  install-documented:
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: Swatinem/rust-cache@v2
+      - name: Install (the command the README gives users)
+        run: cargo install --git https://github.com/nickderobertis/notignored --locked
+      - name: Smoke-test the installed binary
+        run: |
+          notignored --version
+          notignored --help >/dev/null
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  llmlint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: extractions/setup-just@v3
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the Codex harness
+        run: npm install -g @openai/codex@0.145.0
+      - name: Install the Claude Code harness (oneharness fallback)
+        run: npm install -g @anthropic-ai/claude-code@2.1.220
+      - name: Install llmlint toolchain
+        run: just setup-llmlint
+      - name: Validate llmlint config
+        run: just lint-llm-validate --diff-base origin/main
+      - name: Lint changed files
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: >
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::llmlint needs OPENAI_API_KEY for the Codex harness" >&2
+            exit 1
+          fi
+
+          # The fallback is only real if its credential arrived too: without it
+
+          # claude-code is rejected at auth and falls through, leaving the chain
+
+          # nowhere to degrade to — the failure this job was fixed for, but now
+
+          # silent, because an installed-yet-uncredentialled harness looks fine.
+
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "::error::llmlint needs CLAUDE_CODE_OAUTH_TOKEN for the claude-code fallback harness" >&2
+            exit 1
+          fi
+
+          just lint-llm-diff origin/main
+  required:
+    if: always()
+    needs:
+      - changes
+      - gate
+      - cross
+      - msrv
+      - deny
+      - install
+      - install-documented
+      - pr-title
+      - llmlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every job passed, or skipped for its own reason
+        env:
+          REQUIRED_NEEDS: ${{ toJSON(needs) }}
+          REQUIRED_EVENT: ${{ github.event_name }}
+        run: bash scripts/ci-required.sh

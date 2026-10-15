@@ -42,6 +42,10 @@ files:
     # manifest is judged.
     - "Cargo.lock"
     - "tests/js-toolchain/package-lock.json"
+    # The private .github workflow-tooling package's own lock: the task that
+    # added it requires that package stay separate and locked inside .github, and
+    # a generated lockfile cannot carry a site directive. Its manifest is judged.
+    - ".github/package-lock.json"
     # Rendered screenshots and their digest baseline: `just screenshots` writes
     # every byte of them, and each SVG carries the vendored font base64-encoded
     # inside it. Judging them costs a megabyte of the judge's context per
@@ -56,7 +60,7 @@ files:
     - "screenshots/fonts/**"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
-# (composed alongside this file) selects them in fallback mode — codex + gpt-5.5
+# (composed alongside this file) selects them in fallback mode — codex + gpt-6.1-sol
 # primary, claude-code + opus-4.8 secondary — so a Claude Code session falls
 # through to claude-code with no config edit. Leaving the harness unset is what
 # lets that fallback (or an ONEHARNESS_<FIELD> env override) decide.

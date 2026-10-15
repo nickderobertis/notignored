@@ -32,7 +32,7 @@ ruff | mypy | pyright | ty)
   CANDIDATES=("$ROOT/.dev/$TOOL/bin/$TOOL" "$ROOT/.dev/$TOOL/Scripts/$TOOL.exe")
   INSTALLER="just setup-python-tools"
   ;;
-shellcheck)
+maturin | shellcheck)
   CANDIDATES=("$ROOT/.dev/$TOOL/bin/$TOOL" "$ROOT/.dev/$TOOL/Scripts/$TOOL.exe")
   INSTALLER="just setup-misc-tools"
   ;;

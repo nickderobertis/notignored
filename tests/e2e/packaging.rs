@@ -25,16 +25,31 @@ use std::process::Command;
 use crate::support::{cargo_version, repo_root, tool_binary};
 
 /// The Rust target triple for the host, as `release.yml`'s matrices spell it.
+/// The targets `rust-toolchain.toml` installs, which the stager admits as the
+/// release's whole set.
+fn release_targets() -> Vec<String> {
+    let toolchain = std::fs::read_to_string(repo_root().join("rust-toolchain.toml"))
+        .expect("read rust-toolchain.toml");
+    let (_, list) = toolchain
+        .split_once("targets = [")
+        .expect("rust-toolchain.toml declares its targets");
+    let (list, _) = list.split_once(']').expect("the targets list closes");
+    list.split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
 fn host_target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
         ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-        ("macos", "x86_64") => "x86_64-apple-darwin",
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         (os, arch) => panic!(
             "no released package for {os}/{arch}\n\
-             ACTION: run this suite on one of the five targets release.yml builds, \
+             ACTION: run this suite on one of the four targets release.yml builds, \
              or add {os}/{arch} to that matrix, to scripts/npm-build.mjs, and to \
              npm/notignored/bin/notignored.js"
         ),
@@ -388,6 +403,67 @@ fn the_npm_launcher_explains_a_missing_platform_package() {
     );
 }
 
+/// On an Intel Mac the launcher refuses with the reason, rather than listing the
+/// packages it does ship or hunting for a `darwin-x64` package that no release
+/// carries any more.
+///
+/// The installed launcher runs under real node; the one double is the host's
+/// identity, which a preload sets the way node reports it on an Intel Mac.
+#[test]
+fn the_npm_launcher_refuses_intel_macos_with_the_reason() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let launcher = npm_build(
+        "launcher",
+        &[
+            "--out",
+            scratch.path().join("dist").to_str().expect("a UTF-8 path"),
+        ],
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(launcher.join("package.json")).unwrap())
+            .expect("the stamped launcher manifest is valid JSON");
+    let optional = manifest["optionalDependencies"]
+        .as_object()
+        .expect("the launcher declares its platform packages");
+    assert!(
+        optional.contains_key("notignored-cli-darwin-arm64")
+            && !optional.contains_key("notignored-cli-darwin-x64"),
+        "the launcher must depend on the arm64 Darwin package only: {optional:?}"
+    );
+    let tarball = npm_pack(&launcher, &scratch.path().join("tarballs"));
+    let prefix = scratch.path().join("prefix");
+    let install = npm_install(&prefix, &[&tarball], &["--omit=optional"]);
+    assert!(
+        install.status.success(),
+        "npm install failed\n{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    // llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] no runner here or in CI is an Intel Mac, and the release no longer has one, so the host's identity is the one boundary that cannot be real. Only process.platform/arch are set, by a preload, before the real installed launcher runs unchanged under real node.
+    let intel = scratch.path().join("intel-mac.cjs");
+    std::fs::write(
+        &intel,
+        "Object.defineProperty(process, 'platform', { value: 'darwin' });\n\
+         Object.defineProperty(process, 'arch', { value: 'x64' });\n",
+    )
+    .expect("write the host-identity preload");
+    let output = installed_npm_command(&prefix)
+        .arg("--version")
+        .env(
+            "NODE_OPTIONS",
+            format!("--require={}", intel.to_str().expect("a UTF-8 path")),
+        )
+        .output()
+        .expect("run the launcher");
+    // llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Intel macOS is no longer supported") && stderr.contains("cargo install"),
+        "the launcher did not explain the Intel macOS refusal:\n{stderr}"
+    );
+}
+
 /// Build the wheel from this repo's `pyproject.toml` with the pinned maturin,
 /// into `dist`, and return the wheel it wrote.
 ///
@@ -551,6 +627,7 @@ fn put_back(shared: &Path, keep: &Path) -> std::io::Result<()> {
 /// it put on that venv's PATH — and prove the binary the rest of this suite is
 /// running is the one that was there before the build ([`KeptBinary`] says why
 /// that needs proving, and why here rather than in a test of its own).
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task explicitly requires the production builder journey behind its existing packaging/e2e edge, without a new project or unrelated-project dependency. Its staging source inputs in nx.json invalidate this same owning tier so cached results cannot hide changed builders.
 #[test]
 fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
     let scratch = tempfile::tempdir().expect("a scratch directory");
@@ -596,6 +673,677 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
             .arg(&wheel),
     );
 
+    let stage = scratch.path().join("staged");
+    run(
+        "stage the release artifact",
+        Command::new("python3")
+            // Locale-dependent text I/O is an error here, as it is in effect
+            // on a Windows runner whose default codec is not UTF-8.
+            .args([
+                "-X",
+                "warn_default_encoding",
+                "-W",
+                "error::EncodingWarning",
+            ])
+            .current_dir(repo_root())
+            .arg("scripts/stage-release.py")
+            .args(["--target", host_target(), "--wheel"])
+            .arg(&wheel)
+            .arg("--out")
+            .arg(&stage),
+    );
+    run(
+        "verify native staged payloads on every released host platform",
+        Command::new("python3")
+            // Locale-dependent text I/O is an error here, as it is in effect
+            // on a Windows runner whose default codec is not UTF-8.
+            .args([
+                "-X",
+                "warn_default_encoding",
+                "-W",
+                "error::EncodingWarning",
+            ])
+            .current_dir(repo_root())
+            .arg("scripts/stage-release.py")
+            .arg("--verify")
+            .arg("--out")
+            .arg(&stage),
+    );
+    // A manifest relabeled to another operating system's target is refused by
+    // the executable's own format, not trusted. The verifier resolves the
+    // executable by the file name the stage's own target gave it (`.exe` on
+    // Windows), so no host fails this for a name the relabel implies instead.
+    let manifest_path = stage.join("manifest.json");
+    let original = std::fs::read_to_string(&manifest_path).expect("read payload manifest");
+    let mut relabeled: serde_json::Value =
+        serde_json::from_str(&original).expect("payload manifest JSON");
+    relabeled["target"] = serde_json::Value::from(if host_target().contains("apple") {
+        "aarch64-unknown-linux-gnu"
+    } else {
+        "aarch64-apple-darwin"
+    });
+    relabeled["architecture"] = serde_json::Value::from("aarch64");
+    std::fs::write(&manifest_path, relabeled.to_string()).expect("relabel payload manifest");
+    let refused = Command::new("python3")
+        .current_dir(repo_root())
+        .arg("scripts/stage-release.py")
+        .arg("--verify")
+        .arg("--out")
+        .arg(&stage)
+        .output()
+        .expect("verify a relabeled manifest");
+    std::fs::write(&manifest_path, &original).expect("restore payload manifest");
+    assert!(!refused.status.success(), "a relabeled manifest verified");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("operating-system format differs"),
+        "a relabeled manifest failed for the wrong reason: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    if !cfg!(windows) {
+        // The other side of the Windows suffix: a Unix stage relabeled to the
+        // Windows target is refused by its format, not for lacking `.exe`.
+        relabeled["target"] = serde_json::Value::from("x86_64-pc-windows-msvc");
+        relabeled["architecture"] = serde_json::Value::from("x86_64");
+        std::fs::write(&manifest_path, relabeled.to_string()).expect("relabel to Windows");
+        let refused = Command::new("python3")
+            .current_dir(repo_root())
+            .arg("scripts/stage-release.py")
+            .arg("--verify")
+            .arg("--out")
+            .arg(&stage)
+            .output()
+            .expect("verify a manifest relabeled to Windows");
+        std::fs::write(&manifest_path, &original).expect("restore payload manifest");
+        let error = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            !refused.status.success() && error.contains("operating-system format differs"),
+            "a manifest relabeled to Windows failed for the wrong reason: {error}"
+        );
+    }
+    // Drive the release's actual staging and install commands over this wheel;
+    // transport is loopback, while packing, installation and CLI execution are real.
+    if cfg!(unix) {
+        for mutation in [
+            "member",
+            "metadata",
+            "tag",
+            "architecture",
+            "format",
+            "zip",
+            "filename",
+            "unknown-format",
+            "truncated",
+            "machine",
+            "pe-signature",
+        ] {
+            let broken = scratch.path().join(format!("{mutation}.whl"));
+            run(
+                "make a malformed real wheel",
+                Command::new("python3").arg("-c").arg(r#"
+import sys,zipfile,struct
+source,destination,mutation=sys.argv[1:]
+if mutation == 'zip':
+    open(destination,'wb').write(b'not a zip')
+    sys.exit(0)
+with zipfile.ZipFile(source) as original, zipfile.ZipFile(destination,'w') as changed:
+    for member in original.infolist():
+        name=member.filename
+        payload=original.read(name)
+        if '.data/scripts/' in name:
+            if mutation == 'member': name += '-other'
+            elif mutation == 'architecture':
+                payload=bytearray(payload)
+                if payload[:4] == b'\x7fELF':
+                    machine=struct.unpack_from('<H',payload,18)[0]
+                    struct.pack_into('<H',payload,18,183 if machine == 62 else 62)
+                else:
+                    machine=struct.unpack_from('<I',payload,4)[0]
+                    struct.pack_into('<I',payload,4,0x0100000c if machine == 0x01000007 else 0x01000007)
+            elif mutation == 'format':
+                if payload[:4] == b'\x7fELF':
+                    machine=struct.unpack_from('<H',payload,18)[0]
+                    payload=b'\xcf\xfa\xed\xfe'+struct.pack('<I',0x01000007 if machine == 62 else 0x0100000c)+payload[8:]
+                else:
+                    machine=struct.unpack_from('<I',payload,4)[0]
+                    payload=bytearray(payload)
+                    payload[:4]=b'\x7fELF'
+                    struct.pack_into('<H',payload,18,62 if machine == 0x01000007 else 183)
+            elif mutation == 'unknown-format':
+                payload=b'\x00\x01\x02\x03'+payload[4:]
+            elif mutation == 'truncated':
+                payload=payload[:6]
+            elif mutation == 'machine':
+                payload=bytearray(payload)
+                if payload[:4] == b'\x7fELF':
+                    struct.pack_into('<H',payload,18,3)
+                else:
+                    struct.pack_into('<I',payload,4,7)
+            elif mutation == 'pe-signature':
+                payload=b'MZ'+bytes(62)
+        elif name.endswith('/METADATA') and mutation == 'metadata':
+            payload=payload.replace(b'Name: notignored-cli',b'Name: wrong-cli')
+        elif name.endswith('/WHEEL') and mutation == 'tag':
+            payload=b'Wheel-Version: 1.0\nTag: py3-none-any\n'
+        changed.writestr(name,payload)
+"#).arg(&wheel).arg(&broken).arg(mutation),
+            );
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(["--target", host_target(), "--wheel"])
+                .arg(&broken)
+                .arg("--out")
+                .arg(scratch.path().join("rejected"))
+                .output()
+                .expect("run malformed wheel staging");
+            assert!(!refused.status.success(), "{mutation} was accepted");
+            let expected = match mutation {
+                "member" => "exact cli payload",
+                "metadata" => "name/version",
+                "tag" => "platform tags",
+                "architecture" => "architecture",
+                "format" => "operating-system format",
+                "zip" => "not a zip",
+                "filename" => "wheel filename",
+                "unknown-format" => "unrecognized executable format",
+                "truncated" => "truncated executable header",
+                "machine" => "unsupported executable machine",
+                "pe-signature" => "invalid pe signature",
+                _ => unreachable!("the mutation vocabulary is fixed above"),
+            };
+            assert!(
+                String::from_utf8_lossy(&refused.stderr)
+                    .to_lowercase()
+                    .contains(expected),
+                "{mutation} failed for the wrong reason: {}",
+                String::from_utf8_lossy(&refused.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&refused.stderr).contains("ACTION:"),
+                "{mutation} did not name a recovery action"
+            );
+        }
+        let refused = Command::new("python3")
+            .current_dir(repo_root())
+            .arg("scripts/stage-release.py")
+            .args(["--target", "unsupported-target", "--wheel"])
+            .arg(&wheel)
+            .arg("--out")
+            .arg(scratch.path().join("rejected"))
+            .output()
+            .expect("run unsupported staging target");
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("unsupported target"));
+        for arguments in [vec![], vec!["--target", host_target()]] {
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(arguments)
+                .arg("--out")
+                .arg(scratch.path().join("missing-mode"))
+                .output()
+                .expect("run staging without a complete mode");
+            assert!(!refused.status.success());
+            assert!(refused.stdout.is_empty());
+            let error = String::from_utf8_lossy(&refused.stderr);
+            assert!(error.contains("packing requires --target and --wheel"));
+            assert!(
+                error.contains("ACTION:"),
+                "missing mode had no recovery: {error}"
+            );
+        }
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(stage.join("manifest.json")).expect("read payload manifest"),
+        )
+        .expect("payload manifest JSON");
+        assert_eq!(manifest["target"], host_target());
+        assert_eq!(manifest["version"], cargo_version());
+        assert_eq!(manifest["hashes"]["archive"], manifest["hashes"]["wheel"]);
+        assert_eq!(manifest["hashes"]["npm"], manifest["hashes"]["wheel"]);
+        run(
+            "build the staged TypeScript SDK",
+            Command::new(crate::support::bash_program())
+                .current_dir(repo_root())
+                .args([
+                    "scripts/dev-tool.sh",
+                    "tsc",
+                    "-p",
+                    "npm/notignored-sdk/tsconfig.json",
+                ]),
+        );
+        let sdk = PathBuf::from(run(
+            "stamp the staged TypeScript SDK",
+            required("node")
+                .current_dir(repo_root())
+                .arg("npm/notignored-sdk/scripts/pack.mjs")
+                .arg("--out")
+                .arg(scratch.path().join("sdk")),
+        ));
+        let sdk_tgz = npm_pack(&sdk, &scratch.path().join("sdk-tarballs"));
+        // Every staging run's scratch lands here, so cleanup is observable.
+        let stage_tmp = scratch.path().join("stage-tmp");
+        std::fs::create_dir(&stage_tmp).expect("create staging scratch");
+        let verify = || {
+            let mut command = Command::new("bash");
+            command
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.sh")
+                .arg(&stage)
+                .arg("python3")
+                .arg(&sdk_tgz)
+                .env("TMPDIR", &stage_tmp);
+            command
+        };
+        // After a run, its scratch tree is gone and its loopback transport —
+        // the one serving this stage's archives — is no longer running.
+        let assert_cleaned_up = |after: &str| {
+            let leftovers: Vec<_> = std::fs::read_dir(&stage_tmp)
+                .expect("read staging scratch")
+                .map(|entry| entry.expect("scratch entry").file_name())
+                .filter(|name| name.to_string_lossy().starts_with("notignored-stage."))
+                .collect();
+            assert!(leftovers.is_empty(), "{after} left {leftovers:?}");
+            let archives = stage.join("archives");
+            let processes = run("list processes", Command::new("ps").args(["-eo", "args"]));
+            assert!(
+                !processes
+                    .lines()
+                    .any(|line| line.contains("staged-transport.py")
+                        && line.contains(archives.to_str().expect("a UTF-8 path"))),
+                "{after} left the staged transport running"
+            );
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // llmlint: ignore-block[e2e_not_mocked] the wrapper delays, then execs, the real interpreter, so the real transport still serves the real artifacts; startup starvation cannot be produced on demand any other way, and this is the journey that reproduced the hosted five-second failure.
+            let shim_dir = scratch.path().join("delayed-python");
+            std::fs::create_dir(&shim_dir).expect("create interpreter wrapper directory");
+            let shim = shim_dir.join("python3");
+            std::fs::write(
+                &shim,
+                "#!/usr/bin/env bash\ncase \"$1\" in */scripts/staged-transport.py) sleep 6;; esac\nexec \"$STAGED_REAL_PYTHON\" \"$@\"\n",
+            )
+            .expect("write delayed real-interpreter wrapper");
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
+                .expect("make interpreter wrapper executable");
+            let python = run(
+                "locate the real Python interpreter",
+                required("python3").args(["-c", "import sys; print(sys.executable)"]),
+            );
+            let mut paths = vec![shim_dir];
+            paths.extend(std::env::split_paths(
+                &std::env::var_os("PATH").expect("PATH"),
+            ));
+            let wrapper_path = std::env::join_paths(&paths).expect("wrapper PATH");
+            // llmlint: ignore-end[e2e_not_mocked]
+            run(
+                "install and execute staged forms after delayed real server startup",
+                verify()
+                    .env("PATH", &wrapper_path)
+                    .env("STAGED_REAL_PYTHON", python.trim()),
+            );
+            // llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] the layer under test is stage-release.sh, and this is fault injection into its input: a real packed SDK artifact with a wrong export, which the staging verifier must refuse and clean up after. Nothing between the script and that artifact is replaced, and no public SDK input can make the real scan return a wrong report.
+            let bad_sdk = scratch.path().join("sdk-wrong-report.tgz");
+            run(
+                "corrupt the real SDK artifact's exported report",
+                Command::new(python.trim())
+                    .arg("-c")
+                    .arg(
+                        r#"
+import io,sys,tarfile
+found=False
+with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2],'w:gz') as dest:
+    for member in source.getmembers():
+        data=source.extractfile(member).read() if member.isfile() else None
+        if member.name == 'package/dist/index.js':
+            data=b'export async function scan(){return {ignores:[]};}\n'
+            member.size=len(data)
+            found=True
+        dest.addfile(member,io.BytesIO(data) if data is not None else None)
+assert found, 'real SDK entry point was not present'
+"#,
+                    )
+                    .arg(&sdk_tgz)
+                    .arg(&bad_sdk),
+            );
+            let sdk_work = scratch.path().join("bad-sdk-work");
+            std::fs::create_dir(&sdk_work).expect("create SDK failure scratch");
+            let rejected = Command::new("bash")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.sh")
+                .arg(&stage)
+                .arg("python3")
+                .arg(&bad_sdk)
+                .env("TMPDIR", &sdk_work)
+                .output()
+                .expect("install SDK artifact with an incorrect report");
+            assert!(!rejected.status.success());
+            let error = String::from_utf8_lossy(&rejected.stderr);
+            assert!(
+                error.contains("ignores") && error.contains("ACTION:"),
+                "wrong SDK error: {error}"
+            );
+            // llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
+            assert!(
+                std::fs::read_dir(&sdk_work)
+                    .expect("SDK scratch")
+                    .find(|entry| entry
+                        .as_ref()
+                        .expect("temporary entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("notignored-stage."))
+                    .is_none(),
+                "SDK rejection left temporary installs: {:?}",
+                std::fs::read_dir(&sdk_work)
+                    .expect("read leftover entries")
+                    .map(|entry| entry.expect("leftover entry").file_name())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        for arguments in [vec![], vec![stage.to_str().expect("staged path")]] {
+            let refused = Command::new("bash")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.sh")
+                .args(arguments)
+                .output()
+                .expect("run staging with missing arguments");
+            assert!(!refused.status.success());
+            assert!(refused.stdout.is_empty());
+            assert!(
+                String::from_utf8_lossy(&refused.stderr)
+                    .contains("ACTION: run bash scripts/stage-release.sh"),
+                "missing arguments did not explain the real invocation"
+            );
+        }
+
+        run(
+            "install and execute the staged CLI forms without an SDK",
+            Command::new("bash")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.sh")
+                .arg(&stage)
+                .arg("python3"),
+        );
+        let manifest_path = stage.join("manifest.json");
+        let original_manifest = std::fs::read(&manifest_path).expect("read staged manifest");
+        let good: serde_json::Value =
+            serde_json::from_slice(&original_manifest).expect("manifest JSON");
+        for (field, value) in [
+            ("target", serde_json::json!("unknown-target")),
+            ("version", serde_json::json!("")),
+            ("version", serde_json::json!(42)),
+            ("tag", serde_json::json!("v999.0.0")),
+            ("architecture", serde_json::json!("unknown")),
+            ("archive", serde_json::json!("../outside.tar.gz")),
+            ("wheel", serde_json::json!("../outside.whl")),
+            ("wheel", serde_json::json!("split\nname.whl")),
+            ("npm", serde_json::json!("tab\tname.tgz")),
+            ("hashes", serde_json::json!({})),
+            (
+                "hashes",
+                serde_json::json!({"archive": 123, "npm": "bad", "wheel": "bad"}),
+            ),
+        ] {
+            let mut invalid = good.clone();
+            invalid[field] = value;
+            std::fs::write(
+                &manifest_path,
+                serde_json::to_vec(&invalid).expect("serialize bad manifest"),
+            )
+            .expect("write bad manifest");
+            let refused = verify().output().expect("verify malformed manifest");
+            assert!(
+                !refused.status.success(),
+                "invalid manifest {field} was accepted"
+            );
+            let error = String::from_utf8_lossy(&refused.stderr);
+            assert!(error.contains("ACTION:"));
+            if ["wheel", "npm"].contains(&field) {
+                assert!(
+                    error.contains("invalid staged manifest"),
+                    "the stager did not refuse the {field} name itself: {error}"
+                );
+            }
+        }
+        // The Python verifier is its own entry point, so each shape it refuses
+        // is driven at it directly rather than through the shell's pre-check.
+        let (host_arch, host_os) = host_target()
+            .split_once('-')
+            .expect("a target triple names its architecture first");
+        let other_arch = if host_arch == "aarch64" {
+            "x86_64"
+        } else {
+            "aarch64"
+        };
+        let with = |changes: &[(&str, serde_json::Value)]| {
+            let mut changed = good.clone();
+            for (field, value) in changes {
+                changed[*field] = value.clone();
+            }
+            changed
+        };
+        let mut missing = good.clone();
+        missing
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("npm");
+        let mut extra = good.clone();
+        extra["extra"] = serde_json::json!("x");
+        let mut short_hashes = good.clone();
+        short_hashes["hashes"]
+            .as_object_mut()
+            .expect("hashes object")
+            .remove("npm");
+        // Relabel the host's staged forms as every other released target. One on
+        // the host's own operating system is refused by the payload's machine;
+        // one on another is refused by the payload's format first — Darwin and
+        // Windows each ship one architecture, so a host there has no sibling.
+        let relabels = release_targets()
+            .into_iter()
+            .filter(|target| target != host_target())
+            .map(|target| {
+                let (arch, os) = target
+                    .split_once('-')
+                    .expect("a target triple names its architecture first");
+                let expected = if os == host_os {
+                    "manifest architecture differs from executable payload"
+                } else {
+                    "executable operating-system format differs from target"
+                };
+                let relabeled = with(&[
+                    ("target", serde_json::json!(target)),
+                    ("architecture", serde_json::json!(arch)),
+                ]);
+                (relabeled, expected)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            relabels
+                .iter()
+                .any(|(_, expected)| expected.contains("operating-system")),
+            "no released target sits on another operating system to relabel as"
+        );
+        for (manifest, expected) in [
+            (serde_json::json!([]), "must be an object"),
+            (missing, "fields differ"),
+            (extra, "fields differ"),
+            (short_hashes, "invalid staged manifest hashes"),
+            (with(&[("target", serde_json::json!(7))]), "must be strings"),
+            (
+                with(&[("architecture", serde_json::json!("riscv64"))]),
+                "unknown staged manifest architecture",
+            ),
+            (
+                with(&[("architecture", serde_json::json!(other_arch))]),
+                "manifest architecture differs from target",
+            ),
+        ]
+        .into_iter()
+        .chain(relabels)
+        {
+            std::fs::write(
+                &manifest_path,
+                serde_json::to_vec(&manifest).expect("serialize bad manifest"),
+            )
+            .expect("write bad manifest");
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(["--verify", "--out"])
+                .arg(&stage)
+                .output()
+                .expect("verify malformed manifest directly");
+            let error = String::from_utf8_lossy(&refused.stderr);
+            assert!(!refused.status.success(), "{manifest} was accepted");
+            assert!(
+                error.contains(expected) && error.contains("ACTION:"),
+                "{manifest} failed for the wrong reason: {error}"
+            );
+        }
+        assert_eq!(
+            good["architecture"], host_arch,
+            "the staged manifest records the host's architecture"
+        );
+        std::fs::write(&manifest_path, original_manifest).expect("restore staged manifest");
+        for (assets, port) in [
+            (
+                scratch.path().join("missing-assets"),
+                scratch.path().join("port"),
+            ),
+            (stage.join("archives"), manifest_path),
+            (
+                stage.join("archives"),
+                scratch.path().join("missing-parent/port"),
+            ),
+        ] {
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/staged-transport.py")
+                .arg(assets)
+                .arg(port)
+                .output()
+                .expect("run invalid transport");
+            assert!(!refused.status.success());
+            assert!(String::from_utf8_lossy(&refused.stderr).contains("ACTION:"));
+        }
+
+        for (directory, name) in [
+            ("archives", "archive"),
+            ("wheels", "wheel"),
+            ("npm-artifacts", "npm"),
+        ] {
+            let artifact = stage
+                .join(directory)
+                .join(good[name].as_str().expect("artifact filename"));
+            let original = std::fs::read(&artifact).expect("read staged artifact");
+            run(
+                "remove the real packaged binary member",
+                Command::new("python3").arg("-c").arg(r#"
+import io,sys,tarfile,zipfile
+path,kind=sys.argv[1:]
+if kind == 'wheel':
+    with zipfile.ZipFile(path) as source:
+        members=[(member,source.read(member)) for member in source.infolist() if '.data/scripts/' not in member.filename]
+    with zipfile.ZipFile(path,'w') as dest:
+        for member,data in members: dest.writestr(member,data)
+else:
+    with tarfile.open(path) as source:
+        members=[(member,source.extractfile(member).read() if member.isfile() else None) for member in source.getmembers() if member.name not in ('notignored','package/bin/notignored')]
+    with tarfile.open(path,'w:gz') as dest:
+        for member,data in members: dest.addfile(member,io.BytesIO(data) if data is not None else None)
+"#).arg(&artifact).arg(name),
+            );
+            let refused = Command::new("python3")
+                .current_dir(repo_root())
+                .arg("scripts/stage-release.py")
+                .args(["--verify", "--out"])
+                .arg(&stage)
+                .output()
+                .expect("verify artifact without its payload member");
+            assert!(
+                !refused.status.success(),
+                "missing {name} payload was accepted"
+            );
+            let error = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                error.contains("notignored") && error.contains("ACTION:"),
+                "wrong missing-member error: {error}"
+            );
+            std::fs::write(&artifact, original).expect("restore packaged member");
+        }
+        let staged_wheel = stage
+            .join("wheels")
+            .join(wheel.file_name().expect("wheel filename"));
+        let original_wheel = std::fs::read(&staged_wheel).expect("read staged wheel");
+        run(
+            "corrupt one staged payload",
+            Command::new("python3")
+                .arg("-c")
+                .arg(
+                    r#"
+import sys,zipfile,os
+path=sys.argv[1]
+with zipfile.ZipFile(path) as original, zipfile.ZipFile(path+'.new','w') as changed:
+    for name in original.namelist():
+        payload=original.read(name)
+        if '.data/scripts/' in name: payload += b'changed'
+        changed.writestr(name,payload)
+os.replace(path+'.new',path)
+"#,
+                )
+                .arg(&staged_wheel),
+        );
+        let disagreement = verify().output().expect("verify mismatched payloads");
+        assert!(!disagreement.status.success());
+        assert!(String::from_utf8_lossy(&disagreement.stderr).contains("hashes differ"));
+        std::fs::write(staged_wheel, original_wheel).expect("restore staged wheel");
+        let checksum = std::fs::read_dir(stage.join("archives"))
+            .expect("read archives")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "sha256")
+            })
+            .expect("a checksum sibling");
+        let original = std::fs::read(&checksum).expect("read checksum");
+        std::fs::write(&checksum, "0".repeat(64)).expect("corrupt checksum");
+        let failure = verify().output().expect("run corrupted stage");
+        assert!(
+            !failure.status.success(),
+            "a bad checksum installed successfully"
+        );
+        assert!(
+            String::from_utf8_lossy(&failure.stderr).contains("checksum"),
+            "failure should name the checksum: {}",
+            String::from_utf8_lossy(&failure.stderr)
+        );
+        assert_cleaned_up("an installer failure after the transport started");
+        std::fs::write(checksum, original).expect("restore checksum");
+        // Stray artifacts beside the verified ones are never installed: only
+        // the files the manifest names, which the verifier checked, are.
+        let strays = [
+            stage
+                .join("wheels")
+                .join("notignored_cli-0.0.1-py3-none-any.whl"),
+            stage.join("npm-artifacts").join("stray-0.0.1.tgz"),
+        ];
+        for stray in &strays {
+            std::fs::write(stray, b"not a verified artifact").expect("plant a stray artifact");
+        }
+        run(
+            "recover after restoring staged checksum, beside stray artifacts",
+            &mut verify(),
+        );
+        for stray in &strays {
+            std::fs::remove_file(stray).expect("remove the stray artifact");
+        }
+        assert_cleaned_up("a successful staged install");
+    }
+
     // The wheel's console command, on the venv's PATH exactly as `pip install`
     // puts it there.
     let bin = if cfg!(windows) {
@@ -612,6 +1360,93 @@ fn the_pypi_wheel_installs_and_runs_the_prebuilt_binary() {
         "the wheel-installed notignored",
         || Command::new(&bin),
         scratch.path(),
+    );
+}
+
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+/// Malformed arguments to the staging scripts are refused with the next action,
+/// not argparse's bare usage line: the release log is the only diagnosis a Mac
+/// staging failure gets.
+#[test]
+fn the_staging_scripts_refuse_malformed_arguments_with_an_action() {
+    for (script, args) in [
+        ("scripts/stage-release.py", vec!["--target", "x"]),
+        ("scripts/stage-release.py", vec!["--out", "x", "--bogus"]),
+        ("scripts/staged-transport.py", vec![]),
+        ("scripts/staged-transport.py", vec!["a", "b", "--bogus"]),
+    ] {
+        let refused = Command::new("python3")
+            .current_dir(repo_root())
+            .arg(script)
+            .args(&args)
+            .output()
+            .expect("run a staging script");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert_eq!(
+            refused.status.code(),
+            Some(2),
+            "{script} {args:?}: {stderr}"
+        );
+        assert!(
+            stderr.contains("ACTION:"),
+            "{script} {args:?} gave no next action: {stderr}"
+        );
+    }
+}
+
+/// The stager refuses a crate version outside the repository's release grammar
+/// before it names any artifact after it.
+#[test]
+fn the_stager_refuses_a_malformed_crate_version_before_staging() {
+    let checkout = tempfile::tempdir().expect("a scratch checkout");
+    std::fs::create_dir(checkout.path().join("scripts")).expect("create scripts");
+    for script in ["stage-release.py", "release-version.mjs"] {
+        std::fs::copy(
+            repo_root().join("scripts").join(script),
+            checkout.path().join("scripts").join(script),
+        )
+        .expect("copy the real script");
+    }
+    std::fs::copy(
+        repo_root().join("rust-toolchain.toml"),
+        checkout.path().join("rust-toolchain.toml"),
+    )
+    .expect("copy the pinned toolchain");
+    std::fs::write(
+        checkout.path().join("Cargo.toml"),
+        "[package]\nname = \"notignored\"\nversion = \"01.2.3/../x\"\n",
+    )
+    .expect("write a malformed crate version");
+    let out = checkout.path().join("staged");
+    let refused = Command::new("python3")
+        .args([
+            "-X",
+            "warn_default_encoding",
+            "-W",
+            "error::EncodingWarning",
+        ])
+        .current_dir(checkout.path())
+        .arg("scripts/stage-release.py")
+        .args([
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "--wheel",
+            "missing.whl",
+            "--out",
+        ])
+        .arg(&out)
+        .output()
+        .expect("run the stager");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("invalid release version") && stderr.contains("ACTION:"),
+        "{stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "the stager wrote output for a malformed version"
     );
 }
 

@@ -174,16 +174,13 @@ fn serve_one(mut stream: TcpStream, root: &Path) {
 }
 
 fn host_target() -> &'static str {
-    if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") {
-            "aarch64-apple-darwin"
-        } else {
-            "x86_64-apple-darwin"
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", _) => {
+            panic!("Intel macOS has no release archive; run this suite on Apple Silicon")
         }
-    } else if cfg!(target_arch = "aarch64") {
-        "aarch64-unknown-linux-gnu"
-    } else {
-        "x86_64-unknown-linux-gnu"
+        (_, "aarch64") => "aarch64-unknown-linux-gnu",
+        _ => "x86_64-unknown-linux-gnu",
     }
 }
 
@@ -616,6 +613,51 @@ fn without_a_sha256_tool_the_installer_says_which_to_install() {
         "{stderr}"
     );
     assert!(stderr.contains("sha256sum"), "{stderr}");
+    assert!(!target.path().join("notignored").exists(), "{stderr}");
+}
+
+/// On an Intel Mac the installer refuses with the reason, before it downloads
+/// anything, rather than 404ing on a Darwin x86_64 archive no release carries.
+///
+/// `uname` is the host's identity and the one thing doubled here: a script on
+/// the narrowed PATH answers the way an Intel Mac does. Everything after it is
+/// the real installer against a real release server.
+#[test]
+fn on_intel_macos_the_installer_refuses_with_the_reason() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let release = publish("v9.9.9", false, true);
+    let target = tempfile::tempdir().unwrap();
+    let bin = path_with(&[&["curl"], HASHERS].concat());
+    // llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] no runner here or in CI is an Intel Mac, and the release no longer has one, so `uname` — the host's identity — is the one boundary that cannot be real. The real installer runs unchanged against a real release server, which proves it requested nothing.
+    let uname = bin.path().join("uname");
+    let _ = fs::remove_file(&uname);
+    fs::write(
+        &uname,
+        "#!/bin/sh\ncase \"$1\" in -s) echo Darwin ;; -m) echo x86_64 ;; *) exit 1 ;; esac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&uname, fs::Permissions::from_mode(0o755)).unwrap();
+    // llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
+
+    let output = install_with_path(
+        &release,
+        target.path(),
+        bin.path(),
+        &["--version", "v9.9.9"],
+    );
+
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.status);
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("Intel macOS is no longer supported") && stderr.contains("cargo install"),
+        "{stderr}"
+    );
+    assert!(
+        release.requested_paths().is_empty(),
+        "the installer fetched {:?} before refusing",
+        release.requested_paths()
+    );
     assert!(!target.path().join("notignored").exists(), "{stderr}");
 }
 

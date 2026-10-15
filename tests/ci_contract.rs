@@ -522,13 +522,10 @@ fn a_push_run_is_never_cancelled_by_the_next_push() {
 }
 
 /// The activity types ci.yml's `pull_request` trigger must keep: GitHub's
-/// defaults.
-const PULL_REQUEST_TYPES: &[&str] = &["opened", "synchronize", "reopened"];
-
-/// The activity type ci.yml's `pull_request` trigger must not name: lifting a
-/// draft pushes no commit, so the draft's runs already report on the head it
-/// makes ready, and a run on the lift would only repeat them.
-const REPEATS_A_DRAFTS_RUNS: &str = "ready_for_review";
+/// defaults, plus `ready_for_review`. `required` waits on the one Mac job, which
+/// can still be queued on the shared pool when a draft is lifted; without a run
+/// of its own the lift leaves the merge path nothing on that head to wait on.
+const PULL_REQUEST_TYPES: &[&str] = &["opened", "synchronize", "reopened", "ready_for_review"];
 
 fn pull_request_type_problems(workflow: &Node) -> Vec<String> {
     let trigger = workflow.get("on").get("pull_request");
@@ -540,22 +537,15 @@ fn pull_request_type_problems(workflow: &Node) -> Vec<String> {
         ];
     };
     let types: Vec<&str> = types.list().iter().map(Node::scalar).collect();
-    let mut problems: Vec<String> = PULL_REQUEST_TYPES
+    PULL_REQUEST_TYPES
         .iter()
         .filter(|wanted| !types.contains(wanted))
         .map(|missing| format!("ci.yml's `pull_request` types {types:?} lack `{missing}`"))
-        .collect();
-    if types.contains(&REPEATS_A_DRAFTS_RUNS) {
-        problems.push(format!(
-            "ci.yml's `pull_request` types {types:?} name `{REPEATS_A_DRAFTS_RUNS}`, \
-             which re-runs CI on a commit its draft runs already reported on"
-        ));
-    }
-    problems
+        .collect()
 }
 
 #[test]
-fn a_pull_request_runs_when_it_opens_or_moves_and_not_when_it_leaves_draft() {
+fn a_pull_request_runs_when_it_opens_moves_or_leaves_draft() {
     assert_none(&pull_request_type_problems(&parse(&read(CI))));
 }
 
@@ -614,17 +604,17 @@ mod the_checks_catch {
     fn a_pull_request_trigger_with_the_wrong_types() {
         for (from, to, named) in [
             (
-                "types: [opened, synchronize, reopened]",
-                "types: [opened, synchronize]",
+                "types: [opened, synchronize, reopened, ready_for_review]",
+                "types: [opened, synchronize, ready_for_review]",
                 "lack `reopened`",
             ),
             (
-                "types: [opened, synchronize, reopened]",
                 "types: [opened, synchronize, reopened, ready_for_review]",
-                "name `ready_for_review`",
+                "types: [opened, synchronize, reopened]",
+                "lack `ready_for_review`",
             ),
             (
-                "    types: [opened, synchronize, reopened]\n",
+                "    types: [opened, synchronize, reopened, ready_for_review]\n",
                 "",
                 "names no `types`",
             ),
@@ -681,5 +671,40 @@ mod the_checks_catch {
                 "missing `{named}` in:\n{problems}"
             );
         }
+    }
+}
+
+#[test]
+fn macos_routing_uses_the_semantic_classifier_and_required_covers_it() {
+    let workflow = parse(&read(CI));
+    let jobs = workflow.get("jobs");
+    let changes = jobs.get("changes");
+    let commands: Vec<String> = run_steps(changes.get("steps").list())
+        .iter()
+        .map(|step| step.get("run").scalar().to_string())
+        .collect();
+    assert!(commands
+        .iter()
+        .any(|command| command.contains("node .github/macos-policy.mjs classify --event")));
+    let mac = jobs.get("macos");
+    assert_eq!(
+        mac.get("if").scalar(),
+        "needs.changes.outputs.macos == 'true'"
+    );
+    assert_eq!(mac.get("runs-on").scalar(), "macos-latest");
+    assert!(mac.find("strategy").is_none());
+    assert!(needs_of(jobs.get("required")).contains(&"macos".to_string()));
+    let commands = run_steps(mac.get("steps").list())
+        .iter()
+        .map(|step| step.get("run").scalar().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for command in [
+        "just _macos-ci",
+        "cargo install --path . --locked",
+        "cargo install --git https://github.com/nickderobertis/notignored --locked",
+        "--fail-if-found",
+    ] {
+        assert!(commands.contains(command), "Mac CI lost {command}");
     }
 }

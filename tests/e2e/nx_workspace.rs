@@ -21,14 +21,16 @@ use crate::support::{bash_program, repo_root};
 /// pays only for the tiers it reaches: the `tests/*.rs` contract suites and the
 /// `tests/e2e/` journeys. The crate's unit tests stay in the crate's project.
 /// `pool-maintenance` owns the budget of the pool maintenance `onevcs.toml`
-/// declares, and reaches nothing else.
-const PROJECTS: [&str; 6] = [
+/// declares, and reaches nothing else. `github-workflows` owns the workflow
+/// graph's macOS scheduling policy and its budgets.
+const PROJECTS: [&str; 7] = [
     "notignored",
     "notignored-integration",
     "notignored-e2e",
     "notignored-sdk-python",
     "notignored-sdk-npm",
     "pool-maintenance",
+    "github-workflows",
 ];
 
 /// What a change to the crate's sources reaches: the crate, its tiers, and the
@@ -266,7 +268,7 @@ fn the_crates_coverage_combines_every_test_tier() {
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
     const CRATE_AND_TIERS: &[&str] = &CRATE_PROJECTS;
-    let cases: [(&str, &[&str]); 13] = [
+    let cases: [(&str, &[&str]); 16] = [
         (
             "src/lib.rs",
             &[
@@ -306,6 +308,23 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
         // The orchestrator's own config changes what every target *is*, so it
         // has to reach every project — the one case where scoping would be wrong.
         ("nx.json", &PROJECTS),
+        (".github/macos-policy.mjs", &["github-workflows"]),
+        // The one version grammar: the crate's packagers, the workflow
+        // classifier, and the TypeScript SDK's packer all import it.
+        (
+            "scripts/release-version.mjs",
+            &[
+                "notignored",
+                "notignored-integration",
+                "notignored-e2e",
+                "notignored-sdk-npm",
+                "github-workflows",
+            ],
+        ),
+        (
+            ".github/workflows/ci.yml",
+            &["github-workflows", "notignored-integration"],
+        ),
     ];
     for (file, expected) in cases {
         assert_eq!(

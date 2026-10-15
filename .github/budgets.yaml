@@ -1,0 +1,28 @@
+schema_version: 1
+budgets:
+  - id: notignored-macos-jobs-per-run
+    description: >-
+      Maximum resolved Mac runner job instances in a workflow run, including
+      matrix expansions and reusable calls. inner_measure_reason: one run can
+      occupy several shared Mac slots even when the lifecycle run count stays
+      within its bound. The brief and manager explicitly approve separate
+      jobs/run and Mac-spending runs/change scheduling constraints.
+    measure: reported
+    command: [node, macos-budget.mjs, --metric, jobs-per-run, --telemetry, .github/.telemetry/macos-policy.json]
+    unit: jobs
+    direction: max
+    threshold: 1
+    labels: [github-workflows, scheduling]
+  - id: notignored-macos-runs-per-change
+    description: >-
+      Maximum Mac-spending workflow runs over one PR push, base merge,
+      semantic version/changelog release PR and merge, release tag build,
+      and automatic downstream events. Explicit manual diagnostics are excluded.
+      The brief and manager explicitly approve separate jobs/run and
+      Mac-spending runs/change scheduling constraints.
+    measure: reported
+    command: [node, macos-budget.mjs, --metric, runs-per-change, --telemetry, .github/.telemetry/macos-policy.json]
+    unit: runs
+    direction: max
+    threshold: 2
+    labels: [github-workflows, scheduling]

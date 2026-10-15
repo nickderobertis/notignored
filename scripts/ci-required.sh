@@ -23,6 +23,7 @@ IFS= read -r -d '' rules <<'RULES' || true
 changes | (none)
 gate | (none)
 cross | needs.changes.outputs.crate == 'true'
+macos | needs.changes.outputs.macos == 'true'
 msrv | needs.changes.outputs.crate == 'true'
 deny | needs.changes.outputs.crate == 'true'
 install | needs.changes.outputs.crate == 'true'
@@ -52,7 +53,7 @@ die() {
 # through this check with the real table, which is what proves it admits it.
 while IFS= read -r rule; do
   case "${rule#* | }" in
-    "(none)" | "needs.changes.outputs.crate == 'true'" | "github.event_name == '"*"'") ;;
+    "(none)" | "needs.changes.outputs.crate == 'true'" | "needs.changes.outputs.macos == 'true'" | "github.event_name == '"*"'") ;;
     *) die "the rule '$rule' records a condition this script cannot judge a skip under" \
       "teach skip_allowed in scripts/ci-required.sh what a skip under that \`if:\` means" ;;
   esac
@@ -76,8 +77,9 @@ done
 command -v node >/dev/null 2>&1 || die "node is not on PATH; it is what reads the \`needs\` payload" \
   "install Node.js (just bootstrap requires it), then re-run"
 
-# The payload as one line per job: id, result, and `changes`' crate output (the
-# only output a rule reads) as JSON, or `absent`. Its shape is checked here, so a
+# The payload as one line per job: id, result, `changes`' crate and macos
+# outputs (the only outputs a rule reads) as JSON, or `absent`, and the
+# classifier's stated reason for the summary. Its shape is checked here, so a
 # truncated or reshaped payload is a named failure rather than zero jobs.
 if ! table="$(
   # shellcheck disable=SC2016 # JavaScript, whose `${...}` templates are for node to expand
@@ -116,7 +118,12 @@ if ! table="$(
         process.exit(1);
       }
       const crate = Object.hasOwn(outputs, "crate") ? JSON.stringify(outputs.crate) : "absent";
-      console.log(`${job}\t${result}\t${crate}`);
+      const macos = Object.hasOwn(outputs, "macos") ? JSON.stringify(outputs.macos) : "absent";
+      // Printed in the summary, never judged: control characters become spaces.
+      const why = typeof outputs["macos-reason"] === "string" && outputs["macos-reason"].trim()
+        ? outputs["macos-reason"].replace(/[\u0000-\u001f\u007f]/g, " ")
+        : "unstated";
+      console.log(`${job}\t${result}\t${crate}\t${macos}\t${why}`);
     }
   ' 2>&1
 )"; then
@@ -150,6 +157,17 @@ skip_allowed() {
         return 0
       fi
       echo "its \`if:\` is $condition, and changes reported result '${changes_result:-absent}' with crate output ${crate:-absent} rather than succeeding with \"false\""
+      return 1
+      ;;
+    "needs.changes.outputs.macos == 'true'")
+      changes_line="$(payload_line changes)"
+      changes_result="$(printf '%s' "$changes_line" | cut -f2)"
+      local macos
+      macos="$(printf '%s' "$changes_line" | cut -f4)" || die "cannot parse Mac classifier output" "pass toJSON(needs) unaltered"
+      if [ "$changes_result" = success ] && [ "$macos" = '"false"' ]; then
+        return 0
+      fi
+      echo "classifier did not authorize omission (changes=$changes_result, macos=$macos)"
       return 1
       ;;
     "github.event_name == '"*"'")
@@ -216,4 +234,9 @@ if [ "$failures" -gt 0 ]; then
   } >&2
   exit 1
 fi
-echo "ci-required: every covered job succeeded or was skipped for its own condition"
+if [ "$(printf '%s' "$(payload_line macos)" | cut -f2)" = skipped ]; then
+  why="$(payload_line changes | cut -f5)"
+  echo "ci-required: every covered job passed or intentionally skipped; Mac lane omitted by classifier (no Mac proof claimed): macOS did not run — ${why:-unstated}"
+else
+  echo "ci-required: every covered job succeeded or was skipped for its own condition"
+fi

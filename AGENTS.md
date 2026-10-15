@@ -314,23 +314,10 @@ never add an `environment:` or OIDC claim expecting one. The *build* jobs stay
 ungated on purpose: a packaging break must redden a release even while publishing
 is off.
 
-What the registries actually serve is proven by installing from them, per
-**platform-and-architecture** — that pair is what selects a wheel and a platform
-package, so an OS-keyed matrix would leave one of the five artifacts published and
-never installed. `release.yml`'s `verify-pypi`/`verify-npm` install the
-just-published version on `ubuntu-latest`, `macos-latest` (arm64),
-`macos-15-intel`, and `windows-latest`, and
-`.github/workflows/published-smoke.yml` sweeps `latest` the same way weekly so rot
-between releases surfaces without one. Both assert through **one**
-`scripts/smoke-published.sh` over `tests/fixtures/smoke/` and
-`tests/golden/smoke.json`; `tests/e2e/smoke.rs` runs that same file over the build
-under test, which is what keeps a workflow's expectations from drifting from the
-parser that ships (re-bless with `just bless`). Keep the sweep toolchain-free — a
-weekly job that compiled the crate is the first one switched off. `linux-arm64` is
-the one artifact with no verify leg, because `setup-python` on `ubuntu-24.04-arm`
-is not something a release is the place to discover; it rests on the build
-matrices and `tests/e2e/packaging.rs`. `macos-15-intel` is hosted through August
-2027 — when it retires, replace the label rather than dropping the leg.
+**Darwin installs are staged before publication.** Local installs prove packaging,
+while Linux and Windows registry probes prove delivery; neither substitutes for
+the other. macOS ships arm64 only — Intel was discontinued, and `install.sh` and
+the npm launcher refuse it by name rather than fetch an asset that is not there.
 
 **The GitHub Release is the third install surface, and it is verified the same
 way.** `taiki-e/upload-rust-binary-action` derives *both* published names from the
@@ -344,9 +331,9 @@ with `version: local`, which compiles from source and downloads nothing. Both
 markers in `install.sh` are now rendered per target and held against a real
 release's asset listing (`tests/fixtures/release-assets/`), which no template here
 can talk into agreeing with it, and `release.yml`'s `verify-install` plus the
-sweep's `github-release` job install from the live Release. Three runners, not
-four: the ZIP branch needs `unzip` under a POSIX shell, which the Windows image
-lacks, so Windows keeps `cargo install`.
+sweep's `github-release` job install from the live Release. The live Release installer runs on Linux; the arm64 Darwin installer runs against
+staged archives before publication. The ZIP branch needs `unzip` under a POSIX
+shell, which the Windows image lacks, so Windows keeps `cargo install`.
 
 **The install is the propagation probe, and the only one.** A publish is not one
 event: PyPI's JSON API answers while `pip install` still resolves through a simple

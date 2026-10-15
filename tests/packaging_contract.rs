@@ -15,7 +15,7 @@
 //!     `dynamic = ["version"]`, the npm packages via `scripts/npm-build.mjs`, the
 //!     Python SDK via `scripts/python-sdk-build.mjs`, and both committed
 //!     manifests carry placeholders so neither can become a second source;
-//!   * the **five targets** are the same in the binary, wheel, and npm matrices,
+//!   * the **four targets** are the same in the binary, wheel, and npm matrices,
 //!     in the platform-package names, and in the launcher's resolution map;
 //!   * the **publish gating** is the two repository variables and the two repo
 //!     secrets, with the build jobs deliberately left ungated so a packaging
@@ -34,16 +34,19 @@
 #[path = "support/workflow_yaml.rs"]
 mod workflow_yaml;
 
+#[path = "support/bash.rs"]
+mod bash;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use bash::bash_program;
 use workflow_yaml::{parse, read, repo_root, run_steps, Node};
 
 /// The Rust targets every release matrix builds, paired with the npm platform
 /// package each one produces.
-const TARGETS: [(&str, &str); 5] = [
+const TARGETS: [(&str, &str); 4] = [
     ("x86_64-unknown-linux-gnu", "notignored-cli-linux-x64"),
     ("aarch64-unknown-linux-gnu", "notignored-cli-linux-arm64"),
-    ("x86_64-apple-darwin", "notignored-cli-darwin-x64"),
     ("aarch64-apple-darwin", "notignored-cli-darwin-arm64"),
     ("x86_64-pc-windows-msvc", "notignored-cli-win32-x64"),
 ];
@@ -113,17 +116,12 @@ const PINNED_INSTALLS: [(&str, &str); 5] = [
 /// One leg per *installable artifact*, not per OS: `pip install` and `npm
 /// install -g` each resolve a different wheel and a different platform package
 /// per platform **and architecture**, and only a runner of that pair can prove
-/// the right one was picked. `macos-latest` is arm64, so `macos-15-intel` is
-/// what covers `x86_64-apple-darwin` — without it, `notignored-cli-darwin-x64`
-/// is published and never installed. The one released target still with no leg,
+/// the right one was picked. The arm64 Darwin products are installed from their
+/// staged artifacts in `macos-build` before publication instead, so registry
+/// delivery spends no Mac runner. The one released target still with no leg,
 /// `aarch64-unknown-linux-gnu`, is covered by the build matrices and by
 /// `tests/e2e/packaging.rs` on whichever host runs it.
-const VERIFY_RUNNERS: [&str; 4] = [
-    "ubuntu-latest",
-    "macos-latest",
-    "macos-15-intel",
-    "windows-latest",
-];
+const VERIFY_RUNNERS: [&str; 2] = ["ubuntu-latest", "windows-latest"];
 
 /// The runners the GitHub Release's own installer is verified on.
 ///
@@ -133,7 +131,7 @@ const VERIFY_RUNNERS: [&str; 4] = [
 /// install jobs on windows-latest. The `x86_64-pc-windows-msvc` asset *names* are
 /// still held to a real release's manifest by `tests/install_contract.rs`, so the
 /// failure that made this leg necessary could not hide on the leg it lacks.
-const INSTALLER_RUNNERS: [&str; 3] = ["ubuntu-latest", "macos-latest", "macos-15-intel"];
+const INSTALLER_RUNNERS: [&str; 1] = ["ubuntu-latest"];
 
 /// Every job that installs a published artifact and smoke-tests it, as
 /// `(workflow, job, runners)`.
@@ -306,8 +304,17 @@ fn the_release_is_attached_to_as_a_draft_and_published_after_every_upload() {
     let publish = job("publish-release");
     assert_eq!(
         needs(&publish),
-        ["upload".to_string()].into_iter().collect(),
-        "`publish-release` must wait for every upload leg, and only for them"
+        [
+            "upload",
+            "upload-darwin",
+            "macos-build",
+            "build-wheels",
+            "build-npm"
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        "`publish-release` must wait for every archive and staged verification"
     );
     let scripts = scripts(&publish);
     let publishes = scripts
@@ -345,6 +352,7 @@ fn nothing_publishes_without_the_gate() {
         "build-npm",
         "build-sdk-npm",
         "build-python-sdk",
+        "macos-build",
         "publish-crate",
     ] {
         assert!(
@@ -460,19 +468,33 @@ fn every_secret_the_pipeline_uses_is_provisioned() {
     }
 }
 
-/// The three matrices build the same five targets.
+/// The three matrices build the same four targets.
 ///
 /// A wheel matrix that quietly lost a target ships a release where `pip install`
-/// works on four platforms and falls back to a source build on the fifth — with
+/// works on three platforms and falls back to a source build on the fourth — with
 /// no Rust toolchain there to do it.
 #[test]
 fn the_binary_wheel_and_npm_matrices_cover_the_same_targets() {
-    let expected: Vec<&str> = TARGETS.iter().map(|(target, _)| *target).collect();
+    let expected: BTreeSet<String> = TARGETS
+        .iter()
+        .map(|(target, _)| (*target).to_string())
+        .collect();
+    let darwin = job("macos-build");
+    let darwin_targets: Vec<String> = darwin
+        .get("env")
+        .get("RELEASE_TARGETS")
+        .scalar()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
     for name in ["upload", "build-wheels", "build-npm"] {
+        let all: BTreeSet<String> = matrix_targets(&job(name))
+            .into_iter()
+            .chain(darwin_targets.iter().cloned())
+            .collect();
         assert_eq!(
-            matrix_targets(&job(name)),
-            expected,
-            "`{name}` no longer builds the five released targets"
+            all, expected,
+            "`{name}` no longer builds the four released targets"
         );
     }
 }
@@ -1108,7 +1130,7 @@ fn the_committed_sdk_manifest_publishes_dist_at_a_placeholder_version() {
     );
 }
 
-/// The five platform packages are named the same in all three places.
+/// The four platform packages are named the same in all three places.
 ///
 /// The launcher's `optionalDependencies` decide what npm downloads, its
 /// `PACKAGES` map decides what the shim resolves, and `npm-build.mjs` decides
@@ -1293,6 +1315,8 @@ fn the_floating_major_tag_moves_after_every_publish_and_verification() {
     // The binaries the action itself downloads. Not `publish-`/`verify-`-named,
     // and the one artifact a consumer of `@v0` cannot do without.
     expected.insert("upload".to_string());
+    expected.insert("upload-darwin".to_string());
+    expected.insert("macos-build".to_string());
     let missing: Vec<&String> = expected.difference(&waits_for).collect();
     assert!(
         missing.is_empty(),
@@ -1381,4 +1405,158 @@ fn the_floating_major_tag_moves_only_when_nothing_failed() {
         "`major-tag` no longer runs {MAJOR_TAG_SCRIPT}; the tag logic must stay in the \
          script tests/e2e/major_tag.rs drives, not inline in a workflow"
     );
+}
+
+/// The pinned toolchain installs exactly the released targets.
+///
+/// `rust-toolchain.toml` is what `rustup` provisions on every runner and what
+/// `scripts/stage-release.py` accepts a target from, so a target listed there
+/// and nowhere else — or released and not installable — is drift this catches.
+#[test]
+fn the_pinned_toolchain_installs_exactly_the_released_targets() {
+    let toolchain = read("rust-toolchain.toml");
+    let list = toolchain
+        .split_once("targets = [")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(list, _)| list)
+        .expect("rust-toolchain.toml declares a targets list");
+    let pinned: BTreeSet<&str> = list
+        .split(',')
+        .map(|item| item.trim().trim_matches('"'))
+        .filter(|item| !item.is_empty())
+        .collect();
+    let released: BTreeSet<&str> = TARGETS.iter().map(|(target, _)| *target).collect();
+    assert_eq!(
+        pinned, released,
+        "rust-toolchain.toml targets differ from the released targets"
+    );
+}
+
+/// The single Mac job builds and proves the one released Darwin architecture,
+/// arm64, natively — no Intel target, no Rosetta, no x86_64 cross-compile —
+/// and its three installed forms precede Linux attaching bytes to the draft.
+#[test]
+fn darwin_staging_is_native_arm64_only_and_precedes_publication() {
+    let mac = job("macos-build");
+    assert_eq!(mac.get("runs-on").scalar(), "macos-latest");
+    assert!(mac.find("strategy").is_none());
+    assert!(
+        mac.find("if").is_none(),
+        "local proofs must run with publishing off"
+    );
+    let scripts = scripts(&mac).join("\n");
+    for required in [
+        "rustup target add \"${release_targets[@]}\"",
+        "just setup-misc-tools",
+        "bash scripts/dev-tool.sh maturin build",
+        "scripts/stage-release.py --target",
+        "scripts/stage-release.sh staged/aarch64-apple-darwin",
+        "test \"$(uname -m)\" = arm64",
+    ] {
+        assert!(scripts.contains(required), "Mac staging lost {required}");
+    }
+    assert_eq!(
+        mac.get("env").get("RELEASE_TARGETS").scalar(),
+        "aarch64-apple-darwin"
+    );
+    let release = read(RELEASE);
+    for intel in [
+        "x86_64-apple-darwin",
+        "arch -x86_64",
+        "install-rosetta",
+        "macos-15-intel",
+        "macos-x86_64",
+        "architecture: x64",
+    ] {
+        assert!(
+            !release.contains(intel),
+            "release.yml still carries Intel macOS work: {intel}"
+        );
+    }
+    for name in [
+        "publish-release",
+        "publish-pypi",
+        "publish-npm",
+        "upload-darwin",
+    ] {
+        assert!(
+            needs(&job(name)).contains("macos-build"),
+            "{name} publishes before Mac proof"
+        );
+        assert_eq!(job(name).get("runs-on").scalar(), "ubuntu-latest");
+    }
+    let upload = job("upload-darwin");
+    assert!(scripts_for_darwin_upload(&upload).contains("scripts/github-release.sh await-draft"));
+    for artifact in [
+        "wheels-darwin",
+        "npm-darwin",
+        "archives-darwin",
+        "darwin-payload-manifests",
+    ] {
+        assert!(
+            mac.get("steps").list().iter().any(|step| step
+                .find("with")
+                .and_then(|with| with.find("name"))
+                .is_some_and(|name| name.scalar() == artifact)),
+            "Mac staging lost artifact {artifact}"
+        );
+    }
+}
+
+fn scripts_for_darwin_upload(upload: &Node) -> String {
+    scripts(upload).join("\n")
+}
+
+/// Every tool a release job runs through `scripts/dev-tool.sh` is one that
+/// script resolves. Its table is the contract, so the real script is run from a
+/// copy with nothing installed: a tool it knows fails as not installed, naming
+/// the installer, where one it does not know is refused outright — which on a
+/// release runner is a release that cannot build.
+#[test]
+fn release_dev_tools_are_ones_dev_tool_resolves() {
+    let jobs = jobs();
+    let mut tools = BTreeSet::new();
+    for name in jobs.keys() {
+        for script in scripts(jobs.get(name)) {
+            for (at, _) in script.match_indices("scripts/dev-tool.sh ") {
+                let rest = &script[at + "scripts/dev-tool.sh ".len()..];
+                let tool = rest.split_whitespace().next().unwrap_or_default();
+                tools.insert(tool.to_string());
+            }
+        }
+    }
+    assert!(
+        tools.contains("maturin"),
+        "release.yml no longer builds a wheel through dev-tool.sh: {tools:?}"
+    );
+    for tool in &tools {
+        let problem = dev_tool_problem(tool);
+        assert!(problem.is_none(), "release.yml runs `{tool}`: {problem:?}");
+    }
+    assert!(
+        dev_tool_problem("not-a-pinned-tool").is_some(),
+        "an unknown tool went unrefused, so this check cannot fail"
+    );
+}
+
+/// Why the real `scripts/dev-tool.sh`, run from an empty checkout, does not
+/// resolve `tool` — or `None` when it knows the tool and only lacks the install.
+///
+/// Run through [`bash_program`], never `bash` by name: on Windows that name
+/// resolves to the system directory's WSL launcher, which exits 1 without
+/// running the script at all.
+fn dev_tool_problem(tool: &str) -> Option<String> {
+    let root = tempfile::tempdir().expect("a scratch checkout");
+    std::fs::create_dir(root.path().join("scripts")).expect("a scripts dir");
+    let script = root.path().join("scripts/dev-tool.sh");
+    std::fs::copy(repo_root().join("scripts/dev-tool.sh"), &script).expect("copy dev-tool.sh");
+    let output = std::process::Command::new(bash_program())
+        .arg(&script)
+        .arg(tool)
+        .arg("--version")
+        .output()
+        .expect("bash runs dev-tool.sh");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    (output.status.code() != Some(1) || !stderr.contains("is not installed"))
+        .then(|| format!("exit {:?}: {stderr}", output.status.code()))
 }

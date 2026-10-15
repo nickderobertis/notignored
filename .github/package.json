@@ -1,0 +1,14 @@
+{
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] the task that added this package requires a private, locked .github tooling package with every budget file inside .github; the root package carries only Nx, so joining its workspace would put these budget-only dependencies outside .github.",
+  "name": "notignored-github-workflows",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@actions/expressions": "0.3.61",
+    "@onebudgetspec/sdk": "0.1.4",
+    "yaml": "2.9.1"
+  }
+}

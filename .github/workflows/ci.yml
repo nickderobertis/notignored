@@ -3,11 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
-  # The default activity types, without `ready_for_review`: lifting a draft
-  # pushes no commit, so the runs from while it was a draft already report on
-  # its head, and a run on the lift would only repeat them.
+  # The default activity types plus `ready_for_review`: `required` waits on the
+  # one Mac job, which can still be queued on the shared pool when a draft is
+  # lifted, so the lift starts a run of its own (cancelling the draft's) that
+  # the merge path can wait on for a verdict on that head.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Least privilege: most jobs only need to read the repo.
 permissions:
@@ -38,6 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       crate: ${{ steps.affected.outputs.crate }}
+      macos: ${{ steps.policy.outputs.macos }}
+      macos-reason: ${{ steps.policy.outputs.reason }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,6 +51,19 @@ jobs:
         with:
           node-version: "22"
       - uses: extractions/setup-just@v3
+      - name: Classify Mac coverage
+        id: policy
+        env:
+          POLICY_BASE: ${{ github.event.pull_request.base.sha }}
+          POLICY_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node .github/macos-policy.mjs classify --event "$GITHUB_EVENT_PATH" --base "$POLICY_BASE" --head "$POLICY_HEAD" > "$RUNNER_TEMP/macos-policy.json"
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const policy = JSON.parse(readFileSync(process.argv[1]));
+            console.log("macos=" + policy.macosRequired);
+            console.log("reason=" + String(policy.reason).replace(/[\r\n]+/g, " "));
+          ' "$RUNNER_TEMP/macos-policy.json" >> "$GITHUB_OUTPUT"
       - name: Which tier this event gates on
         id: tier
         env:
@@ -74,7 +90,7 @@ jobs:
   # release pull request runs the whole graph — the one broader sweep, at
   # release-prep, because releases batch every merge since the last tag.
   # Linux-only because coverage is measured here; macOS/Windows prove the
-  # artifact via the `cross` job below.
+  # artifact via cross and the consolidated PR Mac job below.
   gate:
     runs-on: ubuntu-latest
     steps:
@@ -116,7 +132,7 @@ jobs:
       - name: Committed generated files are up to date
         run: git diff --exit-code -- Cargo.lock package-lock.json python/notignored-sdk/uv.lock
 
-  # Prove the artifact builds and its tests pass on macOS and Windows (without
+  # Prove the artifact builds and its tests pass on Windows (without
   # the coverage threshold, which is enforced on Linux).
   cross:
     needs: changes
@@ -124,7 +140,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -145,6 +161,50 @@ jobs:
         run: just fmt-check && just lint
       - name: Tests (unit + integration + e2e)
         run: just test-quick
+
+  macos:
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    runs-on: macos-latest
+    env:
+      RUSTFLAGS: "-D warnings"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest
+      - name: Bootstrap
+        run: just bootstrap
+      - name: Mac platform gate
+        # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] The scheduling task requires retaining the old Mac cross job's format, lint and complete test assertions on the same runner; Linux cannot prove platform behavior.
+        run: just _macos-ci
+
+      - name: Install this revision and assert the installed CLI
+        run: |
+          cargo install --path . --locked
+          notignored --version
+          notignored --help >/dev/null
+          tmp="$(mktemp -d)"
+          printf 'x = 1  # noqa: E501  # smoke test\n' > "$tmp/app.py"
+          notignored "$tmp" --format json | grep -q '"E501"'
+          code=0
+          notignored "$tmp" --fail-if-found || code=$?
+          [ "$code" -eq 1 ] || { echo "::error::expected exit 1, got $code" >&2; exit 1; }
+      - name: Install the documented command and assert its CLI
+        # llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] The scheduling task moves the existing Mac documented Git install here because main pushes may no longer request Mac; this preserves that real install assertion without adding an automatic Mac location.
+        run: |
+          cargo install --git https://github.com/nickderobertis/notignored --locked --force
+          notignored --version
+          notignored --help >/dev/null
+        # llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]
 
   # The declared MSRV is a promise to consumers, so prove it rather than
   # document it: a floor that only lives in Cargo.toml drifts the first time a
@@ -194,7 +254,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -228,7 +288,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -318,6 +378,7 @@ jobs:
       - changes
       - gate
       - cross
+      - macos
       - msrv
       - deny
       - install

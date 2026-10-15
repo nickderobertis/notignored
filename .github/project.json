@@ -1,0 +1,54 @@
+{
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] this project bootstraps the private, separately locked .github tooling package its task requires, keeping every budget-only dependency inside .github; .github/package.json records the same reason.",
+  "name": "github-workflows",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "tags": [
+    "scope:cli-tests",
+    "lang:javascript"
+  ],
+  "targets": {
+    "bootstrap": {
+      "command": "npm ci --prefix .github --ignore-scripts --no-audit --no-fund --silent && bash scripts/setup-js.sh"
+    },
+    "format": {
+      "command": "node .github/tooling-check.mjs format"
+    },
+    "format-check": {
+      "command": "node .github/tooling-check.mjs format-check"
+    },
+    "lint": {
+      "command": "node .github/tooling-check.mjs lint"
+    },
+    "shape-check": {
+      "command": "node .github/tooling-check.mjs shape-check"
+    },
+    "test": {
+      "command": "node --test .github/tests/*.test.mjs",
+      "cache": false,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/screencomp.toml",
+        "{workspaceRoot}/scripts/ci-required.sh",
+        "{workspaceRoot}/scripts/ci-gate-tier.sh",
+        "{workspaceRoot}/scripts/release-version.mjs"
+      ]
+    },
+    "budgets": {
+      "command": "node .github/check-budgets.mjs",
+      "cache": false,
+      "dependsOn": [
+        "test"
+      ]
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": [
+        "format-check",
+        "lint",
+        "shape-check",
+        "budgets"
+      ]
+    }
+  }
+}
