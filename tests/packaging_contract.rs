@@ -1508,6 +1508,11 @@ fn scripts_for_darwin_upload(upload: &Node) -> String {
 /// copy with nothing installed: a tool it knows fails as not installed, naming
 /// the installer, where one it does not know is refused outright — which on a
 /// release runner is a release that cannot build.
+///
+/// Unix only: the table is the same shell on every platform, and a `bash`
+/// spawned by name on Windows resolves to the system directory's WSL launcher,
+/// which exits 1 without running the script at all.
+#[cfg(unix)]
 #[test]
 fn release_dev_tools_are_ones_dev_tool_resolves() {
     let jobs = jobs();
@@ -1537,6 +1542,7 @@ fn release_dev_tools_are_ones_dev_tool_resolves() {
 
 /// Why the real `scripts/dev-tool.sh`, run from an empty checkout, does not
 /// resolve `tool` — or `None` when it knows the tool and only lacks the install.
+#[cfg(unix)]
 fn dev_tool_problem(tool: &str) -> Option<String> {
     let root = tempfile::tempdir().expect("a scratch checkout");
     std::fs::create_dir(root.path().join("scripts")).expect("a scripts dir");

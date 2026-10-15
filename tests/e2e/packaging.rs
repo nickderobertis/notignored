@@ -25,6 +25,22 @@ use std::process::Command;
 use crate::support::{cargo_version, repo_root, tool_binary};
 
 /// The Rust target triple for the host, as `release.yml`'s matrices spell it.
+/// The targets `rust-toolchain.toml` installs, which the stager admits as the
+/// release's whole set.
+fn release_targets() -> Vec<String> {
+    let toolchain = std::fs::read_to_string(repo_root().join("rust-toolchain.toml"))
+        .expect("read rust-toolchain.toml");
+    let (_, list) = toolchain
+        .split_once("targets = [")
+        .expect("rust-toolchain.toml declares its targets");
+    let (list, _) = list.split_once(']').expect("the targets list closes");
+    list.split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
 fn host_target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
@@ -1094,12 +1110,10 @@ assert found, 'real SDK entry point was not present'
         }
         // The Python verifier is its own entry point, so each shape it refuses
         // is driven at it directly rather than through the shell's pre-check.
-        let (other_target, other_arch) = if host_target().starts_with("x86_64-") {
-            ("aarch64-unknown-linux-gnu", "aarch64")
-        } else {
-            ("x86_64-unknown-linux-gnu", "x86_64")
-        };
-        let host_arch = if other_arch == "aarch64" {
+        let (host_arch, host_os) = host_target()
+            .split_once('-')
+            .expect("a target triple names its architecture first");
+        let other_arch = if host_arch == "aarch64" {
             "x86_64"
         } else {
             "aarch64"
@@ -1123,6 +1137,35 @@ assert found, 'real SDK entry point was not present'
             .as_object_mut()
             .expect("hashes object")
             .remove("npm");
+        // Relabel the host's staged forms as every other released target. One on
+        // the host's own operating system is refused by the payload's machine;
+        // one on another is refused by the payload's format first — Darwin and
+        // Windows each ship one architecture, so a host there has no sibling.
+        let relabels = release_targets()
+            .into_iter()
+            .filter(|target| target != host_target())
+            .map(|target| {
+                let (arch, os) = target
+                    .split_once('-')
+                    .expect("a target triple names its architecture first");
+                let expected = if os == host_os {
+                    "manifest architecture differs from executable payload"
+                } else {
+                    "executable operating-system format differs from target"
+                };
+                let relabeled = with(&[
+                    ("target", serde_json::json!(target)),
+                    ("architecture", serde_json::json!(arch)),
+                ]);
+                (relabeled, expected)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            relabels
+                .iter()
+                .any(|(_, expected)| expected.contains("operating-system")),
+            "no released target sits on another operating system to relabel as"
+        );
         for (manifest, expected) in [
             (serde_json::json!([]), "must be an object"),
             (missing, "fields differ"),
@@ -1137,14 +1180,10 @@ assert found, 'real SDK entry point was not present'
                 with(&[("architecture", serde_json::json!(other_arch))]),
                 "manifest architecture differs from target",
             ),
-            (
-                with(&[
-                    ("target", serde_json::json!(other_target)),
-                    ("architecture", serde_json::json!(other_arch)),
-                ]),
-                "manifest architecture differs from executable payload",
-            ),
-        ] {
+        ]
+        .into_iter()
+        .chain(relabels)
+        {
             std::fs::write(
                 &manifest_path,
                 serde_json::to_vec(&manifest).expect("serialize bad manifest"),
