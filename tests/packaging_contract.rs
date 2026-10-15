@@ -34,8 +34,12 @@
 #[path = "support/workflow_yaml.rs"]
 mod workflow_yaml;
 
+#[path = "support/bash.rs"]
+mod bash;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use bash::bash_program;
 use workflow_yaml::{parse, read, repo_root, run_steps, Node};
 
 /// The Rust targets every release matrix builds, paired with the npm platform
@@ -1508,11 +1512,6 @@ fn scripts_for_darwin_upload(upload: &Node) -> String {
 /// copy with nothing installed: a tool it knows fails as not installed, naming
 /// the installer, where one it does not know is refused outright — which on a
 /// release runner is a release that cannot build.
-///
-/// Unix only: the table is the same shell on every platform, and a `bash`
-/// spawned by name on Windows resolves to the system directory's WSL launcher,
-/// which exits 1 without running the script at all.
-#[cfg(unix)]
 #[test]
 fn release_dev_tools_are_ones_dev_tool_resolves() {
     let jobs = jobs();
@@ -1542,13 +1541,16 @@ fn release_dev_tools_are_ones_dev_tool_resolves() {
 
 /// Why the real `scripts/dev-tool.sh`, run from an empty checkout, does not
 /// resolve `tool` — or `None` when it knows the tool and only lacks the install.
-#[cfg(unix)]
+///
+/// Run through [`bash_program`], never `bash` by name: on Windows that name
+/// resolves to the system directory's WSL launcher, which exits 1 without
+/// running the script at all.
 fn dev_tool_problem(tool: &str) -> Option<String> {
     let root = tempfile::tempdir().expect("a scratch checkout");
     std::fs::create_dir(root.path().join("scripts")).expect("a scripts dir");
     let script = root.path().join("scripts/dev-tool.sh");
     std::fs::copy(repo_root().join("scripts/dev-tool.sh"), &script).expect("copy dev-tool.sh");
-    let output = std::process::Command::new("bash")
+    let output = std::process::Command::new(bash_program())
         .arg(&script)
         .arg(tool)
         .arg("--version")
