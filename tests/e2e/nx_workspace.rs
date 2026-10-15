@@ -20,7 +20,21 @@ use crate::support::{bash_program, repo_root};
 /// — and the crate's two test tiers that are projects of their own so a change
 /// pays only for the tiers it reaches: the `tests/*.rs` contract suites and the
 /// `tests/e2e/` journeys. The crate's unit tests stay in the crate's project.
-const PROJECTS: [&str; 5] = [
+/// `pool-maintenance` owns the budget of the pool maintenance `onevcs.toml`
+/// declares, and reaches nothing else.
+const PROJECTS: [&str; 6] = [
+    "notignored",
+    "notignored-integration",
+    "notignored-e2e",
+    "notignored-sdk-python",
+    "notignored-sdk-npm",
+    "pool-maintenance",
+];
+
+/// What a change to the crate's sources reaches: the crate, its tiers, and the
+/// two SDKs whose suites drive its binary. Only the Unix-only journeys read it.
+#[cfg(unix)]
+const SOURCE_PROJECTS: [&str; 5] = [
     "notignored",
     "notignored-integration",
     "notignored-e2e",
@@ -252,7 +266,7 @@ fn the_crates_coverage_combines_every_test_tier() {
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
     const CRATE_AND_TIERS: &[&str] = &CRATE_PROJECTS;
-    let cases: [(&str, &[&str]); 12] = [
+    let cases: [(&str, &[&str]); 13] = [
         (
             "src/lib.rs",
             &[
@@ -288,6 +302,7 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
             &["notignored-sdk-python"],
         ),
         ("npm/notignored-sdk/README.md", &["notignored-sdk-npm"]),
+        ("pool-maintenance/measure.sh", &["pool-maintenance"]),
         // The orchestrator's own config changes what every target *is*, so it
         // has to reach every project — the one case where scoping would be wrong.
         ("nx.json", &PROJECTS),
@@ -413,10 +428,14 @@ fn every_script_a_journey_runs_is_an_e2e_input() {
 /// The crate's test tiers (`scope:cli-tests`) sit on the CLI the same way: they
 /// may depend on it, and nothing may depend on them, so no tier can end up on
 /// the path of a change that does not reach it.
-const LAYERS: [(&str, &[&str]); 3] = [
+///
+/// `scope:host` measures the host's upkeep of the repository rather than any
+/// deliverable, so it stands apart: it depends on nothing and nothing on it.
+const LAYERS: [(&str, &[&str]); 4] = [
     ("scope:cli", &[]),
     ("scope:cli-tests", &["scope:cli"]),
     ("scope:sdk", &["scope:cli"]),
+    ("scope:host", &[]),
 ];
 
 /// Whether a project in `source_scope` may depend on one in `target_scope`.
@@ -561,6 +580,79 @@ fn the_layering_rejects_an_edge_that_inverts_it() {
             !may_depend_on(dependent, "scope:cli-tests"),
             "{dependent} must not depend on a test tier: the tier would then run \
              for every change that reaches {dependent}"
+        );
+    }
+}
+
+/// The tasks Nx would run for `args`, read from its task graph without running
+/// any of them.
+fn planned_tasks(args: &[&str]) -> Vec<String> {
+    let mut args = args.to_vec();
+    args.push("--graph=stdout");
+    let stdout = nx(&args);
+    let graph: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|error| panic!("`nx {}` printed no task graph: {error}", args.join(" ")));
+    let mut tasks: Vec<String> = graph["tasks"]["tasks"]
+        .as_object()
+        .unwrap_or_else(|| panic!("`nx {}` printed a graph with no tasks map", args.join(" ")))
+        .keys()
+        .cloned()
+        .collect();
+    tasks.sort();
+    tasks
+}
+
+/// The pool maintenance budget builds the crate twice, so it is release-prep
+/// work (`just budgets-release`, after the release pull request's sweep) and no
+/// per-change path may reach it: not `check` over every project, not the
+/// `budgets` recipe's targets, and not an affected run, whatever the change —
+/// the crate's sources, the measurement's own files, or the orchestrator's
+/// config, which reaches every project.
+#[test]
+fn no_per_change_run_reaches_the_pool_maintenance_measurement() {
+    const MEASUREMENT: &str = "pool-maintenance:budgets-release";
+    assert_eq!(
+        planned_tasks(&["run-many", "-t", "budgets-release"]),
+        [MEASUREMENT],
+        "the release-prep target no longer plans the measurement, so the checks \
+         below would pass vacuously"
+    );
+    let mut runs: Vec<Vec<String>> = vec![
+        vec!["run-many".into(), "-t".into(), "check".into()],
+        vec![
+            "run-many".into(),
+            "-t".into(),
+            "budgets".into(),
+            "budgets-host".into(),
+        ],
+    ];
+    for file in [
+        "src/lib.rs",
+        "pool-maintenance/measure.sh",
+        "pool-maintenance/budgets.yaml",
+        "pool-maintenance/project.json",
+        "nx.json",
+    ] {
+        for targets in [&["check"][..], &["budgets", "budgets-host"][..]] {
+            let mut run = vec![
+                "affected".to_string(),
+                format!("--files={file}"),
+                "-t".into(),
+            ];
+            run.extend(targets.iter().map(|target| (*target).to_string()));
+            runs.push(run);
+        }
+    }
+    for run in runs {
+        let args: Vec<&str> = run.iter().map(String::as_str).collect();
+        let tasks = planned_tasks(&args);
+        assert!(
+            !tasks.iter().any(|task| task.ends_with(":budgets-release")
+                || task.starts_with("pool-maintenance:budgets")),
+            "`nx {}` would run the pool maintenance measurement: {tasks:?}\n\
+             ACTION: keep it out of every `check` and `budgets` dependency; only \
+             `just budgets-release` runs it",
+            run.join(" ")
         );
     }
 }
@@ -992,7 +1084,7 @@ fn an_affected_run_executes_against_an_explicit_base() {
     for (file, expected) in [
         ("tests/e2e/cli.rs", &["notignored-e2e"][..]),
         ("tests/ci_contract.rs", &["notignored-integration"][..]),
-        ("src/lib.rs", &PROJECTS[..]),
+        ("src/lib.rs", &SOURCE_PROJECTS[..]),
     ] {
         let (dir, base) = scratch_workspace_with(true);
         write(dir.path(), file, "// changed\n");

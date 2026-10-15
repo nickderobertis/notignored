@@ -29,6 +29,10 @@ msrv-version := `sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml`
 # fails the build if the two ever disagree.
 freeze-version := "0.2.2"
 
+# The `cargo-prune-superseded` release `just pool-maintenance` runs. The one pin:
+# the `pool-maintenance` project's `bootstrap` installs exactly this version.
+prune-superseded-version := "0.1.1"
+
 # Keep the gate's own output to signal: successes are silent, failures are not.
 export CARGO_TERM_QUIET := "true"
 
@@ -80,14 +84,14 @@ _ensure-tool tool:
 # in a second and is what stops the full sweep and the affected sweep from ever
 # covering different tiers.
 # Full quality gate, every project.
-check: fmt-check lint test doc
+check: fmt-check lint test doc (budgets "all")
     @bash scripts/nx.sh run-many -t check
     @echo "check: ok"
 
 # What PR CI runs: the same gate, scoped to the projects this branch's diff can
 # reach. Fails closed — with no derivable merge base it runs everything.
 # Full quality gate, affected projects only.
-check-affected:
+check-affected: budgets
     @bash scripts/nx-affected.sh -t check
     @echo "check-affected: ok"
 
@@ -260,6 +264,41 @@ screenshots-bless: screenshots
     @command -v screencomp >/dev/null || { echo "screencomp not installed: https://github.com/nickderobertis/screencomp#install" >&2; exit 1; }
     screencomp manifest --input shots/current --output shots/baseline/$(uname -m | sed 's/amd64/x86_64/;s/aarch64/arm64/').json
     @echo "baseline refreshed; commit shots/baseline/ + docs/screenshots/"
+
+# --- Budgets (onebudgetspec) --------------------------------------------------
+# Each project registers its own `budgets.yaml` beside its code; `check` runs the
+# `budgets`/`budgets-host` targets of the projects its tier reaches, then the root
+# file when there is one.
+
+# Every project's budgets at the gate's tier, then the root `budgets.yaml`.
+budgets tier="affected":
+    @{{ if tier == "all" { "bash scripts/nx.sh run-many" } else if tier == "affected" { "bash scripts/nx-affected.sh" } else { error("unknown tier '" + tier + "' — use 'affected' (the default) or 'all'") } }} -t budgets budgets-host
+    @[ ! -f budgets.yaml ] || node_modules/.bin/onebudgetspec check budgets.yaml
+
+# Host budgets too expensive for any per-change run — the pool maintenance pass
+# builds the crate twice — so no `check` reaches them; CI runs this after the
+# release pull request's full sweep.
+# The release-prep host budgets (`budgets-release` targets).
+budgets-release:
+    @bash scripts/nx.sh run-many -t budgets-release
+
+# --- Pool maintenance (onevcs.toml) ------------------------------------------
+# onevcs runs this in this repository's idle warm-pool slots. `target` is every
+# directory this repository's cargo builds write to: `.cargo/config.toml` sets
+# `target-dir = "target"`, resolved against the clone's root, and nothing else in
+# the tree sets one. `tests/pool_maintenance_contract.rs` holds these paths to
+# the cargo configuration and the measurement script.
+# Prune superseded cargo builds older than 2 days, keeping each unit's newest.
+pool-maintenance:
+    @cargo-prune-superseded --keep-within 2d target
+
+# The `pool-maintenance:bootstrap` target: the pinned pruner, skipped when that
+# version is already the one on PATH, and the pinned shellcheck its lint runs.
+_pool-maintenance-bootstrap:
+    @[ "$(cargo-prune-superseded --version 2>/dev/null)" = "cargo-prune-superseded {{prune-superseded-version}}" ] \
+      || cargo install --locked --quiet cargo-prune-superseded --version {{prune-superseded-version}} \
+      || { echo "cannot install cargo-prune-superseded {{prune-superseded-version}} — check network access to crates.io and that the toolchain is installed" >&2; exit 1; }
+    @bash scripts/setup-misc-tools.sh
 
 # Separate from `check`: `cargo deny` needs a network-fetched advisory DB.
 # Advisory + license audit and unused-dependency check.
