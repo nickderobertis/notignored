@@ -1,0 +1,13 @@
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # llmlint: ignore-block[no_debug_prints] the step below prints on purpose
+      - name: it's a step
+        run: echo "debug"
+      # llmlint: ignore-end[no_debug_prints]
+      - name: Say "hello" to the job's log  # llmlint: ignore[no_todo_comments] tracked in the step's issue
+        run: |
+          # llmlint: ignore[no_debug_prints] the script's own print is its output
+          echo 'debug'

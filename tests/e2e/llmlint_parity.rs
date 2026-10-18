@@ -399,16 +399,80 @@ fn a_directive_inside_a_string_literal_is_reported_by_llmlint_but_not_by_notigno
     assert!(!passed, "llmlint must reject this fixture:\n{output}");
     assert_eq!(
         locations(&literal, &output),
-        vec!["decoy.rs:5"],
+        vec!["decoy.rs:5", "decoy.yml:4", "decoy.yml:5"],
         "llmlint scans raw lines, so it should reject the literal's rule name:\n{output}"
     );
 
     // notignored extracts comments before it looks for directives, so a string
-    // literal is never a suppression. This is the one place the two disagree,
-    // and it disagrees in the safe direction: no invented record.
+    // literal — or a YAML quoted scalar — is never a suppression. This is the
+    // one place the two disagree, and it disagrees in the safe direction: no
+    // invented record.
     let report = report_for("string-literal", 0);
     assert!(
         report["ignores"].as_array().unwrap().is_empty(),
         "a string literal was reported as a suppression: {report:#}"
     );
+}
+
+/// `(line, scope, suppressed start, suppressed end)` for every directive.
+fn spans(report: &serde_json::Value) -> Vec<(u64, &str, u64, Option<u64>)> {
+    report["ignores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|directive| {
+            (
+                directive["line"].as_u64().unwrap(),
+                directive["scope"].as_str().unwrap(),
+                directive["suppressed"]["start_line"].as_u64().unwrap(),
+                directive["suppressed"]["end_line"].as_u64(),
+            )
+        })
+        .collect()
+}
+
+/// YAML is read by YAML's grammar, not shell's: the apostrophe in `it's a step`
+/// opens no quoted scalar, so the block's `ignore-end` below it is a comment
+/// and the block closes (notignored v0.1.18 reported it unclosed). A block
+/// scalar's body is a workflow's shell script, and llmlint reads the directive
+/// inside it, so notignored does too.
+#[test]
+fn llmlint_and_notignored_read_the_same_directives_in_a_workflow() {
+    let (passed, output) = llmlint_check_ignores(&parity_dir().join("yaml"));
+    assert!(
+        passed,
+        "the pinned llmlint rejected the YAML fixture; it or the config drifted:\n{output}"
+    );
+
+    let report = report_for("yaml", 0);
+    assert_eq!(
+        spans(&report),
+        vec![
+            (6, "block", 6, Some(9)),
+            (10, "line", 10, Some(10)),
+            (12, "next-line", 13, Some(13)),
+        ],
+        "{report:#}"
+    );
+    assert!(
+        report["errors"].as_array().unwrap().is_empty(),
+        "{report:#}"
+    );
+}
+
+#[test]
+fn an_unclosed_block_in_yaml_is_flagged_by_both() {
+    let unclosed = parity_dir().join("yaml-unclosed");
+    let (passed, output) = llmlint_check_ignores(&unclosed);
+    assert!(!passed, "llmlint must reject this fixture:\n{output}");
+    assert_eq!(locations(&unclosed, &output), vec!["workflow.yml:2"]);
+
+    let report = report_for("yaml-unclosed", 2);
+    assert_eq!(spans(&report), vec![(2, "block", 2, None)], "{report:#}");
+    let errors = report["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{report:#}");
+    assert_eq!(errors[0]["path"], "workflow.yml");
+    let message = errors[0]["message"].as_str().unwrap();
+    assert!(message.contains("unclosed"), "{message}");
+    assert!(message.contains("line 2"), "{message}");
 }

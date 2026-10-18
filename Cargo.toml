@@ -77,6 +77,14 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # so "recursive, respects .gitignore" means exactly what users expect.
 ignore = "0.4"
 thiserror = "2"
+# YAML's comments come from its own grammar, not a shell lexer: a `'` opens a
+# quoted scalar only where a scalar begins, which a character scanner cannot
+# know (`name: it's a step`). tree-sitter-yaml is maintained and is what zizmor
+# reads GitHub workflows with; its C parser is compiled in by `cc`. 0.26, not
+# 0.27, and `tree-sitter-language` held at 0.1.7 in the lock: the newer ones
+# need Rust 1.90, above `rust-version`.
+tree-sitter = "0.26"
+tree-sitter-yaml = "0.7"
 
 [dev-dependencies]
 assert_cmd = "2"

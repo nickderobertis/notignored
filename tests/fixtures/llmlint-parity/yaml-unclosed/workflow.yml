@@ -1,0 +1,4 @@
+steps:
+  # llmlint: ignore-block[no_debug_prints] the step below prints on purpose
+  - name: it's a step
+    run: echo "debug"

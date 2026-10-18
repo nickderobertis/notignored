@@ -1,0 +1,5 @@
+# llmlint scans raw lines, so it reads the directives inside these quoted
+# scalars and rejects the unknown rules they name. YAML has no comment inside a
+# quoted scalar, so notignored never sees a directive there at all.
+double: "a # llmlint: ignore[not_a_rule] inside a double-quoted scalar"
+single: 'it''s # llmlint: ignore[not_a_rule] inside a single-quoted scalar'
