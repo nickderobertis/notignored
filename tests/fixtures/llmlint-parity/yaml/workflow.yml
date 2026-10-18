@@ -1,0 +1,27 @@
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # llmlint: ignore-block[no_debug_prints] the step below prints on purpose
+      - name: it's a step
+        run: echo "debug"
+      # llmlint: ignore-end[no_debug_prints]
+      - name: Say "hello" to the job's log  # llmlint: ignore[no_todo_comments] tracked in the step's issue
+        run: |
+          # llmlint: ignore[no_debug_prints] the script's own print is its output
+          echo 'debug'
+      - name: Café step  # llmlint: ignore[no_todo_comments] the accent sits before this
+        run: >
+          # llmlint: ignore[no_debug_prints] read inside the folded script too
+          echo 'debug' it's
+      # llmlint: ignore[no_todo_comments] the quote left open above ends with its scalar
+      - name: last
+        run: "true"
+      - name: header
+        run: | # llmlint: ignore[no_debug_prints] the header's own comment
+          echo 'debug'  # llmlint: ignore[no_debug_prints] trailing in the script
+      - name: empty
+        run: |
+      # llmlint: ignore[no_todo_comments] after an empty block scalar
+      - name: end

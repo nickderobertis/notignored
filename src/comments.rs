@@ -15,6 +15,10 @@
 //!   content, so a comment nested in one is skipped.
 //! * Shell here-documents are scanned as code, so a `#` inside one reads as a
 //!   comment.
+//! * A YAML block scalar's body (`run: |`, `>`) is scanned as shell. YAML has
+//!   no comments there, but in a workflow that body *is* a shell script, and
+//!   both llmlint's `check-ignores` and the script's own linters read the
+//!   directives inside it. Everywhere else, YAML's own grammar decides.
 
 use crate::source::Language;
 
@@ -113,7 +117,8 @@ pub fn extract(source: &str, language: Language) -> Extracted {
     let chars: Vec<char> = source.chars().collect();
     match language {
         Language::Python | Language::Toml => scan_hash(&chars, HASH_PYTHON),
-        Language::Shell | Language::Yaml => scan_hash(&chars, HASH_WORD),
+        Language::Shell => scan_hash(&chars, HASH_WORD),
+        Language::Yaml => scan_yaml(source),
         Language::Rust => scan_c_style(&chars, C_RUST),
         Language::JavaScript | Language::TypeScript => scan_c_style(&chars, C_SCRIPT),
         Language::Unknown => Extracted::default(),
@@ -124,13 +129,13 @@ pub fn extract(source: &str, language: Language) -> Extracted {
 #[derive(Debug, Clone, Copy)]
 struct HashSyntax {
     /// `#` only opens a comment at a word boundary — start of input, or after
-    /// whitespace or a shell operator. True for shell and YAML, where `${x#y}`
-    /// and `a#b` are ordinary words; false for Python and TOML.
+    /// whitespace or a shell operator. True for shell, where `${x#y}` and `a#b`
+    /// are ordinary words; false for Python and TOML.
     word_boundary: bool,
     /// Triple-quoted multi-line strings exist (Python, TOML).
     triple_quotes: bool,
     /// A backslash escapes the delimiter inside a single-quoted string. False
-    /// for shell and YAML, where `'` runs literally to the next `'`.
+    /// for shell, where `'` runs literally to the next `'`.
     escape_in_single: bool,
 }
 
@@ -382,6 +387,109 @@ fn scan_hash(chars: &[char], syntax: HashSyntax) -> Extracted {
         }
     }
     out
+}
+
+/// YAML, read by the tree-sitter-yaml grammar rather than by a shell lexer.
+///
+/// Shell's rules misread YAML: a `'` opens a quoted scalar only where a scalar
+/// begins, so in `name: it's a step` the apostrophe is an ordinary character,
+/// and a shell lexer would hide every comment up to the next one. The grammar's
+/// own `comment` nodes are YAML's comments, and a `#` inside a quoted scalar is
+/// never one. A block scalar's body is the exception the module docs explain:
+/// it is handed to the shell scanner, line numbers shifted back into the file.
+fn scan_yaml(source: &str) -> Extracted {
+    let mut parser = tree_sitter::Parser::new();
+    let tree = parser
+        .set_language(&tree_sitter_yaml::LANGUAGE.into())
+        .ok()
+        .and_then(|()| parser.parse(source, None));
+    // Unreachable with the grammar compiled in — the runtime accepting its ABI
+    // is `the_yaml_grammar_loads_into_the_runtime`, and `parse` fails only on a
+    // cancellation never requested here — but a scan must not panic, and
+    // shell's rules are the reading this replaced.
+    let Some(tree) = tree else {
+        let chars: Vec<char> = source.chars().collect();
+        return scan_hash(&chars, HASH_WORD);
+    };
+    let mut out = Extracted::default();
+    let mut cursor = tree.walk();
+    let mut descended = true;
+    loop {
+        if descended {
+            let node = cursor.node();
+            match node.kind() {
+                "comment" => out.comments.push(yaml_comment(source, node)),
+                "block_scalar" => out.comments.extend(block_scalar_comments(source, node)),
+                _ => {}
+            }
+            if cursor.goto_first_child() {
+                continue;
+            }
+        }
+        if cursor.goto_next_sibling() {
+            descended = true;
+        } else if cursor.goto_parent() {
+            descended = false;
+        } else {
+            break;
+        }
+    }
+    out.comments
+        .sort_by_key(|comment| (comment.line, comment.column));
+    out
+}
+
+/// One YAML `comment` node as a [`Comment`], its byte span turned into the
+/// 1-based character columns every other scanner reports. The grammar ends a
+/// comment before a CRLF's `\r`, so the node's span is the comment exactly.
+fn yaml_comment(source: &str, node: tree_sitter::Node<'_>) -> Comment {
+    let (start, end) = (node.start_byte(), node.end_byte());
+    let line_start = start.saturating_sub(node.start_position().column);
+    let before = source.get(line_start..start).unwrap_or_default();
+    let raw = source.get(start..end).unwrap_or_default().to_string();
+    let text = raw.strip_prefix('#').unwrap_or(&raw).to_string();
+    let line = u32::try_from(node.start_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let column = u32::try_from(before.chars().count())
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let width = u32::try_from(raw.chars().count()).unwrap_or(u32::MAX);
+    Comment {
+        kind: CommentKind::Line,
+        text,
+        line,
+        column,
+        end_line: line,
+        end_column: column.saturating_add(width),
+        leading: before.chars().all(char::is_whitespace),
+        raw,
+    }
+}
+
+/// The comments the shell scanner finds in a block scalar's body: the lines
+/// after its `|`/`>` header, up to where the scalar ends. A comment on the
+/// header line itself is a YAML `comment` node, collected by the caller.
+fn block_scalar_comments(source: &str, node: tree_sitter::Node<'_>) -> Vec<Comment> {
+    let header = source
+        .get(node.start_byte()..node.end_byte())
+        .unwrap_or_default();
+    let Some(newline) = header.find('\n') else {
+        return Vec::new();
+    };
+    let body = &header[newline + 1..];
+    // The body starts at a line start, so columns carry over unchanged; only
+    // the line numbers need moving past the lines above it.
+    let offset = u32::try_from(node.start_position().row)
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let chars: Vec<char> = body.chars().collect();
+    let mut found = scan_hash(&chars, HASH_WORD).comments;
+    for comment in &mut found {
+        comment.line = comment.line.saturating_add(offset);
+        comment.end_line = comment.end_line.saturating_add(offset);
+    }
+    found
 }
 
 fn scan_c_style(chars: &[char], syntax: CSyntax) -> Extracted {
@@ -652,6 +760,83 @@ mod tests {
         let found = comments("key: value#notacomment # real\n", Language::Yaml);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].raw, "# real");
+    }
+
+    #[test]
+    fn the_yaml_grammar_loads_into_the_runtime() {
+        // `scan_yaml`'s shell fallback is reachable only if this fails.
+        let mut parser = tree_sitter::Parser::new();
+        assert!(parser
+            .set_language(&tree_sitter_yaml::LANGUAGE.into())
+            .is_ok());
+        assert!(parser.parse("a: b # c\n", None).is_some());
+    }
+
+    #[test]
+    fn a_quote_inside_a_yaml_plain_scalar_hides_no_comment() {
+        // Shell's rules read `'s a step … # after` as one quoted string.
+        let source = "- name: it's a step\n  # between\n- name: say \"hi\n# after\n";
+        let found: Vec<(u32, String)> = comments(source, Language::Yaml)
+            .into_iter()
+            .map(|comment| (comment.line, comment.raw))
+            .collect();
+        assert_eq!(
+            found,
+            vec![(2, "# between".to_string()), (4, "# after".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_hash_inside_a_yaml_quoted_scalar_is_not_a_comment() {
+        let source = "a: \"x # no\"  # yes\nb: 'it''s # no'\nc: \"wraps\n  # no\n  \" # yes too\n";
+        let found = comments(source, Language::Yaml);
+        let raw: Vec<&str> = found.iter().map(|comment| comment.raw.as_str()).collect();
+        assert_eq!(raw, vec!["# yes", "# yes too"]);
+        assert_eq!((found[0].line, found[0].column), (1, 14));
+        assert_eq!((found[0].end_line, found[0].end_column), (1, 19));
+        assert_eq!(found[0].text, " yes");
+        assert!(!found[0].leading);
+        assert_eq!(found[1].line, 5);
+    }
+
+    #[test]
+    fn yaml_comments_report_character_columns_and_leading() {
+        let found = comments("é: ü  # tail\n  # own\r\n", Language::Yaml);
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert_eq!((found[0].column, found[0].end_column), (7, 13));
+        assert!(!found[0].leading);
+        assert_eq!(found[1].raw, "# own");
+        assert_eq!((found[1].line, found[1].column), (2, 3));
+        assert!(found[1].leading);
+    }
+
+    #[test]
+    fn a_yaml_block_scalar_body_is_scanned_as_shell() {
+        // The body is a script: its `#` comments are read, its quotes are
+        // shell's, and an apostrophe in it cannot leak past the scalar's end.
+        let source = concat!(
+            "run: | # header\n",
+            "  echo 'a # quoted' # shellcheck disable=SC2086\n",
+            "  # own line\n",
+            "  echo it's\n",
+            "folded: >-\n",
+            "  text # folded\n",
+            "# after\n",
+        );
+        let found: Vec<(u32, u32, String, bool)> = comments(source, Language::Yaml)
+            .into_iter()
+            .map(|comment| (comment.line, comment.column, comment.raw, comment.leading))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                (1, 8, "# header".to_string(), false),
+                (2, 21, "# shellcheck disable=SC2086".to_string(), false),
+                (3, 3, "# own line".to_string(), true),
+                (6, 8, "# folded".to_string(), false),
+                (7, 1, "# after".to_string(), true),
+            ]
+        );
     }
 
     #[test]

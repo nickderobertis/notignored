@@ -399,16 +399,127 @@ fn a_directive_inside_a_string_literal_is_reported_by_llmlint_but_not_by_notigno
     assert!(!passed, "llmlint must reject this fixture:\n{output}");
     assert_eq!(
         locations(&literal, &output),
-        vec!["decoy.rs:5"],
+        vec![
+            "decoy.rs:5",
+            "decoy.yml:4",
+            "decoy.yml:5",
+            "decoy.yml:7",
+            "decoy.yml:9"
+        ],
         "llmlint scans raw lines, so it should reject the literal's rule name:\n{output}"
     );
 
     // notignored extracts comments before it looks for directives, so a string
-    // literal is never a suppression. This is the one place the two disagree,
-    // and it disagrees in the safe direction: no invented record.
+    // literal — or a YAML quoted scalar — is never a suppression. This is the
+    // one place the two disagree, and it disagrees in the safe direction: no
+    // invented record.
     let report = report_for("string-literal", 0);
     assert!(
         report["ignores"].as_array().unwrap().is_empty(),
         "a string literal was reported as a suppression: {report:#}"
     );
+}
+
+/// `(line, scope, suppressed start, suppressed end)` for every directive.
+fn spans(report: &serde_json::Value) -> Vec<(u64, &str, u64, Option<u64>)> {
+    report["ignores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|directive| {
+            (
+                directive["line"].as_u64().unwrap(),
+                directive["scope"].as_str().unwrap(),
+                directive["suppressed"]["start_line"].as_u64().unwrap(),
+                directive["suppressed"]["end_line"].as_u64(),
+            )
+        })
+        .collect()
+}
+
+/// YAML is read by YAML's grammar, not shell's: the apostrophe in `it's a step`
+/// opens no quoted scalar, so the block's `ignore-end` below it is a comment
+/// and the block closes (notignored v0.1.18 reported it unclosed). A block
+/// scalar's body is a workflow's shell script, and llmlint reads the directive
+/// inside it, so notignored does too.
+#[test]
+fn llmlint_and_notignored_read_the_same_directives_in_a_workflow() {
+    let (passed, output) = llmlint_check_ignores(&parity_dir().join("yaml"));
+    assert!(
+        passed,
+        "the pinned llmlint rejected the YAML fixture; it or the config drifted:\n{output}"
+    );
+
+    let report = report_for("yaml", 0);
+    assert_eq!(
+        spans(&report),
+        vec![
+            (6, "block", 6, Some(9)),
+            (10, "line", 10, Some(10)),
+            (12, "next-line", 13, Some(13)),
+            (14, "line", 14, Some(14)),
+            (16, "next-line", 17, Some(17)),
+            // The `'` left open in the folded script above ends with its
+            // scalar, so the YAML comment after it is still read.
+            (18, "next-line", 19, Some(19)),
+            // A block scalar's header comment is YAML's; the trailing one in
+            // its body is the script's. An empty body hides nothing below it.
+            (22, "line", 22, Some(22)),
+            (23, "line", 23, Some(23)),
+            (26, "next-line", 27, Some(27)),
+        ],
+        "{report:#}"
+    );
+    assert!(
+        report["errors"].as_array().unwrap().is_empty(),
+        "{report:#}"
+    );
+    // Columns count characters, as every other language's do: `é` is two
+    // bytes, and the directive on line 14 opens at character 28.
+    let accented = &report["ignores"][3];
+    assert_eq!(accented["column"], 28, "{accented}");
+    assert_eq!(
+        accented["reason"], "the accent sits before this",
+        "{accented}"
+    );
+}
+
+/// A workflow checked out with CRLF line endings reads exactly as the LF one
+/// does: no `\r` reaches a reason, and no line or column moves.
+#[test]
+fn a_crlf_workflow_reports_what_the_lf_one_does() {
+    let lf = std::fs::read_to_string(parity_dir().join("yaml").join("workflow.yml")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("workflow.yml"), lf.replace('\n', "\r\n")).unwrap();
+    let output = notignored(dir.path())
+        .args(["--tool", "llmlint", "--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let crlf = parse_report(&output.stdout);
+    let expected = report_for("yaml", 0);
+    assert_eq!(crlf["ignores"], expected["ignores"], "{crlf:#}");
+    assert_eq!(crlf["errors"], expected["errors"], "{crlf:#}");
+}
+
+#[test]
+fn an_unclosed_block_in_yaml_is_flagged_by_both() {
+    let unclosed = parity_dir().join("yaml-unclosed");
+    let (passed, output) = llmlint_check_ignores(&unclosed);
+    assert!(!passed, "llmlint must reject this fixture:\n{output}");
+    assert_eq!(locations(&unclosed, &output), vec!["workflow.yml:2"]);
+
+    let report = report_for("yaml-unclosed", 2);
+    assert_eq!(spans(&report), vec![(2, "block", 2, None)], "{report:#}");
+    let errors = report["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{report:#}");
+    assert_eq!(errors[0]["path"], "workflow.yml");
+    let message = errors[0]["message"].as_str().unwrap();
+    assert!(message.contains("unclosed"), "{message}");
+    assert!(message.contains("line 2"), "{message}");
 }
