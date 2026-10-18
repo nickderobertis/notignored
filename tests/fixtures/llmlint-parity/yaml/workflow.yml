@@ -11,3 +11,10 @@ jobs:
         run: |
           # llmlint: ignore[no_debug_prints] the script's own print is its output
           echo 'debug'
+      - name: Café step  # llmlint: ignore[no_todo_comments] the accent sits before this
+        run: >
+          # llmlint: ignore[no_debug_prints] read inside the folded script too
+          echo 'debug' it's
+      # llmlint: ignore[no_todo_comments] the quote left open above ends with its scalar
+      - name: last
+        run: "true"

@@ -451,6 +451,11 @@ fn llmlint_and_notignored_read_the_same_directives_in_a_workflow() {
             (6, "block", 6, Some(9)),
             (10, "line", 10, Some(10)),
             (12, "next-line", 13, Some(13)),
+            (14, "line", 14, Some(14)),
+            (16, "next-line", 17, Some(17)),
+            // The `'` left open in the folded script above ends with its
+            // scalar, so the YAML comment after it is still read.
+            (18, "next-line", 19, Some(19)),
         ],
         "{report:#}"
     );
@@ -458,6 +463,37 @@ fn llmlint_and_notignored_read_the_same_directives_in_a_workflow() {
         report["errors"].as_array().unwrap().is_empty(),
         "{report:#}"
     );
+    // Columns count characters, as every other language's do: `é` is two
+    // bytes, and the directive on line 14 opens at character 28.
+    let accented = &report["ignores"][3];
+    assert_eq!(accented["column"], 28, "{accented}");
+    assert_eq!(
+        accented["reason"], "the accent sits before this",
+        "{accented}"
+    );
+}
+
+/// A workflow checked out with CRLF line endings reads exactly as the LF one
+/// does: no `\r` reaches a reason, and no line or column moves.
+#[test]
+fn a_crlf_workflow_reports_what_the_lf_one_does() {
+    let lf = std::fs::read_to_string(parity_dir().join("yaml").join("workflow.yml")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("workflow.yml"), lf.replace('\n', "\r\n")).unwrap();
+    let output = notignored(dir.path())
+        .args(["--tool", "llmlint", "--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let crlf = parse_report(&output.stdout);
+    let expected = report_for("yaml", 0);
+    assert_eq!(crlf["ignores"], expected["ignores"], "{crlf:#}");
+    assert_eq!(crlf["errors"], expected["errors"], "{crlf:#}");
 }
 
 #[test]

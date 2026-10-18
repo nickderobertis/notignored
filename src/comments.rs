@@ -439,16 +439,13 @@ fn scan_yaml(source: &str) -> Extracted {
 }
 
 /// One YAML `comment` node as a [`Comment`], its byte span turned into the
-/// 1-based character columns every other scanner reports.
+/// 1-based character columns every other scanner reports. The grammar ends a
+/// comment before a CRLF's `\r`, so the node's span is the comment exactly.
 fn yaml_comment(source: &str, node: tree_sitter::Node<'_>) -> Comment {
     let (start, end) = (node.start_byte(), node.end_byte());
     let line_start = start.saturating_sub(node.start_position().column);
     let before = source.get(line_start..start).unwrap_or_default();
-    let raw = source
-        .get(start..end)
-        .unwrap_or_default()
-        .trim_end_matches('\r')
-        .to_string();
+    let raw = source.get(start..end).unwrap_or_default().to_string();
     let text = raw.strip_prefix('#').unwrap_or(&raw).to_string();
     let line = u32::try_from(node.start_position().row)
         .unwrap_or(u32::MAX)
