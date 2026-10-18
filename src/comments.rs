@@ -403,9 +403,10 @@ fn scan_yaml(source: &str) -> Extracted {
         .set_language(&tree_sitter_yaml::LANGUAGE.into())
         .ok()
         .and_then(|()| parser.parse(source, None));
-    // Unreachable with the grammar compiled in (its ABI is checked by the tests
-    // and `parse` fails only on a cancellation we never request), but a scan
-    // must not panic: shell's rules are the reading this replaced.
+    // Unreachable with the grammar compiled in — the runtime accepting its ABI
+    // is `the_yaml_grammar_loads_into_the_runtime`, and `parse` fails only on a
+    // cancellation never requested here — but a scan must not panic, and
+    // shell's rules are the reading this replaced.
     let Some(tree) = tree else {
         let chars: Vec<char> = source.chars().collect();
         return scan_hash(&chars, HASH_WORD);
@@ -759,6 +760,16 @@ mod tests {
         let found = comments("key: value#notacomment # real\n", Language::Yaml);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].raw, "# real");
+    }
+
+    #[test]
+    fn the_yaml_grammar_loads_into_the_runtime() {
+        // `scan_yaml`'s shell fallback is reachable only if this fails.
+        let mut parser = tree_sitter::Parser::new();
+        assert!(parser
+            .set_language(&tree_sitter_yaml::LANGUAGE.into())
+            .is_ok());
+        assert!(parser.parse("a: b # c\n", None).is_some());
     }
 
     #[test]

@@ -18,3 +18,10 @@ jobs:
       # llmlint: ignore[no_todo_comments] the quote left open above ends with its scalar
       - name: last
         run: "true"
+      - name: header
+        run: | # llmlint: ignore[no_debug_prints] the header's own comment
+          echo 'debug'  # llmlint: ignore[no_debug_prints] trailing in the script
+      - name: empty
+        run: |
+      # llmlint: ignore[no_todo_comments] after an empty block scalar
+      - name: end

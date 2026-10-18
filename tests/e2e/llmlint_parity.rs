@@ -399,7 +399,13 @@ fn a_directive_inside_a_string_literal_is_reported_by_llmlint_but_not_by_notigno
     assert!(!passed, "llmlint must reject this fixture:\n{output}");
     assert_eq!(
         locations(&literal, &output),
-        vec!["decoy.rs:5", "decoy.yml:4", "decoy.yml:5"],
+        vec![
+            "decoy.rs:5",
+            "decoy.yml:4",
+            "decoy.yml:5",
+            "decoy.yml:7",
+            "decoy.yml:9"
+        ],
         "llmlint scans raw lines, so it should reject the literal's rule name:\n{output}"
     );
 
@@ -456,6 +462,11 @@ fn llmlint_and_notignored_read_the_same_directives_in_a_workflow() {
             // The `'` left open in the folded script above ends with its
             // scalar, so the YAML comment after it is still read.
             (18, "next-line", 19, Some(19)),
+            // A block scalar's header comment is YAML's; the trailing one in
+            // its body is the script's. An empty body hides nothing below it.
+            (22, "line", 22, Some(22)),
+            (23, "line", 23, Some(23)),
+            (26, "next-line", 27, Some(27)),
         ],
         "{report:#}"
     );
