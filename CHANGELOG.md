@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.19](https://github.com/nickderobertis/notignored/compare/v0.1.18...v0.1.19) - 2026-10-18
+
+### Fixed
+
+- *(yaml)* read YAML comments under YAML's quoting rules, not shell's ([#87](https://github.com/nickderobertis/notignored/pull/87))
+
 ## [0.1.17](https://github.com/nickderobertis/notignored/compare/v0.1.16...v0.1.17) - 2026-09-29
 
 ### Added
