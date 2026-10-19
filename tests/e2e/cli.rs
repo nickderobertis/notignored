@@ -217,15 +217,19 @@ fn exclude_leaves_a_directory_or_a_file_out_of_a_tree_scan_and_nothing_else() {
     // spellings of a scan cannot disagree about what it left out. That includes
     // a symlinked spelling of the current directory — macOS's temp dir is
     // `/var -> /private/var`, and the cwd the scan reads is the resolved one.
-    let mut spellings = vec![std::path::PathBuf::from("."), root.to_path_buf()];
     #[cfg(unix)]
     let linked = tempfile::tempdir().unwrap();
     #[cfg(unix)]
-    {
+    let symlinked = {
         let link = linked.path().join("root");
         std::os::unix::fs::symlink(root, &link).expect("symlink the scan root");
-        spellings.push(link);
-    }
+        Some(link)
+    };
+    #[cfg(not(unix))]
+    let symlinked: Option<std::path::PathBuf> = None;
+    let spellings = [std::path::PathBuf::from("."), root.to_path_buf()]
+        .into_iter()
+        .chain(symlinked);
     for scanned in spellings {
         let output = notignored(root)
             .arg(&scanned)
