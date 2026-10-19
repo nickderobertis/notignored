@@ -42,3 +42,11 @@ jobs:
       - uses: ./
         with:
           version: local
+          # Malformed on purpose — each holds an `ignore-block` left open, which
+          # the scan reports as an error and exits 2 on. The suites that expect
+          # those errors name these paths themselves, so excluding them here
+          # hides nothing from a test; every other fixture is still scanned,
+          # since its suppressions are the demo.
+          exclude: >-
+            tests/fixtures/llmlint-parity/invalid
+            tests/fixtures/llmlint-parity/yaml-unclosed

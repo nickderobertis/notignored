@@ -153,6 +153,7 @@ fn scan(repo: &Path, env: &[(&str, &str)]) -> Run {
         .env("GITHUB_OUTPUT", &outputs)
         .env("DIFF_BASE", "")
         .env("SCAN_PATHS", "")
+        .env("SCAN_EXCLUDE", "")
         .env("MAX_ENTRIES", "20")
         .env("GITHUB_SHA", "0000000000000000000000000000000000000000")
         .env_remove("GITHUB_BASE_REF")
@@ -275,6 +276,49 @@ fn paths_narrow_the_scan_the_way_they_narrow_the_command() {
         "{}",
         narrowed.body
     );
+}
+
+/// `exclude` drops what it names from a run that would otherwise fail on it,
+/// and from that run alone: what it does not name is still reported.
+#[test]
+fn exclude_leaves_out_what_it_names_and_nothing_else() {
+    let repo = pull_request();
+    write(
+        repo.path(),
+        "fixtures/broken/unclosed.py",
+        "# llmlint: ignore-block[no_debug_prints] left open on purpose\nprint(1)\n",
+    );
+    commit(repo.path(), "add a malformed fixture");
+
+    let unexcluded = scan(repo.path(), &[("GITHUB_BASE_REF", "main")]);
+    assert_eq!(unexcluded.output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&unexcluded.output.stderr).contains(
+            "fixtures/broken/unclosed.py: unclosed llmlint ignore-block for rule \"no_debug_prints\""
+        ),
+        "{}",
+        String::from_utf8_lossy(&unexcluded.output.stderr)
+    );
+
+    let excluded = scan(
+        repo.path(),
+        &[
+            ("GITHUB_BASE_REF", "main"),
+            ("SCAN_EXCLUDE", "fixtures/broken  docs"),
+        ],
+    );
+    assert!(
+        excluded.output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&excluded.output.stderr)
+    );
+    assert!(
+        !excluded.report.contains("fixtures/broken"),
+        "{}",
+        excluded.report
+    );
+    assert_eq!(excluded.count(), "1");
+    assert!(excluded.body.contains("src/app.py"), "{}", excluded.body);
 }
 
 /// Without a pull request to inherit a base from, the step has to say what to

@@ -23,6 +23,12 @@ inputs:
       repository.
     required: false
     default: ""
+  exclude:
+    description: >-
+      Whitespace-separated files and directories to leave out of the scan, as
+      `--exclude` takes them. A path that names nothing excludes nothing.
+    required: false
+    default: ""
   max-entries:
     description: >-
       Most suppressions the comment lists before it closes with a line counting
@@ -121,6 +127,7 @@ runs:
         NOTIGNORED: ${{ steps.install.outputs.bin }}
         DIFF_BASE: ${{ inputs.diff-base }}
         SCAN_PATHS: ${{ inputs.paths }}
+        SCAN_EXCLUDE: ${{ inputs.exclude }}
         MAX_ENTRIES: ${{ inputs.max-entries }}
       run: |
         set -euo pipefail
@@ -151,6 +158,11 @@ runs:
         report="$RUNNER_TEMP/notignored-report.json"
         body="$RUNNER_TEMP/notignored-comment.md"
         read -r -a scan_paths <<< "$SCAN_PATHS"
+        read -r -a excluded <<< "$SCAN_EXCLUDE"
+        # One `--exclude` per path, so a path is never read as the next flag.
+        for path in ${excluded[@]+"${excluded[@]}"}; do
+          scan_paths+=(--exclude "$path")
+        done
         # macOS runners ship bash 3.2, where `set -u` rejects "${array[@]}" as an
         # unbound variable when the array is empty — which is what an unset
         # `paths` input leaves behind, so the default run would abort there. The

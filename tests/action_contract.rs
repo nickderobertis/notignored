@@ -29,6 +29,7 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
         inputs.keys(),
         vec![
             "diff-base",
+            "exclude",
             "github-token",
             "max-entries",
             "paths",
@@ -51,9 +52,10 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
         notignored::cli::DEFAULT_MAX_ENTRIES.to_string(),
         "the action's max-entries default drifted from the renderer's"
     );
-    // Both optional: an empty base means "the pull request's base branch" and
-    // empty paths mean "the whole repository".
-    for input in ["diff-base", "paths"] {
+    // All optional: an empty base means "the pull request's base branch",
+    // empty paths mean "the whole repository", and an empty exclude leaves
+    // nothing out.
+    for input in ["diff-base", "exclude", "paths"] {
         assert_eq!(inputs.get(input).get("default").scalar(), "", "{input}");
     }
 }

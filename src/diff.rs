@@ -687,9 +687,10 @@ fn status_kind(status: &str) -> Option<StatusKind> {
 
 /// Whether `selector` names `candidate` or a directory holding it.
 ///
-/// This is how positional `PATHS` narrow a change: both sides are read relative
-/// to the directory the diff was taken in, and a selector pointing outside it
-/// (an absolute path elsewhere, a `../` escape) selects nothing.
+/// This is how positional `PATHS` narrow a change, and how `--exclude` drops a
+/// file from either kind of run: both sides are read relative to the current
+/// directory, and a selector pointing outside it (an absolute path elsewhere, a
+/// `../` escape) selects nothing.
 pub fn path_selects(selector: &Path, candidate: &Path) -> bool {
     let Some(prefix) = relative_prefix(selector) else {
         return false;
@@ -697,7 +698,9 @@ pub fn path_selects(selector: &Path, candidate: &Path) -> bool {
     if prefix.is_empty() {
         return true;
     }
-    let candidate = display_path(candidate);
+    // A tree scan's files are spelled the way its `PATHS` were, absolute ones
+    // included; read them the way the selector is read.
+    let candidate = relative_prefix(candidate).unwrap_or_else(|| display_path(candidate));
     candidate == prefix
         || candidate
             .strip_prefix(&prefix)

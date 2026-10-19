@@ -216,6 +216,57 @@ fn positional_paths_narrow_the_change_and_an_empty_intersection_is_clean() {
 }
 
 #[test]
+fn exclude_drops_what_it_names_from_the_change_and_nothing_else() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "src/app.py", "value = 1\n");
+    commit(root, "baseline");
+    write(root, "src/app.py", "value = 1  # noqa: E501\n");
+    write(
+        root,
+        "fixtures/broken/unclosed.py",
+        "# llmlint: ignore-block[no_debug_prints] left open on purpose\nprint(1)\n",
+    );
+    write(root, "fixtures/kept.py", "value = 2  # noqa: F401\n");
+    git(root, &["add", "-A"]);
+
+    let unexcluded = notignored(root)
+        .args(["--diff", "--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(unexcluded.status.code(), Some(2), "{:?}", unexcluded.status);
+    assert_eq!(
+        parse_report(&unexcluded.stdout)["errors"][0]["path"],
+        "fixtures/broken/unclosed.py"
+    );
+
+    // A trailing slash, or a path that names nothing at all, is still a path.
+    assert_eq!(
+        run_json(
+            root,
+            &[
+                "--diff",
+                "--exclude",
+                "fixtures/broken/",
+                "--exclude",
+                "gone"
+            ],
+            0
+        ),
+        vec!["fixtures/kept.py:1 F401", "src/app.py:1 E501"]
+    );
+    // It narrows what PATHS selected rather than replacing it.
+    assert_eq!(
+        run_json(
+            root,
+            &["--diff", "fixtures", "--exclude", "fixtures/broken"],
+            0
+        ),
+        vec!["fixtures/kept.py:1 F401"]
+    );
+}
+
+#[test]
 fn a_path_the_change_never_touched_and_that_does_not_exist_is_still_a_typo() {
     let repo = git_repo();
     let root = repo.path();

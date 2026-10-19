@@ -137,13 +137,15 @@ the comment the action posts. That block is checked against the real binary by
 ## Usage
 
 ```
-notignored [PATHS...] [--format human|json|markdown] [--color auto|always|never]
-           [--tool NAME]... [--fail-if-found] [--diff [--diff-base REF]]
+notignored [PATHS...] [--exclude PATH]... [--format human|json|markdown]
+           [--color auto|always|never] [--tool NAME]... [--fail-if-found] [--diff [--diff-base REF]]
            [--github-repo OWNER/REPO] [--github-sha SHA] [--max-entries N]
 ```
 
 - `PATHS` — files and/or directories. Directories are walked recursively,
   honouring `.gitignore`. Defaults to `.`.
+- `--exclude` — leave this file, or everything under this directory, out of the
+  scan, with or without `--diff`; repeat to exclude several.
 - `--format` — `human` (default), `json`, or `markdown` (a pull-request comment
   body; see the action below).
 - `--color` — when to colorize the `human` report. `auto` (the default) colors
@@ -264,6 +266,7 @@ guarantee matters.
 | `github-token` | `${{ github.token }}` | Token used to upsert the comment. Needs `pull-requests: write`. |
 | `diff-base` | the pull request's base branch | Any git revision or range, as `--diff-base` takes. |
 | `paths` | the whole repository | Whitespace-separated files and directories to scan. |
+| `exclude` | nothing | Whitespace-separated files and directories to leave out of the scan, as `--exclude` takes them. |
 | `max-entries` | `20` | How many suppressions the comment lists before it closes with a line counting the rest. At least 1; anything else fails the run. |
 | `version` | empty: the release the action's own ref names | Empty installs `v<version>` for the `version` in the action's own `Cargo.toml` — at `@vX.Y.Z` that is `vX.Y.Z`, at `@v0` the release `v0` points at — and fails rather than guessing if that file cannot be read. Otherwise a release tag such as `v0.1.0`, `latest` for the newest release, or `local` to build the action's own source with `cargo`. |
 

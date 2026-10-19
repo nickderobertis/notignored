@@ -166,6 +166,72 @@ fn an_explicit_file_argument_scans_only_that_file() {
     assert_eq!(ignores[0]["scope"], "file");
 }
 
+/// The fixtures this repository keeps malformed on purpose: what
+/// `.github/workflows/notignored.yml` excludes from its own scan.
+const MALFORMED_FIXTURES: [&str; 2] = [
+    "tests/fixtures/llmlint-parity/invalid",
+    "tests/fixtures/llmlint-parity/yaml-unclosed",
+];
+
+#[test]
+fn exclude_leaves_a_directory_out_of_a_tree_scan_and_nothing_else() {
+    let root = repo_root();
+    let parity = "tests/fixtures/llmlint-parity";
+    let unexcluded = notignored(&root)
+        .args([parity, "--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(unexcluded.status.code(), Some(2), "{:?}", unexcluded.status);
+    let errors: Vec<String> = parse_report(&unexcluded.stdout)["errors"]
+        .as_array()
+        .expect("errors is an array")
+        .iter()
+        .map(|error| error["path"].as_str().expect("a path").to_string())
+        .collect();
+    assert_eq!(
+        errors,
+        vec![
+            format!("{}/unclosed.py", MALFORMED_FIXTURES[0]),
+            format!("{}/workflow.yml", MALFORMED_FIXTURES[1]),
+        ]
+    );
+
+    // Absolute PATHS are read the way a relative `--exclude` is, so the two
+    // spellings of a scan cannot disagree about what it left out.
+    let absolute = root.join(parity);
+    for scanned in [std::path::PathBuf::from(parity), absolute] {
+        let mut command = notignored(&root);
+        command.arg(&scanned).args(["--format", "json"]);
+        for fixture in MALFORMED_FIXTURES {
+            command.args(["--exclude", fixture]);
+        }
+        let output = command.output().expect("run notignored");
+        assert!(
+            output.status.success(),
+            "{scanned:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = parse_report(&output.stdout);
+        assert_eq!(report["errors"], serde_json::json!([]), "{scanned:?}");
+        let paths: Vec<&str> = report["ignores"]
+            .as_array()
+            .expect("ignores is an array")
+            .iter()
+            .map(|directive| directive["path"].as_str().expect("a path"))
+            .collect();
+        assert!(
+            paths.iter().any(|path| path.ends_with("valid/service.py")),
+            "{scanned:?}: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| MALFORMED_FIXTURES.iter().all(|f| !path.contains(f))),
+            "{scanned:?}: {paths:?}"
+        );
+    }
+}
+
 #[test]
 fn the_tool_filter_selects_and_deselects_parsers() {
     let selected = notignored(&tree())
