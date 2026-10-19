@@ -166,68 +166,78 @@ fn an_explicit_file_argument_scans_only_that_file() {
     assert_eq!(ignores[0]["scope"], "file");
 }
 
-/// The fixtures this repository keeps malformed on purpose: what
-/// `.github/workflows/notignored.yml` excludes from its own scan.
-const MALFORMED_FIXTURES: [&str; 2] = [
-    "tests/fixtures/llmlint-parity/invalid",
-    "tests/fixtures/llmlint-parity/yaml-unclosed",
-];
+/// Every suppression a JSON run reported, as its path, and every error, as its.
+fn reported_paths(stdout: &[u8]) -> (Vec<String>, Vec<String>) {
+    let report = parse_report(stdout);
+    let paths = |key: &str| -> Vec<String> {
+        report[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{key} is an array"))
+            .iter()
+            .map(|entry| entry["path"].as_str().expect("a path").to_string())
+            .collect()
+    };
+    (paths("ignores"), paths("errors"))
+}
 
 #[test]
-fn exclude_leaves_a_directory_out_of_a_tree_scan_and_nothing_else() {
-    let root = repo_root();
-    let parity = "tests/fixtures/llmlint-parity";
-    let unexcluded = notignored(&root)
-        .args([parity, "--format", "json"])
+fn exclude_leaves_a_directory_or_a_file_out_of_a_tree_scan_and_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("fixtures/broken")).unwrap();
+    // The repository's own malformed fixture, copied rather than restated: its
+    // text is a live directive to anything that reads this file as source.
+    fs::copy(
+        fixture("llmlint-parity/invalid/unclosed.py"),
+        root.join("fixtures/broken/unclosed.py"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("fixtures/kept.py"),
+        "x = 1  # noqa: F401  # kept\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("fixtures/dropped.py"),
+        "y = 2  # noqa: E501  # dropped\n",
+    )
+    .unwrap();
+
+    let unexcluded = notignored(root)
+        .args(["--format", "json"])
         .output()
         .expect("run notignored");
     assert_eq!(unexcluded.status.code(), Some(2), "{:?}", unexcluded.status);
-    let errors: Vec<String> = parse_report(&unexcluded.stdout)["errors"]
-        .as_array()
-        .expect("errors is an array")
-        .iter()
-        .map(|error| error["path"].as_str().expect("a path").to_string())
-        .collect();
     assert_eq!(
-        errors,
-        vec![
-            format!("{}/unclosed.py", MALFORMED_FIXTURES[0]),
-            format!("{}/workflow.yml", MALFORMED_FIXTURES[1]),
-        ]
+        reported_paths(&unexcluded.stdout).1,
+        vec!["fixtures/broken/unclosed.py"]
     );
 
     // Absolute PATHS are read the way a relative `--exclude` is, so the two
     // spellings of a scan cannot disagree about what it left out.
-    let absolute = root.join(parity);
-    for scanned in [std::path::PathBuf::from(parity), absolute] {
-        let mut command = notignored(&root);
-        command.arg(&scanned).args(["--format", "json"]);
-        for fixture in MALFORMED_FIXTURES {
-            command.args(["--exclude", fixture]);
-        }
-        let output = command.output().expect("run notignored");
+    for scanned in [std::path::PathBuf::from("."), root.to_path_buf()] {
+        let output = notignored(root)
+            .arg(&scanned)
+            .args(["--format", "json"])
+            .args([
+                "--exclude",
+                "fixtures/broken",
+                "--exclude",
+                "fixtures/dropped.py",
+            ])
+            .output()
+            .expect("run notignored");
         assert!(
             output.status.success(),
             "{scanned:?}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let report = parse_report(&output.stdout);
-        assert_eq!(report["errors"], serde_json::json!([]), "{scanned:?}");
-        let paths: Vec<&str> = report["ignores"]
-            .as_array()
-            .expect("ignores is an array")
-            .iter()
-            .map(|directive| directive["path"].as_str().expect("a path"))
-            .collect();
+        let (ignores, errors) = reported_paths(&output.stdout);
+        assert_eq!(errors, Vec::<String>::new(), "{scanned:?}");
+        assert_eq!(ignores.len(), 1, "{scanned:?}: {ignores:?}");
         assert!(
-            paths.iter().any(|path| path.ends_with("valid/service.py")),
-            "{scanned:?}: {paths:?}"
-        );
-        assert!(
-            paths
-                .iter()
-                .all(|path| MALFORMED_FIXTURES.iter().all(|f| !path.contains(f))),
-            "{scanned:?}: {paths:?}"
+            ignores[0].ends_with("fixtures/kept.py"),
+            "{scanned:?}: {ignores:?}"
         );
     }
 }

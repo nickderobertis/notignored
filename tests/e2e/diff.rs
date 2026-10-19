@@ -258,6 +258,21 @@ fn exclude_drops_what_it_names_from_the_change_and_nothing_else() {
         ),
         vec!["fixtures/kept.py:1 F401", "src/app.py:1 E501"]
     );
+    // A file is excluded alone; its neighbours are still reported.
+    assert_eq!(
+        run_json(
+            root,
+            &[
+                "--diff",
+                "--exclude",
+                "fixtures/broken",
+                "--exclude",
+                "fixtures/kept.py"
+            ],
+            0
+        ),
+        vec!["src/app.py:1 E501"]
+    );
     // It narrows what PATHS selected rather than replacing it.
     assert_eq!(
         run_json(

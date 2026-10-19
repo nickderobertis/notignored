@@ -152,3 +152,22 @@ fn the_readme_documents_every_scope_the_contract_defines() {
         );
     }
 }
+
+/// Every flag the parser accepts is documented in the README's usage list, so a
+/// flag cannot ship that only `--help` knows about.
+#[test]
+fn the_readme_usage_documents_every_flag() {
+    let usage = section(&readme(), "## Usage");
+    let command = Cli::command();
+    let undocumented: Vec<String> = command
+        .get_arguments()
+        .filter_map(|argument| argument.get_long())
+        .filter(|long| !matches!(*long, "help" | "version"))
+        .map(|long| format!("`--{long}`"))
+        .filter(|flag| !usage.contains(flag.as_str()))
+        .collect();
+    assert!(
+        undocumented.is_empty(),
+        "the README's `## Usage` list omits {undocumented:?}"
+    );
+}
