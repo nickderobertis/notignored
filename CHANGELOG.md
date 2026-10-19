@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.1.20](https://github.com/nickderobertis/notignored/compare/v0.1.19...v0.1.20) - 2026-10-19
+
+### Fixed
+
+- *(ci)* keep deliberately malformed fixtures out of the repository's own suppressions scan ([#90](https://github.com/nickderobertis/notignored/pull/90))
+
 ## [0.1.19](https://github.com/nickderobertis/notignored/compare/v0.1.18...v0.1.19) - 2026-10-18
 
 ### Fixed
