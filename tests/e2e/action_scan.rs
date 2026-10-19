@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-use crate::support::{commit, git, git_repo, git_stdout, repo_root, write};
+use crate::support::{commit, fixture, git, git_repo, git_stdout, repo_root, write};
 
 /// The script of the composite step named `name`, dedented the way the runner
 /// hands it to bash.
@@ -283,10 +283,13 @@ fn paths_narrow_the_scan_the_way_they_narrow_the_command() {
 #[test]
 fn exclude_leaves_out_what_it_names_and_nothing_else() {
     let repo = pull_request();
+    // The repository's own malformed fixture, copied rather than restated: its
+    // text is a live directive to anything that reads this file as source.
     write(
         repo.path(),
         "fixtures/broken/unclosed.py",
-        "# llmlint: ignore-block[no_debug_prints] left open on purpose\nprint(1)\n",
+        &std::fs::read_to_string(fixture("llmlint-parity/invalid/unclosed.py"))
+            .expect("read the malformed fixture"),
     );
     commit(repo.path(), "add a malformed fixture");
 

@@ -8,7 +8,7 @@
 use std::fs;
 
 use crate::support::{
-    commit, git, git_repo, git_stdout, notignored, parse_report, repo_root, write,
+    commit, fixture, git, git_repo, git_stdout, notignored, parse_report, repo_root, write,
 };
 
 /// Every suppression a JSON run reported, as `path:line rules`.
@@ -222,10 +222,13 @@ fn exclude_drops_what_it_names_from_the_change_and_nothing_else() {
     write(root, "src/app.py", "value = 1\n");
     commit(root, "baseline");
     write(root, "src/app.py", "value = 1  # noqa: E501\n");
+    // The repository's own malformed fixture, copied rather than restated: its
+    // text is a live directive to anything that reads this file as source.
     write(
         root,
         "fixtures/broken/unclosed.py",
-        "# llmlint: ignore-block[no_debug_prints] left open on purpose\nprint(1)\n",
+        &std::fs::read_to_string(fixture("llmlint-parity/invalid/unclosed.py"))
+            .expect("read the malformed fixture"),
     );
     write(root, "fixtures/kept.py", "value = 2  # noqa: F401\n");
     git(root, &["add", "-A"]);
