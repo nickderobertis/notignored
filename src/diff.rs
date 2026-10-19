@@ -687,9 +687,10 @@ fn status_kind(status: &str) -> Option<StatusKind> {
 
 /// Whether `selector` names `candidate` or a directory holding it.
 ///
-/// This is how positional `PATHS` narrow a change: both sides are read relative
-/// to the directory the diff was taken in, and a selector pointing outside it
-/// (an absolute path elsewhere, a `../` escape) selects nothing.
+/// This is how positional `PATHS` narrow a change, and how `--exclude` drops a
+/// file from either kind of run: both sides are read relative to the current
+/// directory, and a selector pointing outside it (an absolute path elsewhere, a
+/// `../` escape) selects nothing.
 pub fn path_selects(selector: &Path, candidate: &Path) -> bool {
     let Some(prefix) = relative_prefix(selector) else {
         return false;
@@ -697,7 +698,9 @@ pub fn path_selects(selector: &Path, candidate: &Path) -> bool {
     if prefix.is_empty() {
         return true;
     }
-    let candidate = display_path(candidate);
+    // A tree scan's files are spelled the way its `PATHS` were, absolute ones
+    // included; read them the way the selector is read.
+    let candidate = relative_prefix(candidate).unwrap_or_else(|| display_path(candidate));
     candidate == prefix
         || candidate
             .strip_prefix(&prefix)
@@ -708,9 +711,7 @@ pub fn path_selects(selector: &Path, candidate: &Path) -> bool {
 /// it points outside it. The empty string is the current directory itself.
 fn relative_prefix(path: &Path) -> Option<String> {
     let relative = if path.is_absolute() {
-        path.strip_prefix(std::env::current_dir().ok()?)
-            .ok()?
-            .to_path_buf()
+        strip_current_dir(path)?
     } else {
         path.to_path_buf()
     };
@@ -728,6 +729,22 @@ fn relative_prefix(path: &Path) -> Option<String> {
     }
     let joined: PathBuf = parts.iter().collect();
     Some(display_path(&joined))
+}
+
+/// `path` below the current directory, however either is spelled.
+///
+/// The current directory comes back resolved, so an absolute path through a
+/// symlink to it — macOS's `/var -> /private/var` temp dir — shares no prefix
+/// with it until both are canonical. A path that does not exist cannot be
+/// resolved, and selects nothing as before.
+fn strip_current_dir(path: &Path) -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    if let Ok(relative) = path.strip_prefix(&cwd) {
+        return Some(relative.to_path_buf());
+    }
+    let resolved = std::fs::canonicalize(path).ok()?;
+    let cwd = std::fs::canonicalize(&cwd).ok()?;
+    resolved.strip_prefix(&cwd).ok().map(Path::to_path_buf)
 }
 
 /// Drop every directive the change did not introduce.

@@ -166,6 +166,97 @@ fn an_explicit_file_argument_scans_only_that_file() {
     assert_eq!(ignores[0]["scope"], "file");
 }
 
+/// Every suppression a JSON run reported, as its path, and every error, as its.
+fn reported_paths(stdout: &[u8]) -> (Vec<String>, Vec<String>) {
+    let report = parse_report(stdout);
+    let paths = |key: &str| -> Vec<String> {
+        report[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{key} is an array"))
+            .iter()
+            .map(|entry| entry["path"].as_str().expect("a path").to_string())
+            .collect()
+    };
+    (paths("ignores"), paths("errors"))
+}
+
+#[test]
+fn exclude_leaves_a_directory_or_a_file_out_of_a_tree_scan_and_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("fixtures/broken")).unwrap();
+    // The repository's own malformed fixture, copied rather than restated: its
+    // text is a live directive to anything that reads this file as source.
+    fs::copy(
+        fixture("llmlint-parity/invalid/unclosed.py"),
+        root.join("fixtures/broken/unclosed.py"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("fixtures/kept.py"),
+        "x = 1  # noqa: F401  # kept\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("fixtures/dropped.py"),
+        "y = 2  # noqa: E501  # dropped\n",
+    )
+    .unwrap();
+
+    let unexcluded = notignored(root)
+        .args(["--format", "json"])
+        .output()
+        .expect("run notignored");
+    assert_eq!(unexcluded.status.code(), Some(2), "{:?}", unexcluded.status);
+    assert_eq!(
+        reported_paths(&unexcluded.stdout).1,
+        vec!["fixtures/broken/unclosed.py"]
+    );
+
+    // Absolute PATHS are read the way a relative `--exclude` is, so the two
+    // spellings of a scan cannot disagree about what it left out. That includes
+    // a symlinked spelling of the current directory — macOS's temp dir is
+    // `/var -> /private/var`, and the cwd the scan reads is the resolved one.
+    #[cfg(unix)]
+    let linked = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    let symlinked = {
+        let link = linked.path().join("root");
+        std::os::unix::fs::symlink(root, &link).expect("symlink the scan root");
+        Some(link)
+    };
+    #[cfg(not(unix))]
+    let symlinked: Option<std::path::PathBuf> = None;
+    let spellings = [std::path::PathBuf::from("."), root.to_path_buf()]
+        .into_iter()
+        .chain(symlinked);
+    for scanned in spellings {
+        let output = notignored(root)
+            .arg(&scanned)
+            .args(["--format", "json"])
+            .args([
+                "--exclude",
+                "fixtures/broken",
+                "--exclude",
+                "fixtures/dropped.py",
+            ])
+            .output()
+            .expect("run notignored");
+        assert!(
+            output.status.success(),
+            "{scanned:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let (ignores, errors) = reported_paths(&output.stdout);
+        assert_eq!(errors, Vec::<String>::new(), "{scanned:?}");
+        assert_eq!(ignores.len(), 1, "{scanned:?}: {ignores:?}");
+        assert!(
+            ignores[0].ends_with("fixtures/kept.py"),
+            "{scanned:?}: {ignores:?}"
+        );
+    }
+}
+
 #[test]
 fn the_tool_filter_selects_and_deselects_parsers() {
     let selected = notignored(&tree())

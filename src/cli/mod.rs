@@ -138,6 +138,12 @@ pub struct Cli {
     #[arg(value_name = "PATHS", default_value = ".")]
     pub paths: Vec<PathBuf>,
 
+    /// Leave this file, or every file under this directory, out of the scan.
+    /// Repeat to exclude several. Applies to tree scans and --diff alike; a path
+    /// that names nothing excludes nothing.
+    #[arg(long = "exclude", value_name = "PATH")]
+    pub excludes: Vec<PathBuf>,
+
     /// Output format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     pub format: Format,
@@ -238,8 +244,10 @@ impl Cli {
     /// tree is walked, with it git names the changed files.
     fn select(&self) -> Result<Selection, SelectError> {
         if !self.diff {
+            let mut files = scan::discover(&self.paths)?;
+            files.retain(|file| !self.is_excluded(file));
             return Ok(Selection {
-                files: scan::discover(&self.paths)?,
+                files,
                 changes: None,
                 errors: Vec::new(),
             });
@@ -263,6 +271,9 @@ impl Cli {
         let mut files = Vec::new();
         let mut changes = BTreeMap::new();
         for file in self.narrow_to_paths(&changed.files)? {
+            if self.is_excluded(&file.path) {
+                continue;
+            }
             // A file the change deleted is part of the diff but has no source
             // left to read; skipping it is the answer, not an error.
             if !file.path.exists() {
@@ -318,6 +329,14 @@ impl Cli {
         selected.sort_by(|a, b| a.path.cmp(&b.path));
         selected.dedup_by(|a, b| a.path == b.path);
         Ok(selected)
+    }
+
+    /// Whether an `--exclude` selects `file`, under the same rule `PATHS` use
+    /// to select one.
+    fn is_excluded(&self, file: &Path) -> bool {
+        self.excludes
+            .iter()
+            .any(|exclude| diff::path_selects(exclude, file))
     }
 
     /// The scan configuration this invocation implies.

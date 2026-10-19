@@ -29,6 +29,7 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
         inputs.keys(),
         vec![
             "diff-base",
+            "exclude",
             "github-token",
             "max-entries",
             "paths",
@@ -51,9 +52,10 @@ fn the_action_declares_the_documented_inputs_and_defaults() {
         notignored::cli::DEFAULT_MAX_ENTRIES.to_string(),
         "the action's max-entries default drifted from the renderer's"
     );
-    // Both optional: an empty base means "the pull request's base branch" and
-    // empty paths mean "the whole repository".
-    for input in ["diff-base", "paths"] {
+    // All optional: an empty base means "the pull request's base branch",
+    // empty paths mean "the whole repository", and an empty exclude leaves
+    // nothing out.
+    for input in ["diff-base", "exclude", "paths"] {
         assert_eq!(inputs.get(input).get("default").scalar(), "", "{input}");
     }
 }
@@ -147,6 +149,54 @@ fn the_action_exposes_both_counts_and_the_report_it_produced() {
     assert_eq!(
         comment.get("env").get("COUNT").scalar(),
         "${{ steps.scan.outputs.count }}"
+    );
+}
+
+/// The scan step reads each input it narrows by through the `env` name the
+/// lifted-step journeys in `tests/e2e/action_scan.rs` drive it with, so a
+/// journey that sets one is proving the input it names.
+#[test]
+fn the_scan_step_reads_each_input_through_the_env_the_journeys_set() {
+    let action = action();
+    let scan = action
+        .get("runs")
+        .get("steps")
+        .list()
+        .iter()
+        .find(|step| step.find("id").is_some_and(|id| id.scalar() == "scan"))
+        .expect("the composite has a scan step");
+    for (variable, input) in [
+        ("DIFF_BASE", "diff-base"),
+        ("SCAN_PATHS", "paths"),
+        ("SCAN_EXCLUDE", "exclude"),
+        ("MAX_ENTRIES", "max-entries"),
+    ] {
+        assert_eq!(
+            scan.get("env").get(variable).scalar(),
+            format!("${{{{ inputs.{input} }}}}"),
+            "{variable}"
+        );
+    }
+}
+
+/// The README's action-input table lists exactly the inputs `action.yml`
+/// declares, so a consumer reading it is never told about one that is gone or
+/// left to discover one that is not written down.
+#[test]
+fn the_readme_input_table_lists_every_declared_input() {
+    let readme = read("README.md");
+    let documented: BTreeSet<&str> = readme
+        .lines()
+        .skip_while(|line| !line.starts_with("| Input |"))
+        .skip(2)
+        .take_while(|line| line.starts_with('|'))
+        .filter_map(|line| line.split('`').nth(1))
+        .collect();
+    let action = action();
+    let declared: BTreeSet<&str> = action.get("inputs").keys().into_iter().collect();
+    assert_eq!(
+        documented, declared,
+        "the README's action-input table drifted"
     );
 }
 
@@ -517,6 +567,67 @@ fn the_dogfood_workflow_runs_this_repositorys_own_action_on_its_own_pull_request
         "local",
         "dogfooding must build the branch's own source, not a published release"
     );
+}
+
+/// The dogfood scan leaves out exactly the fixtures that are malformed on
+/// purpose: without its `exclude`, a scan of `tests/fixtures` errors on those
+/// paths and no others, and with it the scan is clean. A fixture added broken
+/// later, or an exclusion left behind by one that was fixed, fails here rather
+/// than as a red dogfood run on every pull request that touches it.
+#[test]
+fn the_dogfood_scan_excludes_exactly_the_fixtures_malformed_on_purpose() {
+    let excluded: Vec<String> = parse(&read(".github/workflows/notignored.yml"))
+        .get("jobs")
+        .get("suppressions")
+        .get("steps")
+        .list()
+        .iter()
+        .find(|step| step.find("uses").is_some_and(|uses| uses.scalar() == "./"))
+        .expect("the workflow uses the action from this checkout")
+        .get("with")
+        .get("exclude")
+        .scalar()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+
+    let scan = |excludes: &[String]| {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_notignored"));
+        command
+            .current_dir(repo_root())
+            .args(["tests/fixtures", "--format", "json"]);
+        for path in excludes {
+            command.args(["--exclude", path]);
+        }
+        let output = command.output().expect("run notignored");
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("a JSON report");
+        let errors: Vec<String> = report["errors"]
+            .as_array()
+            .expect("errors is an array")
+            .iter()
+            .map(|error| error["path"].as_str().expect("a path").to_string())
+            .collect();
+        (output.status.code(), errors)
+    };
+
+    let (code, errors) = scan(&[]);
+    assert_eq!(
+        code,
+        Some(2),
+        "the malformed fixtures stopped failing a scan"
+    );
+    let erroring: BTreeSet<&str> = errors
+        .iter()
+        .map(|path| path.rsplit_once('/').expect("a fixture path").0)
+        .collect();
+    assert_eq!(
+        erroring,
+        excluded.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+        "the dogfood workflow's `exclude` must name exactly the fixture directories a scan \
+         errors on"
+    );
+    assert_eq!(scan(&excluded), (Some(0), Vec::new()));
 }
 
 /// The dogfood run builds the binary from source on every pull request, which is
