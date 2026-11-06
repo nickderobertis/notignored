@@ -10,6 +10,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(unix)]
+use std::process::Output;
 
 use assert_cmd::cargo::CommandCargoExt;
 
@@ -1014,24 +1016,66 @@ impl BusRecorder {
     }
 }
 
-/// The guard on an environment handed to the real `gh`: `step` must succeed and
-/// never ask for a session bus.
-///
-/// The control runs first, on a copy with the variable removed, so this cannot
-/// pass because `gh` never asked. A `gh` that does not ask there (absent, off
-/// Linux, or a later release) cannot leak a bus, so the guard skips and says so.
+/// A step that can reach the real `gh`, with the stand-in first on its PATH from
+/// the moment it is built, so no way of starting it can launch a real bus.
 #[cfg(unix)]
-pub fn assert_starts_no_session_bus(step: impl Fn() -> Command) {
-    let recorder = BusRecorder::install();
+pub struct GhStep {
+    command: Command,
+    recorder: BusRecorder,
+}
 
+#[cfg(unix)]
+impl GhStep {
+    pub fn new(mut command: Command) -> GhStep {
+        let recorder = BusRecorder::install();
+        recorder.watch(&mut command);
+        GhStep { command, recorder }
+    }
+
+    /// Run the step, and fail if `gh` asked for a session bus while it ran.
+    pub fn run(mut self) -> Output {
+        let output = self.command.output().expect("run the step");
+        assert_eq!(
+            self.recorder.calls(),
+            0,
+            "gh asked for a session bus, which leaks a dbus-daemon on a host with none\nACTION: \
+             set DBUS_SESSION_BUS_ADDRESS=disabled: on the Command this step is built from"
+        );
+        output
+    }
+}
+
+#[cfg(unix)]
+impl std::ops::Deref for GhStep {
+    type Target = Command;
+
+    fn deref(&self) -> &Command {
+        &self.command
+    }
+}
+
+#[cfg(unix)]
+impl std::ops::DerefMut for GhStep {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.command
+    }
+}
+
+/// The positive control on an environment handed to the real `gh`: `step` must
+/// ask for a bus once the variable is gone, and must succeed without one while it
+/// is set.
+///
+/// The control is what stops [`GhStep::run`]'s zero from passing because `gh`
+/// never asked. A `gh` that does not ask (absent, off Linux, or a later release)
+/// cannot leak a bus, so the guard skips and says so.
+#[cfg(unix)]
+pub fn assert_starts_no_session_bus(step: impl Fn() -> GhStep) {
     let mut control = step();
-    recorder.watch(&mut control);
     control
         .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .output()
         .expect("run the control");
-    let asked = recorder.calls();
-    if asked == 0 {
+    if control.recorder.calls() == 0 {
         eprintln!(
             "skipped: with DBUS_SESSION_BUS_ADDRESS removed this host's gh still asked for no \
              session bus, so none can leak here"
@@ -1039,19 +1083,11 @@ pub fn assert_starts_no_session_bus(step: impl Fn() -> Command) {
         return;
     }
 
-    let mut guarded = step();
-    recorder.watch(&mut guarded);
-    let output = guarded.output().expect("run the guarded step");
+    let output = step().run();
     assert!(
         output.status.success(),
         "the guarded step failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        recorder.calls(),
-        asked,
-        "gh asked for a session bus, which leaks a dbus-daemon on a host with none\nACTION: set \
-         DBUS_SESSION_BUS_ADDRESS=disabled: on the Command this step is built from"
     );
 }
 

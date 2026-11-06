@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::support::{
-    assert_bash_commands, assert_starts_no_session_bus, cargo_version, repo_root,
+    assert_bash_commands, assert_starts_no_session_bus, cargo_version, repo_root, GhStep,
 };
 
 const REPO: &str = "acme/widgets";
@@ -294,7 +294,7 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
 /// a `dbus-daemon` which outlives the test and holds an inotify instance.
 /// `disabled:` makes the lookup fail without starting one, and nothing else about
 /// the call changes.
-fn github_release_command(api: &LocalGitHub, args: &[&str]) -> Command {
+fn github_release_command(api: &LocalGitHub, args: &[&str]) -> GhStep {
     let mut command = Command::new("bash");
     command
         .arg(repo_root().join("scripts/github-release.sh"))
@@ -309,7 +309,7 @@ fn github_release_command(api: &LocalGitHub, args: &[&str]) -> Command {
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_HOST")
         .env_remove("GH_ENTERPRISE_TOKEN");
-    command
+    GhStep::new(command)
 }
 
 fn github_release(api: &LocalGitHub, args: &[&str]) -> Output {
@@ -319,9 +319,7 @@ fn github_release(api: &LocalGitHub, args: &[&str]) -> Output {
         "the GitHub CLI is not installed\nACTION: install gh (https://cli.github.com) — \
          release.yml calls it, and every GitHub-hosted runner ships it"
     );
-    github_release_command(api, args)
-        .output()
-        .expect("run github-release.sh")
+    github_release_command(api, args).run()
 }
 
 fn text(output: &Output) -> String {

@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::support::{
-    assert_bash_commands, assert_starts_no_session_bus, commit, git_repo, repo_root, write,
+    assert_bash_commands, assert_starts_no_session_bus, commit, git_repo, repo_root, write, GhStep,
 };
 
 /// The repository and pull request the journeys pretend to run against.
@@ -228,18 +228,17 @@ fn golden_body(count: usize) -> PathBuf {
 /// a `dbus-daemon` which outlives the test and holds an inotify instance.
 /// `disabled:` makes the lookup fail without starting one, and nothing else about
 /// the call changes.
-fn comment_step() -> Command {
+fn comment_step() -> GhStep {
     let mut command = Command::new("bash");
     command
         .arg(repo_root().join("scripts/action/comment.sh"))
         .env("DBUS_SESSION_BUS_ADDRESS", "disabled:");
-    command
+    GhStep::new(command)
 }
 
-fn comment_command(api: &LocalGitHub, count: usize) -> Command {
-    let mut command = comment_step();
-    command
-        .env("GITHUB_REPOSITORY", REPO)
+fn comment_command(api: &LocalGitHub, count: usize) -> GhStep {
+    let mut step = comment_step();
+    step.env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &api.address)
         .env("PR_NUMBER", PULL_REQUEST)
         .env("BODY_FILE", golden_body(count))
@@ -254,15 +253,13 @@ fn comment_command(api: &LocalGitHub, count: usize) -> Command {
         .env_remove("GH_HOST")
         .env_remove("GH_ENTERPRISE_TOKEN")
         .env_remove("GITHUB_EVENT_PATH");
-    command
+    step
 }
 
 /// Run the composite's comment step against `api`.
 fn comment(api: &LocalGitHub, count: usize) -> Output {
     require_gh();
-    let output = comment_command(api, count)
-        .output()
-        .expect("run comment.sh");
+    let output = comment_command(api, count).run();
     assert!(
         output.status.success(),
         "comment.sh failed ({:?}):\n{}\n{}",
@@ -397,16 +394,15 @@ fn the_pull_request_number_is_read_from_the_event_payload() {
     )
     .expect("write the event payload");
 
-    let output = comment_step()
-        .env("GITHUB_REPOSITORY", REPO)
+    let mut step = comment_step();
+    step.env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &api.address)
         .env("GITHUB_EVENT_PATH", event.path())
         .env("BODY_FILE", golden_body(1))
         .env("COUNT", "1")
         .env("GH_TOKEN", "local-token")
-        .env_remove("PR_NUMBER")
-        .output()
-        .expect("run comment.sh");
+        .env_remove("PR_NUMBER");
+    let output = step.run();
     assert!(
         output.status.success(),
         "{}",
@@ -458,9 +454,8 @@ fn an_unset_input_fails_with_the_cause_and_the_fix() {
 /// Run the comment step with `overrides` applied to the working environment.
 fn comment_with(api: &LocalGitHub, overrides: &[(&str, &str)]) -> Output {
     require_gh();
-    let mut command = comment_step();
-    command
-        .env("GITHUB_REPOSITORY", REPO)
+    let mut step = comment_step();
+    step.env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &api.address)
         .env("PR_NUMBER", PULL_REQUEST)
         .env("BODY_FILE", golden_body(1))
@@ -471,9 +466,9 @@ fn comment_with(api: &LocalGitHub, overrides: &[(&str, &str)]) -> Output {
         .env("NO_COLOR", "1")
         .env_remove("GITHUB_EVENT_PATH");
     for (name, value) in overrides {
-        command.env(name, value);
+        step.env(name, value);
     }
-    command.output().expect("run comment.sh")
+    step.run()
 }
 
 /// Assert the step failed naming `cause`, with a next action, having changed
@@ -702,33 +697,31 @@ fn a_second_push_that_only_rewrote_a_justification_edits_the_same_comment() {
 #[test]
 fn an_unset_second_count_behaves_as_it_did_before_there_was_one() {
     let clean = LocalGitHub::start(None);
-    let output = comment_step()
-        .env("GITHUB_REPOSITORY", REPO)
+    let mut step = comment_step();
+    step.env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &clean.address)
         .env("PR_NUMBER", PULL_REQUEST)
         .env("BODY_FILE", golden_body(0))
         .env("COUNT", "0")
         .env("GH_TOKEN", "local-token")
         .env_remove("JUSTIFICATION_EDITED_COUNT")
-        .env_remove("GITHUB_EVENT_PATH")
-        .output()
-        .expect("run comment.sh");
+        .env_remove("GITHUB_EVENT_PATH");
+    let output = step.run();
     assert!(output.status.success(), "{:?}", output.status);
     assert!(clean.writes().is_empty(), "{:#?}", clean.writes());
 
     // And an addition with no second count still posts.
     let adding = LocalGitHub::start(None);
-    let output = comment_step()
-        .env("GITHUB_REPOSITORY", REPO)
+    let mut step = comment_step();
+    step.env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &adding.address)
         .env("PR_NUMBER", PULL_REQUEST)
         .env("BODY_FILE", golden_body(1))
         .env("COUNT", "1")
         .env("GH_TOKEN", "local-token")
         .env_remove("JUSTIFICATION_EDITED_COUNT")
-        .env_remove("GITHUB_EVENT_PATH")
-        .output()
-        .expect("run comment.sh");
+        .env_remove("GITHUB_EVENT_PATH");
+    let output = step.run();
     assert!(output.status.success(), "{:?}", output.status);
     assert_eq!(adding.writes().len(), 1, "{:#?}", adding.writes());
     assert_eq!(adding.writes()[0].method, "POST");
