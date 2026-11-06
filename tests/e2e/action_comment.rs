@@ -759,7 +759,6 @@ fn an_id_the_api_answered_with_that_is_not_an_id_is_refused() {
     );
 }
 
-/// The comment step leaves no session bus behind on the host that runs it.
 #[test]
 fn the_comment_step_starts_no_session_bus() {
     let api = LocalGitHub::start(None);

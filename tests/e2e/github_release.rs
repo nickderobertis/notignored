@@ -658,7 +658,6 @@ fn an_unbounded_wait_or_interval_is_refused() {
     assert!(api.state.lock().expect("the state").requests.is_empty());
 }
 
-/// The release steps leave no session bus behind on the host that runs them.
 #[test]
 fn the_release_steps_start_no_session_bus() {
     let api = LocalGitHub::start(Some(DRAFT), true);
