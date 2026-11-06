@@ -336,6 +336,9 @@ fn a_clean_pull_request_with_no_comment_yet_is_left_alone() {
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
+
+    // After the journey's own assertions, and on its fake: each run is one read.
+    assert_starts_no_session_bus(|| comment_command(&api, 0));
 }
 
 /// A pull request that *had* suppressions and no longer does must say so, or the
@@ -759,14 +762,8 @@ fn an_id_the_api_answered_with_that_is_not_an_id_is_refused() {
     );
 }
 
-#[test]
-fn the_comment_step_starts_no_session_bus() {
-    let api = LocalGitHub::start(None);
-    assert_starts_no_session_bus(|| comment_command(&api, 0));
-}
-
 /// A journey that reaches `gh` without [`comment_step`] would leak the bus that
-/// [`the_comment_step_starts_no_session_bus`] cannot see.
+/// [`a_clean_pull_request_with_no_comment_yet_is_left_alone`] cannot see.
 ///
 /// Three sites build their own `Command` because the script refuses them before
 /// it calls `gh`.

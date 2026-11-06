@@ -372,6 +372,11 @@ fn a_draft_is_found_then_published_and_reads_back_immutable() {
     let verified = github_release(&api, &["verify-immutable", "--tag", &tag, "--wait", "0"]);
     assert!(verified.status.success(), "{}", text(&verified));
     assert!(String::from_utf8_lossy(&verified.stdout).contains("published and immutable"));
+
+    // After the journey's own assertions, and on its fake: each run is one read.
+    assert_starts_no_session_bus(|| {
+        github_release_command(&api, &["verify-immutable", "--tag", &tag, "--wait", "0"])
+    });
 }
 
 /// A published Release that reads back mutable fails the run, and says the
@@ -658,17 +663,9 @@ fn an_unbounded_wait_or_interval_is_refused() {
     assert!(api.state.lock().expect("the state").requests.is_empty());
 }
 
-#[test]
-fn the_release_steps_start_no_session_bus() {
-    let api = LocalGitHub::start(Some(DRAFT), true);
-    let tag = tag();
-    assert_starts_no_session_bus(|| {
-        github_release_command(&api, &["await-draft", "--tag", &tag, "--wait", "0"])
-    });
-}
-
 /// A journey that reaches `gh` without [`github_release_command`] would leak the
-/// bus that [`the_release_steps_start_no_session_bus`] cannot see.
+/// bus that [`a_draft_is_found_then_published_and_reads_back_immutable`] cannot
+/// see.
 ///
 /// The one other site builds its own `Command` because the script refuses its API
 /// origins before it calls `gh`.
