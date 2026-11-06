@@ -23,7 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use crate::support::{commit, git_repo, repo_root, write};
+use crate::support::{
+    assert_bash_commands, assert_starts_no_session_bus, commit, git_repo, repo_root, write,
+};
 
 /// The repository and pull request the journeys pretend to run against.
 const REPO: &str = "acme/widgets";
@@ -219,16 +221,29 @@ fn golden_body(count: usize) -> PathBuf {
     repo_root().join(format!("tests/golden/markdown/count-{count}.md"))
 }
 
-/// Run the composite's comment step against `api`.
-fn comment(api: &LocalGitHub, count: usize) -> Output {
-    require_gh();
-    let body = golden_body(count);
-    let output = Command::new("bash")
+/// The comment step, carrying what every journey that reaches `gh` must.
+///
+/// `GH_TOKEN` covers github.com only, so against this module's loopback host `gh`
+/// looks in the keyring, and on a Linux host with no session bus that autolaunches
+/// a `dbus-daemon` which outlives the test and holds an inotify instance.
+/// `disabled:` makes the lookup fail without starting one, and nothing else about
+/// the call changes.
+fn comment_step() -> Command {
+    let mut command = Command::new("bash");
+    command
         .arg(repo_root().join("scripts/action/comment.sh"))
+        .env("DBUS_SESSION_BUS_ADDRESS", "disabled:");
+    command
+}
+
+/// The step that [`comment`] runs, built and not yet started.
+fn comment_command(api: &LocalGitHub, count: usize) -> Command {
+    let mut command = comment_step();
+    command
         .env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &api.address)
         .env("PR_NUMBER", PULL_REQUEST)
-        .env("BODY_FILE", &body)
+        .env("BODY_FILE", golden_body(count))
         .env("COUNT", count.to_string())
         .env("GH_TOKEN", "local-token")
         // Insulate gh from the developer's own configuration and hosts file:
@@ -239,7 +254,14 @@ fn comment(api: &LocalGitHub, count: usize) -> Output {
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_HOST")
         .env_remove("GH_ENTERPRISE_TOKEN")
-        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("GITHUB_EVENT_PATH");
+    command
+}
+
+/// Run the composite's comment step against `api`.
+fn comment(api: &LocalGitHub, count: usize) -> Output {
+    require_gh();
+    let output = comment_command(api, count)
         .output()
         .expect("run comment.sh");
     assert!(
@@ -373,8 +395,7 @@ fn the_pull_request_number_is_read_from_the_event_payload() {
     )
     .expect("write the event payload");
 
-    let output = Command::new("bash")
-        .arg(repo_root().join("scripts/action/comment.sh"))
+    let output = comment_step()
         .env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &api.address)
         .env("GITHUB_EVENT_PATH", event.path())
@@ -435,9 +456,8 @@ fn an_unset_input_fails_with_the_cause_and_the_fix() {
 /// Run the comment step with `overrides` applied to the working environment.
 fn comment_with(api: &LocalGitHub, overrides: &[(&str, &str)]) -> Output {
     require_gh();
-    let mut command = Command::new("bash");
+    let mut command = comment_step();
     command
-        .arg(repo_root().join("scripts/action/comment.sh"))
         .env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &api.address)
         .env("PR_NUMBER", PULL_REQUEST)
@@ -680,8 +700,7 @@ fn a_second_push_that_only_rewrote_a_justification_edits_the_same_comment() {
 #[test]
 fn an_unset_second_count_behaves_as_it_did_before_there_was_one() {
     let clean = LocalGitHub::start(None);
-    let output = Command::new("bash")
-        .arg(repo_root().join("scripts/action/comment.sh"))
+    let output = comment_step()
         .env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &clean.address)
         .env("PR_NUMBER", PULL_REQUEST)
@@ -697,8 +716,7 @@ fn an_unset_second_count_behaves_as_it_did_before_there_was_one() {
 
     // And an addition with no second count still posts.
     let adding = LocalGitHub::start(None);
-    let output = Command::new("bash")
-        .arg(repo_root().join("scripts/action/comment.sh"))
+    let output = comment_step()
         .env("GITHUB_REPOSITORY", REPO)
         .env("GITHUB_API_URL", &adding.address)
         .env("PR_NUMBER", PULL_REQUEST)
@@ -740,4 +758,21 @@ fn an_id_the_api_answered_with_that_is_not_an_id_is_refused() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// The comment step leaves no session bus behind on the host that runs it.
+#[test]
+fn the_comment_step_starts_no_session_bus() {
+    let api = LocalGitHub::start(None);
+    assert_starts_no_session_bus(|| comment_command(&api, 0));
+}
+
+/// A journey that reaches `gh` without [`comment_step`] would leak the bus that
+/// [`the_comment_step_starts_no_session_bus`] cannot see.
+///
+/// Three sites build their own `Command` because the script refuses them before
+/// it calls `gh`.
+#[test]
+fn every_comment_step_that_reaches_gh_starts_from_its_builder() {
+    assert_bash_commands(include_str!("action_comment.rs"), 4, "comment_step");
 }

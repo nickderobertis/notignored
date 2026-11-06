@@ -948,6 +948,122 @@ pub fn parse_report(stdout: &[u8]) -> serde_json::Value {
     })
 }
 
+/// A recording `dbus-launch`: it appends a line to a file and exits 1, so a guard
+/// that fails has started nothing.
+#[cfg(unix)]
+struct BusRecorder {
+    dir: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl BusRecorder {
+    /// Install the stand-in, and prove a `Command` it watches really finds it, so
+    /// a broken stand-in cannot read as a `gh` that stopped asking for a bus.
+    fn install() -> BusRecorder {
+        use std::os::unix::fs::PermissionsExt;
+
+        let recorder = BusRecorder {
+            dir: tempfile::tempdir().expect("a directory for the stand-in"),
+        };
+        let stand_in = recorder.dir.path().join("dbus-launch");
+        std::fs::write(
+            &stand_in,
+            "#!/bin/sh\necho asked >> \"${0%/*}/calls\"\nexit 1\n",
+        )
+        .expect("write the stand-in");
+        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stand-in executable");
+
+        let mut probe = Command::new("bash");
+        probe.args(["-c", "dbus-launch"]);
+        recorder.watch(&mut probe);
+        probe.output().expect("run the stand-in");
+        assert_eq!(
+            recorder.calls(),
+            1,
+            "the recording dbus-launch did not run\nACTION: check that the temporary \
+             directory ({}) allows execution",
+            recorder.dir.path().display()
+        );
+        std::fs::remove_file(recorder.dir.path().join("calls")).expect("clear the proof's call");
+        recorder
+    }
+
+    /// Put the stand-in first on `command`'s PATH, and hide any running user bus,
+    /// which `gh` would talk to rather than ask for a new one.
+    fn watch(&self, command: &mut Command) {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let entries =
+            std::iter::once(self.dir.path().to_path_buf()).chain(std::env::split_paths(&inherited));
+        command
+            .env(
+                "PATH",
+                std::env::join_paths(entries).expect("a PATH holding the stand-in"),
+            )
+            .env_remove("XDG_RUNTIME_DIR");
+    }
+
+    /// How many times the stand-in has been invoked.
+    fn calls(&self) -> usize {
+        std::fs::read_to_string(self.dir.path().join("calls"))
+            .map_or(0, |calls| calls.lines().count())
+    }
+}
+
+/// The guard on an environment handed to the real `gh`: `step` must succeed and
+/// never ask for a session bus.
+///
+/// The control runs first, on a copy with the variable removed, so this cannot
+/// pass because `gh` never asked. A `gh` that does not ask there (absent, off
+/// Linux, or a later release) cannot leak a bus, so the guard skips and says so.
+#[cfg(unix)]
+pub fn assert_starts_no_session_bus(step: impl Fn() -> Command) {
+    let recorder = BusRecorder::install();
+
+    let mut control = step();
+    recorder.watch(&mut control);
+    control
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .output()
+        .expect("run the control");
+    let asked = recorder.calls();
+    if asked == 0 {
+        eprintln!(
+            "skipped: with DBUS_SESSION_BUS_ADDRESS removed this host's gh still asked for no \
+             session bus, so none can leak here"
+        );
+        return;
+    }
+
+    let mut guarded = step();
+    recorder.watch(&mut guarded);
+    let output = guarded.output().expect("run the guarded step");
+    assert!(
+        output.status.success(),
+        "the guarded step failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        recorder.calls(),
+        asked,
+        "gh asked for a session bus, which leaks a dbus-daemon on a host with none\nACTION: set \
+         DBUS_SESSION_BUS_ADDRESS=disabled: on the Command this step is built from"
+    );
+}
+
+/// Fail when a module's `source` spawns bash at a new site: a journey that reaches
+/// `gh` has to start from `builder`, where the guard can see it.
+#[cfg(unix)]
+pub fn assert_bash_commands(source: &str, expected: usize, builder: &str) {
+    assert_eq!(
+        source.matches("Command::new(\"bash\")").count(),
+        expected,
+        "this module's count of bash Commands moved\nACTION: start a new step from {builder}(); \
+         only a site the script refuses before it calls gh may build its own, and then update \
+         this count"
+    );
+}
+
 #[path = "../support/bash.rs"]
 mod bash;
 pub use bash::bash_program;
