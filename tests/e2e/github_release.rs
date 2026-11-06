@@ -289,8 +289,6 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
     stream.flush()
 }
 
-/// The step that [`github_release`] runs, built and not yet started.
-///
 /// `GH_TOKEN` covers github.com only, so against this module's loopback host `gh`
 /// looks in the keyring, and on a Linux host with no session bus that autolaunches
 /// a `dbus-daemon` which outlives the test and holds an inotify instance.

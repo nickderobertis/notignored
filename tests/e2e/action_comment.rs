@@ -236,7 +236,6 @@ fn comment_step() -> Command {
     command
 }
 
-/// The step that [`comment`] runs, built and not yet started.
 fn comment_command(api: &LocalGitHub, count: usize) -> Command {
     let mut command = comment_step();
     command

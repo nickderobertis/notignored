@@ -965,6 +965,7 @@ impl BusRecorder {
         let recorder = BusRecorder {
             dir: tempfile::tempdir().expect("a directory for the stand-in"),
         };
+        // llmlint: ignore-block[e2e_not_mocked] the real dbus-launch starts the daemon this guard exists to keep off the host, so it is the one boundary that cannot be real here. The real gh and the real script run unchanged and decide by themselves whether to call it.
         let stand_in = recorder.dir.path().join("dbus-launch");
         std::fs::write(
             &stand_in,
@@ -973,6 +974,7 @@ impl BusRecorder {
         .expect("write the stand-in");
         std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755))
             .expect("make the stand-in executable");
+        // llmlint: ignore-end[e2e_not_mocked]
 
         let mut probe = Command::new("bash");
         probe.args(["-c", "dbus-launch"]);
@@ -1003,10 +1005,12 @@ impl BusRecorder {
             .env_remove("XDG_RUNTIME_DIR");
     }
 
-    /// How many times the stand-in has been invoked.
     fn calls(&self) -> usize {
-        std::fs::read_to_string(self.dir.path().join("calls"))
-            .map_or(0, |calls| calls.lines().count())
+        match std::fs::read_to_string(self.dir.path().join("calls")) {
+            Ok(calls) => calls.lines().count(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => panic!("cannot read the stand-in's record: {error}"),
+        }
     }
 }
 
