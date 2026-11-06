@@ -26,7 +26,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use crate::support::{cargo_version, repo_root};
+use crate::support::{
+    assert_bash_commands, assert_starts_no_session_bus, cargo_version, repo_root, GhStep,
+};
 
 const REPO: &str = "acme/widgets";
 const RELEASE_ID: u64 = 4242;
@@ -287,6 +289,29 @@ fn serve(stream: &mut TcpStream, state: &Mutex<State>) -> std::io::Result<()> {
     stream.flush()
 }
 
+/// `GH_TOKEN` covers github.com only, so against this module's loopback host `gh`
+/// looks in the keyring, and on a Linux host with no session bus that autolaunches
+/// a `dbus-daemon` which outlives the test and holds an inotify instance.
+/// `disabled:` makes the lookup fail without starting one, and nothing else about
+/// the call changes.
+fn github_release_command(api: &LocalGitHub, args: &[&str]) -> GhStep {
+    let mut command = Command::new("bash");
+    command
+        .arg(repo_root().join("scripts/github-release.sh"))
+        .args(args)
+        .env("GITHUB_REPOSITORY", REPO)
+        .env("GITHUB_API_URL", &api.address)
+        .env("GH_TOKEN", "local-token")
+        .env("DBUS_SESSION_BUS_ADDRESS", "disabled:")
+        .env("GH_CONFIG_DIR", repo_root().join("target/gh-config"))
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .env("NO_COLOR", "1")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_HOST")
+        .env_remove("GH_ENTERPRISE_TOKEN");
+    GhStep::new(command)
+}
+
 fn github_release(api: &LocalGitHub, args: &[&str]) -> Output {
     let found = Command::new("gh").arg("--version").output();
     assert!(
@@ -294,20 +319,7 @@ fn github_release(api: &LocalGitHub, args: &[&str]) -> Output {
         "the GitHub CLI is not installed\nACTION: install gh (https://cli.github.com) — \
          release.yml calls it, and every GitHub-hosted runner ships it"
     );
-    Command::new("bash")
-        .arg(repo_root().join("scripts/github-release.sh"))
-        .args(args)
-        .env("GITHUB_REPOSITORY", REPO)
-        .env("GITHUB_API_URL", &api.address)
-        .env("GH_TOKEN", "local-token")
-        .env("GH_CONFIG_DIR", repo_root().join("target/gh-config"))
-        .env("GH_NO_UPDATE_NOTIFIER", "1")
-        .env("NO_COLOR", "1")
-        .env_remove("GITHUB_TOKEN")
-        .env_remove("GH_HOST")
-        .env_remove("GH_ENTERPRISE_TOKEN")
-        .output()
-        .expect("run github-release.sh")
+    github_release_command(api, args).run()
 }
 
 fn text(output: &Output) -> String {
@@ -358,6 +370,11 @@ fn a_draft_is_found_then_published_and_reads_back_immutable() {
     let verified = github_release(&api, &["verify-immutable", "--tag", &tag, "--wait", "0"]);
     assert!(verified.status.success(), "{}", text(&verified));
     assert!(String::from_utf8_lossy(&verified.stdout).contains("published and immutable"));
+
+    // After the journey's own assertions, and on its fake: each run is one read.
+    assert_starts_no_session_bus(|| {
+        github_release_command(&api, &["verify-immutable", "--tag", &tag, "--wait", "0"])
+    });
 }
 
 /// A published Release that reads back mutable fails the run, and says the
@@ -642,4 +659,19 @@ fn an_unbounded_wait_or_interval_is_refused() {
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
     assert!(String::from_utf8_lossy(&output.stderr).contains("publish does not wait"));
     assert!(api.state.lock().expect("the state").requests.is_empty());
+}
+
+/// A journey that reaches `gh` without [`github_release_command`] would leak the
+/// bus that [`a_draft_is_found_then_published_and_reads_back_immutable`] cannot
+/// see.
+///
+/// The one other site builds its own `Command` because the script refuses its API
+/// origins before it calls `gh`.
+#[test]
+fn every_release_step_that_reaches_gh_starts_from_its_builder() {
+    assert_bash_commands(
+        include_str!("github_release.rs"),
+        2,
+        "github_release_command",
+    );
 }

@@ -10,6 +10,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(unix)]
+use std::process::Output;
 
 use assert_cmd::cargo::CommandCargoExt;
 
@@ -946,6 +948,160 @@ pub fn parse_report(stdout: &[u8]) -> serde_json::Value {
             String::from_utf8_lossy(stdout)
         )
     })
+}
+
+/// A recording `dbus-launch`: it appends a line to a file and exits 1, so a guard
+/// that fails has started nothing.
+#[cfg(unix)]
+struct BusRecorder {
+    dir: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl BusRecorder {
+    /// Install the stand-in, and prove a `Command` it watches really finds it, so
+    /// a broken stand-in cannot read as a `gh` that stopped asking for a bus.
+    fn install() -> BusRecorder {
+        use std::os::unix::fs::PermissionsExt;
+
+        let recorder = BusRecorder {
+            dir: tempfile::tempdir().expect("a directory for the stand-in"),
+        };
+        // llmlint: ignore-block[e2e_not_mocked] the real dbus-launch starts the daemon this guard exists to keep off the host, so it is the one boundary that cannot be real here. The real gh and the real script run unchanged and decide by themselves whether to call it.
+        let stand_in = recorder.dir.path().join("dbus-launch");
+        std::fs::write(
+            &stand_in,
+            "#!/bin/sh\necho asked >> \"${0%/*}/calls\"\nexit 1\n",
+        )
+        .expect("write the stand-in");
+        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755))
+            .expect("make the stand-in executable");
+        // llmlint: ignore-end[e2e_not_mocked]
+
+        let mut probe = Command::new("bash");
+        probe.args(["-c", "dbus-launch"]);
+        recorder.watch(&mut probe);
+        probe.output().expect("run the stand-in");
+        assert_eq!(
+            recorder.calls(),
+            1,
+            "the recording dbus-launch did not run\nACTION: check that the temporary \
+             directory ({}) allows execution",
+            recorder.dir.path().display()
+        );
+        std::fs::remove_file(recorder.dir.path().join("calls")).expect("clear the proof's call");
+        recorder
+    }
+
+    /// Put the stand-in first on `command`'s PATH, and hide any running user bus,
+    /// which `gh` would talk to rather than ask for a new one.
+    fn watch(&self, command: &mut Command) {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let entries =
+            std::iter::once(self.dir.path().to_path_buf()).chain(std::env::split_paths(&inherited));
+        command
+            .env(
+                "PATH",
+                std::env::join_paths(entries).expect("a PATH holding the stand-in"),
+            )
+            .env_remove("XDG_RUNTIME_DIR");
+    }
+
+    fn calls(&self) -> usize {
+        match std::fs::read_to_string(self.dir.path().join("calls")) {
+            Ok(calls) => calls.lines().count(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => panic!("cannot read the stand-in's record: {error}"),
+        }
+    }
+}
+
+/// A step that can reach the real `gh`, with the stand-in first on its PATH from
+/// the moment it is built, so no way of starting it can launch a real bus.
+#[cfg(unix)]
+pub struct GhStep {
+    command: Command,
+    recorder: BusRecorder,
+}
+
+#[cfg(unix)]
+impl GhStep {
+    pub fn new(mut command: Command) -> GhStep {
+        let recorder = BusRecorder::install();
+        recorder.watch(&mut command);
+        GhStep { command, recorder }
+    }
+
+    /// Run the step, and fail if `gh` asked for a session bus while it ran.
+    pub fn run(mut self) -> Output {
+        let output = self.command.output().expect("run the step");
+        assert_eq!(
+            self.recorder.calls(),
+            0,
+            "gh asked for a session bus, which leaks a dbus-daemon on a host with none\nACTION: \
+             set DBUS_SESSION_BUS_ADDRESS=disabled: on the Command this step is built from"
+        );
+        output
+    }
+}
+
+#[cfg(unix)]
+impl std::ops::Deref for GhStep {
+    type Target = Command;
+
+    fn deref(&self) -> &Command {
+        &self.command
+    }
+}
+
+#[cfg(unix)]
+impl std::ops::DerefMut for GhStep {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.command
+    }
+}
+
+/// The positive control on an environment handed to the real `gh`: `step` must
+/// ask for a bus once the variable is gone, and must succeed without one while it
+/// is set.
+///
+/// The control is what stops [`GhStep::run`]'s zero from passing because `gh`
+/// never asked. A `gh` that does not ask (absent, off Linux, or a later release)
+/// cannot leak a bus, so the guard skips and says so.
+#[cfg(unix)]
+pub fn assert_starts_no_session_bus(step: impl Fn() -> GhStep) {
+    let mut control = step();
+    control
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .output()
+        .expect("run the control");
+    if control.recorder.calls() == 0 {
+        eprintln!(
+            "skipped: with DBUS_SESSION_BUS_ADDRESS removed this host's gh still asked for no \
+             session bus, so none can leak here"
+        );
+        return;
+    }
+
+    let output = step().run();
+    assert!(
+        output.status.success(),
+        "the guarded step failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Fail when a module's `source` spawns bash at a new site: a journey that reaches
+/// `gh` has to start from `builder`, where the guard can see it.
+#[cfg(unix)]
+pub fn assert_bash_commands(source: &str, expected: usize, builder: &str) {
+    assert_eq!(
+        source.matches("Command::new(\"bash\")").count(),
+        expected,
+        "this module's count of bash Commands moved\nACTION: start a new step from {builder}(); \
+         only a site the script refuses before it calls gh may build its own, and then update \
+         this count"
+    );
 }
 
 #[path = "../support/bash.rs"]
