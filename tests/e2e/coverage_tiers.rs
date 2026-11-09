@@ -280,7 +280,7 @@ fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
     let dir = package.path();
     let store = dir.join("target/coverage-profiles");
     let loose = dir.join("target/llvm-cov-target");
-    let lock = store.join(".lock");
+    let lock = store.join(".lock-pid");
 
     // A live holder: a bounded wait gives up naming it.
     let first = dir.join("hold-1");
@@ -299,7 +299,7 @@ fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
         "a held lock was not waited on and then refused by name:\n{said}"
     );
     assert!(
-        lock.is_dir(),
+        lock.is_file(),
         "the refused run removed a lock it never held"
     );
 
@@ -341,7 +341,7 @@ fn a_held_lock_is_waited_on_and_an_abandoned_one_is_taken_over() {
         .iter()
         .filter_map(|path| path.file_name().map(std::ffi::OsStr::to_os_string))
         .collect();
-    assert!(lock.is_dir(), "the killed run's lock is already gone");
+    assert!(lock.is_file(), "the killed run's lock is already gone");
 
     let taken = coverage(dir, &["tier", "unit", "--lib"]);
     assert!(
@@ -403,7 +403,7 @@ fn contenders_for_an_abandoned_lock_take_it_one_at_a_time() {
     let package = scratch_package();
     let dir = package.path();
     let store = dir.join("target/coverage-profiles");
-    let lock = store.join(".lock");
+    let lock = store.join(".lock-pid");
 
     // One uncontended held run: it builds the binaries, so the contenders below
     // race only for the lock, and its profile count is what one run files.
@@ -433,7 +433,7 @@ fn contenders_for_an_abandoned_lock_take_it_one_at_a_time() {
     wait_until("the killed run's test wrote its profile", || {
         abandoned.join("finished").exists() && profiles_in(&loose).len() > before
     });
-    assert!(lock.is_dir(), "the killed run's lock is already gone");
+    assert!(lock.is_file(), "the killed run's lock is already gone");
 
     let _release_all = ReleaseAll(
         (0..CONTENDERS)
@@ -503,7 +503,7 @@ fn contenders_for_an_abandoned_lock_take_it_one_at_a_time() {
                 .collect::<Vec<_>>()
         );
         let (name, hold, child) = &mut contenders[now[0]];
-        let owner = std::fs::read_to_string(lock.join("pid")).unwrap_or_default();
+        let owner = std::fs::read_to_string(&lock).unwrap_or_default();
         assert_eq!(
             owner.trim(),
             child.id().to_string(),
@@ -575,9 +575,65 @@ fn the_script_refuses_what_it_cannot_measure() {
         );
     }
     assert!(
-        !dir.join("target/coverage-profiles/.lock").exists(),
+        !dir.join("target/coverage-profiles/.lock-pid").exists(),
         "a refused run left a lock behind"
     );
+}
+
+/// Exclusion has to come from the shell's own atomic create, not from `mkdir`
+/// refusing a directory that exists: uutils' `mkdir`, the default on current
+/// Ubuntu, can exit 0 for several racing callers. The timing of that race cannot
+/// be forced, so a `mkdir` that always reports success stands in for its outcome,
+/// and a run that trusted it would start beside the held one instead of queueing.
+#[test]
+fn a_held_lock_excludes_a_second_run_even_when_mkdir_reports_success() {
+    let package = scratch_package();
+    let dir = package.path();
+    write(
+        dir,
+        "shim/mkdir",
+        "#!/usr/bin/env bash\nPATH=\"${PATH#*:}\" exec mkdir -p \"$@\"\n",
+    );
+    let shim = dir.join("shim");
+    std::fs::set_permissions(
+        shim.join("mkdir"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("make the mkdir shim executable");
+    let path = std::env::join_paths(std::iter::once(shim).chain(std::env::split_paths(
+        &std::env::var_os("PATH").expect("PATH is set"),
+    )))
+    .expect("join PATH");
+
+    let hold = dir.join("hold");
+    let _release = ReleaseAll(vec![hold.clone()]);
+    std::fs::create_dir_all(&hold).expect("create the hold directory");
+    let mut holder = isolated(Command::new(bash_program()), dir)
+        .env("PATH", &path)
+        .env("HOLD_DIR", &hold)
+        .args(["scripts/coverage.sh", "tier", "holder", "--test", "hold"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("start the held tier");
+    wait_until("the held tier's test started", || {
+        hold.join("started").exists()
+    });
+
+    let second = isolated(Command::new(bash_program()), dir)
+        .env("PATH", &path)
+        .env("NOTIGNORED_COVERAGE_LOCK_WAIT", "2")
+        .args(["scripts/coverage.sh", "tier", "unit", "--lib"])
+        .output()
+        .expect("run the second tier");
+    let said = text(&second);
+    assert!(
+        !second.status.success() && said.contains(&format!("pid {} has held", holder.id())),
+        "a second run was granted a lock another run holds:\n{said}"
+    );
+
+    write(&hold, "release", "");
+    assert!(holder.wait().expect("wait for the holder").success());
 }
 
 /// The scratch package as an Nx workspace: the unit tier is the root project and
