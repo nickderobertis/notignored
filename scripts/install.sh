@@ -16,6 +16,11 @@
 # GitHub only — never to a mirror, whoever runs it.
 # Set GITHUB_TOKEN to lift the GitHub API rate limit when resolving "latest".
 #
+# A server error, timeout or dropped connection is retried with a doubling delay.
+# NOTIGNORED_DOWNLOAD_ATTEMPTS (default 5), NOTIGNORED_DOWNLOAD_FIRST_DELAY (2s),
+# NOTIGNORED_DOWNLOAD_MAX_DELAY (16s) and NOTIGNORED_DOWNLOAD_TIMEOUT (120s per
+# attempt) tune that; a 404 or other permanent failure is never retried.
+#
 # Covers Linux (x86_64, arm64), Apple Silicon macOS (arm64; Intel macOS is no
 # longer supported) and Windows x86_64 under a POSIX shell
 # (Git Bash / MSYS / WSL). For native Windows PowerShell or an unpublished
@@ -72,6 +77,23 @@ Usage: install.sh [--version <tag>] [--to <dir>]
 EOF
 }
 
+# These reach shell arithmetic, so hold them to plain decimal: a leading zero is
+# octal there, and an unbounded length overflows it.
+download_setting() {
+    case "$2" in
+        0) [ "$3" = 0 ] || err "$1 must be at least $3 (got 0)" ;;
+        ""|0*|*[!0-9]*|?????*) err "$1 must be a whole number from $3 to 9999 (got $2); unset it to use the default" ;;
+    esac
+}
+DOWNLOAD_ATTEMPTS="${NOTIGNORED_DOWNLOAD_ATTEMPTS:-5}"
+DOWNLOAD_FIRST_DELAY="${NOTIGNORED_DOWNLOAD_FIRST_DELAY:-2}"
+DOWNLOAD_MAX_DELAY="${NOTIGNORED_DOWNLOAD_MAX_DELAY:-16}"
+DOWNLOAD_TIMEOUT="${NOTIGNORED_DOWNLOAD_TIMEOUT:-120}"
+download_setting NOTIGNORED_DOWNLOAD_ATTEMPTS "$DOWNLOAD_ATTEMPTS" 1
+download_setting NOTIGNORED_DOWNLOAD_FIRST_DELAY "$DOWNLOAD_FIRST_DELAY" 0
+download_setting NOTIGNORED_DOWNLOAD_MAX_DELAY "$DOWNLOAD_MAX_DELAY" 0
+download_setting NOTIGNORED_DOWNLOAD_TIMEOUT "$DOWNLOAD_TIMEOUT" 1
+
 VERSION="${NOTIGNORED_VERSION:-}"
 INSTALL_DIR="${NOTIGNORED_INSTALL_DIR:-$HOME/.local/bin}"
 [ -n "$INSTALL_DIR" ] || err "install directory is empty (set --to <dir> or NOTIGNORED_INSTALL_DIR)"
@@ -112,7 +134,11 @@ detect_target() {
     TARGET="$cpu-$suffix"
 }
 
-fetch() {
+# One download attempt, with no retry of its own. Returns the downloader's verdict
+# and leaves FETCH_STATUS (the final HTTP status, empty if there was none),
+# FETCH_DETAIL (what went wrong, for a person) and FETCH_TRANSIENT (1 when another
+# attempt could succeed).
+download_once() {
     # GITHUB_TOKEN exists only to lift api.github.com's rate limit, so it is sent
     # to that host and nowhere else. Attaching it to whatever BASE_URL happens to
     # be would hand the user's credential to any mirror they were talked into.
@@ -120,17 +146,69 @@ fetch() {
     case "$1" in
         https://api.github.com/*) auth="${GITHUB_TOKEN:-}" ;;
     esac
-    if have curl; then curl -fsSL ${auth:+-H "Authorization: Bearer $auth"} "$1" -o "$2"
-    elif have wget; then wget -qO "$2" ${auth:+--header="Authorization: Bearer $auth"} "$1"
-    else err "neither curl nor wget is available; install one and re-run the installer"
+    FETCH_STATUS=""
+    FETCH_DETAIL=""
+    FETCH_TRANSIENT=0
+    code=0
+    if have curl; then
+        FETCH_STATUS="$(curl -fsSL --max-time "$DOWNLOAD_TIMEOUT" -w '%{http_code}' \
+            ${auth:+-H "Authorization: Bearer $auth"} "$1" -o "$2" 2>"$WORK/fetch.err")" || code=$?
+        [ "$code" -ne 0 ] || return 0
+        FETCH_DETAIL="$(cat "$WORK/fetch.err")"
+        # Timeouts, DNS and connect failures, a reset or truncated transfer, an
+        # interrupted TLS handshake or HTTP/2 stream.
+        case "$code" in 6|7|16|18|28|35|52|55|56|92) FETCH_TRANSIENT=1 ;; esac
+    elif have wget; then
+        # -T bounds each stall rather than the whole transfer; wget has no total
+        # limit, and it is only the fallback for a host without curl.
+        wget -q -S -t 1 -T "$DOWNLOAD_TIMEOUT" -O "$2" \
+            ${auth:+--header="Authorization: Bearer $auth"} "$1" 2>"$WORK/fetch.err" || code=$?
+        [ "$code" -ne 0 ] || return 0
+        FETCH_STATUS="$(sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9]*\).*/\1/p' "$WORK/fetch.err" | sed -n '$p')"
+        FETCH_DETAIL="wget exited $code"
+        # GNU wget's "network failure": timeouts, refused and dropped connections.
+        [ "$code" -ne 4 ] || FETCH_TRANSIENT=1
+    else
+        err "neither curl nor wget is available; install one and re-run the installer"
     fi
+    case "$FETCH_STATUS" in
+        # A 2xx here is a transfer cut off after its headers: the transport verdict stands.
+        ""|000|2[0-9][0-9]) ;;
+        408|429|5[0-9][0-9]) FETCH_TRANSIENT=1; FETCH_DETAIL="HTTP $FETCH_STATUS" ;;
+        *) FETCH_TRANSIENT=0; FETCH_DETAIL="HTTP $FETCH_STATUS" ;;
+    esac
+    return 1
+}
+
+# fetch <url> <dest> <what it is> <what to do on failure>
+#
+# GitHub's release hosts return 5xx and drop connections often enough to fail a
+# consumer's check on unrelated work, so a transient failure is retried with a
+# doubling, capped delay. Anything else — a 404 above all — cannot get better by
+# waiting and fails on its first attempt. The checksum goes through here too:
+# retrying its download never weakens its verification, which stays single-shot.
+fetch() {
+    attempt=1
+    delay="$DOWNLOAD_FIRST_DELAY"
+    [ "$delay" -le "$DOWNLOAD_MAX_DELAY" ] || delay="$DOWNLOAD_MAX_DELAY"
+    while :; do
+        if download_once "$1" "$2"; then return 0; fi
+        [ "$FETCH_STATUS" != 404 ] || err "$3 not found: $1 (HTTP 404); $4"
+        [ "$FETCH_TRANSIENT" = 1 ] || err "cannot fetch $3 from $1 ($FETCH_DETAIL); $4"
+        [ "$attempt" -lt "$DOWNLOAD_ATTEMPTS" ] \
+            || err "cannot fetch $3 from $1 after $attempt attempts (last error: $FETCH_DETAIL); $4"
+        say "fetching $3 failed on attempt $attempt of $DOWNLOAD_ATTEMPTS ($FETCH_DETAIL); retrying in ${delay}s"
+        sleep "$delay"
+        attempt=$((attempt + 1))
+        delay=$((delay * 2))
+        [ "$delay" -le "$DOWNLOAD_MAX_DELAY" ] || delay="$DOWNLOAD_MAX_DELAY"
+    done
 }
 
 resolve_latest() {
     api="$API_URL/repos/$REPO/releases/latest"
     tmp="$WORK/latest.json"
-    fetch "$api" "$tmp" \
-        || err "cannot reach the GitHub API; re-run with --version vX.Y.Z to skip the lookup"
+    fetch "$api" "$tmp" "the latest release of $REPO" "re-run with --version vX.Y.Z to skip the lookup"
     VERSION="$(sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' "$tmp" | head -n1)"
     [ -n "$VERSION" ] \
         || err "no published release for $REPO yet; install from source: cargo install --git https://github.com/$REPO --locked"
@@ -170,10 +248,10 @@ esac
 ASSET="$BIN-$VERSION-$TARGET"
 ARCHIVE="$ASSET.$EXT"
 CHECKSUM="$ASSET.sha256"
-fetch "$BASE_URL/$VERSION/$ARCHIVE" "$WORK/$ARCHIVE" \
-    || err "cannot download $ARCHIVE — check that release $VERSION publishes this target"
-fetch "$BASE_URL/$VERSION/$CHECKSUM" "$WORK/$CHECKSUM" \
-    || err "cannot download the checksum for $ARCHIVE; refusing to install unverified — retry, or install from source: cargo install --git https://github.com/$REPO --locked"
+fetch "$BASE_URL/$VERSION/$ARCHIVE" "$WORK/$ARCHIVE" "archive $ARCHIVE" \
+    "check that release $VERSION publishes this target, or re-run the installer"
+fetch "$BASE_URL/$VERSION/$CHECKSUM" "$WORK/$CHECKSUM" "the checksum for $ARCHIVE" \
+    "refusing to install unverified — retry, or install from source: cargo install --git https://github.com/$REPO --locked"
 
 expected="$(cut -d' ' -f1 < "$WORK/$CHECKSUM")"
 actual="$(sha256_of "$WORK/$ARCHIVE")" \

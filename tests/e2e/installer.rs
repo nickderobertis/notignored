@@ -41,7 +41,7 @@ pub(crate) struct Release {
     _tempdir: tempfile::TempDir,
     _server: Option<Server>,
     pub(crate) base_url: String,
-    tag: String,
+    pub(crate) tag: String,
 }
 
 /// A minimal static-file HTTP server, in-process.
@@ -98,15 +98,12 @@ fn serve(root: &Path) -> (Server, String) {
     )
 }
 
-/// Answer one request: 200 with the file's bytes, or 404. Every request is
-/// appended to `<root>/../requests.log` so a test can assert on what was sent.
-fn serve_one(mut stream: TcpStream, root: &Path) {
+/// Read one request's head off an accepted socket: the head, and its path.
+pub(crate) fn read_request(stream: &TcpStream) -> Option<(String, String)> {
     // On BSD-derived systems (macOS) an accepted socket inherits the listener's
     // O_NONBLOCK, so the read below would return WouldBlock and answer nothing;
     // on Linux it would not. Set it explicitly rather than depend on which.
-    if stream.set_nonblocking(false).is_err() {
-        return;
-    }
+    stream.set_nonblocking(false).ok()?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
 
     // One reader for the whole head: a second BufReader would discard whatever
@@ -128,7 +125,7 @@ fn serve_one(mut stream: TcpStream, root: &Path) {
         }
     }
     if head.is_empty() {
-        return;
+        return None;
     }
     let path = head
         .lines()
@@ -136,6 +133,15 @@ fn serve_one(mut stream: TcpStream, root: &Path) {
         .and_then(|line| line.split_whitespace().nth(1))
         .unwrap_or("/")
         .to_string();
+    Some((head, path))
+}
+
+/// Answer one request: 200 with the file's bytes, or 404. Every request is
+/// appended to `<root>/../requests.log` so a test can assert on what was sent.
+fn serve_one(stream: TcpStream, root: &Path) {
+    let Some((head, path)) = read_request(&stream) else {
+        return;
+    };
 
     if let Some(log) = root.parent().map(|parent| parent.join("requests.log")) {
         let _ = fs::OpenOptions::new()
@@ -145,6 +151,11 @@ fn serve_one(mut stream: TcpStream, root: &Path) {
             .map(|mut file| file.write_all(head.as_bytes()));
     }
 
+    respond_from(stream, root, &path);
+}
+
+/// Send the file `path` names under `root`, or a 404.
+pub(crate) fn respond_from(mut stream: TcpStream, root: &Path, path: &str) {
     let relative = path.trim_start_matches('/');
     let body = if relative
         .split('/')
@@ -173,7 +184,7 @@ fn serve_one(mut stream: TcpStream, root: &Path) {
     let _ = stream.flush();
 }
 
-fn host_target() -> &'static str {
+pub(crate) fn host_target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("macos", _) => {
@@ -551,13 +562,13 @@ fn a_missing_release_asset_names_the_release_that_lacks_it() {
 /// "this tool is missing" boundary, with no stubbing.
 const CORE_TOOLS: &[&str] = &[
     "sh", "tar", "gzip", "gunzip", "uname", "mktemp", "rm", "find", "head", "cut", "mkdir",
-    "install", "cp", "chmod", "printf", "sed", "tr", "cat",
+    "install", "cp", "chmod", "printf", "sed", "tr", "cat", "sleep",
 ];
 
 /// SHA-256 tools `install.sh` knows how to use; whichever the host has is enough.
-const HASHERS: &[&str] = &["sha256sum", "shasum", "openssl"];
+pub(crate) const HASHERS: &[&str] = &["sha256sum", "shasum", "openssl"];
 
-fn path_with(extra: &[&str]) -> tempfile::TempDir {
+pub(crate) fn path_with(extra: &[&str]) -> tempfile::TempDir {
     let bin = tempfile::tempdir().unwrap();
     for tool in CORE_TOOLS.iter().chain(extra) {
         if let Ok(found) = which(tool) {
