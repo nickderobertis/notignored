@@ -335,6 +335,12 @@ sweep's `github-release` job install from the live Release. The live Release ins
 staged archives before publication. The ZIP branch needs `unzip` under a POSIX
 shell, which the Windows image lacks, so Windows keeps `cargo install`.
 
+**`install.sh` retries inside its own `fetch`, by kind of failure.** A 5xx, 408,
+429, timeout or dropped connection is retried with a doubling, capped delay; any
+other answer, a 404 above all, fails on its first attempt, and verifying the
+checksum is never retried. `tests/e2e/install_retry.rs` proves it against a
+server that really fails, each run under its own deadline.
+
 **The install is the propagation probe, and the only one.** A publish is not one
 event: PyPI's JSON API answers while `pip install` still resolves through a simple
 index that converges later and per CDN edge, so a wait step polling that API said
