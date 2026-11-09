@@ -45,8 +45,8 @@ readonly COV_DIR="$TARGET_DIR/llvm-cov-target"
 # Each tier's directory under this is its Nx `test` target's declared output;
 # tests/e2e/nx_workspace.rs holds the two to the same path.
 readonly STORE="$ROOT/target/coverage-profiles"
-readonly LOCK="$STORE/.lock"
-readonly RECLAIM="$STORE/.lock-reclaim"
+readonly LOCK="$STORE/.lock-pid"
+readonly RECLAIM="$STORE/.reclaim-pid"
 # Long enough for the slowest tier to finish ahead of a queued one.
 readonly LOCK_WAIT_SECONDS="${NOTIGNORED_COVERAGE_LOCK_WAIT:-3600}"
 
@@ -78,17 +78,24 @@ valid_project() {
   esac
 }
 
-write_pid() {
-  echo "$$" >"$1/pid"
+# The atomic test-and-set: create the file `$1`, holding this run's pid, only if
+# nothing is there. noclobber is the shell's own O_EXCL open. mkdir is not a
+# substitute: uutils' — the default from Ubuntu 25.10 — can exit 0 for several
+# callers racing on one path, which granted this lock to two runs at once.
+claim() {
+  (
+    set -o noclobber
+    echo "$$" >"$1"
+  ) 2>/dev/null
 }
 
-# The process id a lock directory records, or nothing when it records none a
-# probe could trust — a holder that has made the directory but not yet written
-# to it, or a torn write — which is then waited on like a live one, never taken
-# over on a guess.
+# The process id a lock file records, or nothing when it records none a probe
+# could trust — a holder that has created the file but not yet written to it, or
+# a torn write — which is then waited on like a live one, never taken over on a
+# guess.
 holder_of() {
   local holder
-  holder="$(cat "$1/pid" 2>/dev/null || true)"
+  holder="$(cat "$1" 2>/dev/null || true)"
   case "$holder" in
   "" | 0* | *[!0-9]*) holder="" ;;
   esac
@@ -97,30 +104,24 @@ holder_of() {
 
 # Reclaim the lock from `$1`, the dead holder this contender saw. Every
 # contender that queued behind the same dead run sees the same pid, so the
-# decision and the removal happen under a second mkdir mutex, and the holder is
+# decision and the removal happen under a second claimed mutex, and the holder is
 # read again inside it: a contender that lost the race finds a live holder — or
 # no lock at all — and removes nothing. Returns non-zero when the mutex is busy,
 # and sets `took_over` to the dead pid when this contender removed its lock.
 took_over=""
 reclaim() {
   local seen="$1"
-  mkdir "$RECLAIM" 2>/dev/null || return 1
-  write_pid "$RECLAIM" || {
-    # Best effort: the refusal below names the directory either way.
-    rm -rf "$RECLAIM" 2>/dev/null || true
-    die "could not record this run in $RECLAIM" \
-      "check that $STORE is writable by you, delete $RECLAIM if it remains, then re-run"
-  }
+  claim "$RECLAIM" || return 1
   if [ "$(holder_of "$LOCK")" = "$seen" ]; then
-    rm -rf "$LOCK" || {
-      # Best effort: the refusal below names both directories either way.
-      rm -rf "$RECLAIM" 2>/dev/null || true
+    rm -f "$LOCK" || {
+      # Best effort: the refusal below names both files either way.
+      rm -f "$RECLAIM" 2>/dev/null || true
       die "could not remove the stale lock $LOCK" \
         "check that $STORE is writable by you, or delete $LOCK and $RECLAIM, then re-run"
     }
     took_over="$seen"
   fi
-  must "release $RECLAIM" rm -rf "$RECLAIM"
+  must "release $RECLAIM" rm -f "$RECLAIM"
 }
 
 # A reclaim mutex is held for a moment. One whose holder has exited was
@@ -138,11 +139,10 @@ refuse_dead_reclaim() {
 # Release the lock on exit only while it is still this run's.
 release() {
   [ "$(holder_of "$LOCK")" = "$$" ] || return 0
-  rm -rf "$LOCK" || echo "coverage: could not remove $LOCK; delete it before the next run" >&2
+  rm -f "$LOCK" || echo "coverage: could not remove $LOCK; delete it before the next run" >&2
 }
 
-# mkdir is the one atomic test-and-set every platform's shell has. A lock whose
-# holder is gone — a run killed before its trap — is reclaimed, not waited on;
+# A lock whose holder is gone — a run killed before its trap — is reclaimed, not waited on;
 # one whose holder is alive is waited on, for a bounded time.
 # llmlint: ignore-block[tool_output_is_signal] a run that pauses behind another,
 # or overrides a dead run's lock, says so once on stderr: silence would read as a
@@ -150,12 +150,12 @@ release() {
 lock() {
   must "create $STORE" mkdir -p "$STORE"
   local waited=0 holder
-  until mkdir "$LOCK" 2>/dev/null; do
+  until claim "$LOCK"; do
     # Gone already — released between that attempt and this look — is
     # contention: try again at once. Still impossible to make is an error.
-    if [ ! -d "$LOCK" ]; then
-      mkdir "$LOCK" 2>/dev/null && break
-      [ -d "$LOCK" ] || die "cannot create the lock $LOCK" \
+    if [ ! -e "$LOCK" ]; then
+      claim "$LOCK" && break
+      [ -e "$LOCK" ] || die "cannot create the lock $LOCK" \
         "check that $STORE is writable by you, then re-run"
     fi
     holder="$(holder_of "$LOCK")"
@@ -165,7 +165,7 @@ lock() {
         echo "coverage: took over a lock left by pid $took_over, which had exited" >&2
         took_over=""
       fi
-      [ -d "$RECLAIM" ] || continue
+      [ -e "$RECLAIM" ] || continue
     elif [ "$waited" -eq 0 ]; then
       echo "coverage: waiting for another tier's run (pid ${holder:-unknown}) to finish" >&2
     fi
@@ -177,7 +177,6 @@ lock() {
     sleep 1
   done
   trap release EXIT
-  must "record this run in $LOCK" write_pid "$LOCK"
 }
 # llmlint: ignore-end[tool_output_is_signal]
 
