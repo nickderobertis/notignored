@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "ignores": [
+    {
+      "tool": "rust",
+      "scope": "next-line",
+      "rules": [
+        "dead_code"
+      ],
+      "reason": "kept for the plugin API",
+      "path": "tests/fixtures/grouping/src/lib.rs",
+      "line": 4,
+      "end_line": 4,
+      "column": 1,
+      "raw": "#[allow(dead_code, reason = \"kept for the plugin API\")]",
+      "suppressed": {
+        "start_line": 4,
+        "end_line": 5
+      }
+    },
+    {
+      "tool": "rust",
+      "scope": "next-line",
+      "rules": [
+        "dead_code"
+      ],
+      "reason": "kept for the plugin API",
+      "path": "tests/fixtures/grouping/src/lib.rs",
+      "line": 7,
+      "end_line": 7,
+      "column": 1,
+      "raw": "#[allow( dead_code , reason = \"kept for the plugin API\" )]",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 10
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "E501",
+        "F401"
+      ],
+      "reason": "re-exported for the plugin API",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 3,
+      "end_line": 3,
+      "column": 14,
+      "raw": "# noqa: E501, F401  # re-exported for the plugin API",
+      "suppressed": {
+        "start_line": 3,
+        "end_line": 3
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "F401",
+        "E501"
+      ],
+      "reason": "re-exported for the plugin API",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 4,
+      "end_line": 4,
+      "column": 12,
+      "raw": "# noqa: F401,E501  # re-exported for the plugin API",
+      "suppressed": {
+        "start_line": 4,
+        "end_line": 4
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "E501",
+        "F401",
+        "E501"
+      ],
+      "reason": "re-exported for the plugin API",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 5,
+      "end_line": 5,
+      "column": 12,
+      "raw": "# noqa:E501,F401,E501   #   re-exported   for the plugin API",
+      "suppressed": {
+        "start_line": 5,
+        "end_line": 5
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [],
+      "reason": "re-exported for the plugin API",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 6,
+      "end_line": 6,
+      "column": 13,
+      "raw": "# noqa  # re-exported for the plugin API",
+      "suppressed": {
+        "start_line": 6,
+        "end_line": 6
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "F401"
+      ],
+      "reason": "re-exported for the plugin API",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 7,
+      "end_line": 7,
+      "column": 12,
+      "raw": "# noqa: F401  # re-exported for the plugin API",
+      "suppressed": {
+        "start_line": 7,
+        "end_line": 7
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "e501",
+        "F401"
+      ],
+      "reason": "re-exported for the plugin API",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 8,
+      "end_line": 8,
+      "column": 13,
+      "raw": "# noqa: e501, F401  # re-exported for the plugin API",
+      "suppressed": {
+        "start_line": 8,
+        "end_line": 8
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "E501",
+        "F401"
+      ],
+      "reason": "re-exported for the public API",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 9,
+      "end_line": 9,
+      "column": 13,
+      "raw": "# noqa: E501, F401  # re-exported for the public API",
+      "suppressed": {
+        "start_line": 9,
+        "end_line": 9
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "file",
+      "rules": [
+        "E501",
+        "F401"
+      ],
+      "reason": "re-exported for the plugin API",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 10,
+      "end_line": 10,
+      "column": 1,
+      "raw": "# ruff: noqa: E501, F401  # re-exported for the plugin API",
+      "suppressed": {
+        "start_line": 1,
+        "end_line": null
+      }
+    },
+    {
+      "tool": "mypy",
+      "scope": "line",
+      "rules": [
+        "attr-defined"
+      ],
+      "reason": "the stub predates this constant",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 12,
+      "end_line": 12,
+      "column": 19,
+      "raw": "# type: ignore[attr-defined]  # the stub predates this constant",
+      "suppressed": {
+        "start_line": 12,
+        "end_line": 12
+      }
+    },
+    {
+      "tool": "ty",
+      "scope": "line",
+      "rules": [
+        "attr-defined"
+      ],
+      "reason": "the stub predates this constant",
+      "path": "tests/fixtures/grouping/src/models.py",
+      "line": 13,
+      "end_line": 13,
+      "column": 21,
+      "raw": "# ty: ignore[attr-defined]  # the stub predates this constant",
+      "suppressed": {
+        "start_line": 13,
+        "end_line": 13
+      }
+    },
+    {
+      "tool": "ruff",
+      "scope": "line",
+      "rules": [
+        "F401",
+        "E501"
+      ],
+      "reason": "re-exported for the plugin API",
+      "path": "tests/fixtures/grouping/src/views.py",
+      "line": 3,
+      "end_line": 3,
+      "column": 23,
+      "raw": "# noqa: F401, E501  # re-exported for the plugin API",
+      "suppressed": {
+        "start_line": 3,
+        "end_line": 3
+      }
+    },
+    {
+      "tool": "mypy",
+      "scope": "line",
+      "rules": [
+        "attr-defined"
+      ],
+      "reason": "the stub predates this constant",
+      "path": "tests/fixtures/grouping/src/views.py",
+      "line": 5,
+      "end_line": 5,
+      "column": 28,
+      "raw": "# type: ignore[attr-defined]  # the stub predates this constant",
+      "suppressed": {
+        "start_line": 5,
+        "end_line": 5
+      }
+    },
+    {
+      "tool": "pyright",
+      "scope": "line",
+      "rules": [
+        "reportPrivateUsage"
+      ],
+      "reason": "the private cache is ours",
+      "path": "tests/fixtures/grouping/src/views.py",
+      "line": 6,
+      "end_line": 6,
+      "column": 25,
+      "raw": "# pyright: ignore[reportPrivateUsage]  # the private cache is ours",
+      "suppressed": {
+        "start_line": 6,
+        "end_line": 6
+      }
+    }
+  ],
+  "errors": []
+}
