@@ -17,11 +17,15 @@ use crate::model::{Report, ReportError, Tool};
 use crate::scan::{self, ScanError, ScanOptions};
 use crate::source::{display_path, Language};
 
+mod group;
 mod markdown;
 mod render;
 
 pub use markdown::{render_markdown, MarkdownOptions, DEFAULT_MAX_ENTRIES, MARKER};
-pub use render::{narrate_errors, render_human, render_human_colored, render_json, ChangeCounts};
+pub use render::{
+    narrate_errors, render_human, render_human_colored, render_human_with, render_json,
+    ChangeCounts, HumanOptions,
+};
 
 /// The scan completed and nothing forced a failure.
 pub const EXIT_OK: u8 = 0;
@@ -35,7 +39,8 @@ pub const EXIT_ERROR: u8 = 2;
 /// How to render the report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
-    /// One line per suppression, for a person reading a terminal.
+    /// One entry per distinct suppression, listing every location it was
+    /// written at, for a person reading a terminal.
     Human,
     /// The full report envelope as JSON, for machines.
     Json,
@@ -125,7 +130,10 @@ fn github_sha(value: &str) -> Result<String, String> {
                   review case: `notignored --diff --diff-base main`.\n\n\
                   --format markdown renders that report as a pull-request comment body; pass \
                   --github-repo and --github-sha to link each suppression to its source, and \
-                  --max-entries to change how many it lists.\n\n\
+                  --max-entries to change how many entries it lists.\n\n\
+                  The human and markdown formats present suppressions identical in tool, scope, \
+                  rule set, reason and (under --diff) change as one entry listing every location; \
+                  --no-group lists each suppression on its own instead.\n\n\
                   Exit codes:\n  \
                   0  the scan completed\n  \
                   1  --fail-if-found was given and at least one suppression was reported\n  \
@@ -172,8 +180,9 @@ pub struct Cli {
     #[arg(long = "github-sha", value_name = "SHA", value_parser = github_sha)]
     pub github_sha: Option<String>,
 
-    /// Most suppressions the `markdown` format lists before it closes with a
-    /// line counting the rest. Must be at least 1.
+    /// Most entries the `markdown` format lists before it closes with a line
+    /// counting the rest. A group of identical suppressions is one entry
+    /// (each suppression is one under --no-group). Must be at least 1.
     #[arg(
         long = "max-entries",
         value_name = "N",
@@ -181,6 +190,13 @@ pub struct Cli {
         default_value_t = DEFAULT_MAX_ENTRIES,
     )]
     pub max_entries: u32,
+
+    /// List every suppression as its own entry in the `human` and `markdown`
+    /// formats, instead of presenting suppressions identical in tool, scope,
+    /// rule set, reason and change as one entry listing every location. The
+    /// `json` format is one record per suppression either way.
+    #[arg(long = "no-group")]
+    pub no_group: bool,
 
     // llmlint: ignore-block[invalid_states_unrepresentable] the pair is a field-per-flag mirror of the command line, and clap rejects a base without --diff at the boundary (`requires = "diff"`, exit 2, covered by an e2e); folding them into an enum would move flag parsing into a custom value parser, which is exactly what this layer keeps out.
     /// Report only the suppressions this change added: those on lines the diff
@@ -362,6 +378,15 @@ impl Cli {
             repo: self.github_repo.clone(),
             sha: self.github_sha.clone(),
             max_entries: self.max_entries,
+            group: !self.no_group,
+        }
+    }
+
+    /// How this invocation's human report is presented.
+    fn human_options(&self) -> HumanOptions {
+        HumanOptions {
+            color: self.color_enabled(),
+            group: !self.no_group,
         }
     }
 }
@@ -392,7 +417,7 @@ pub fn run(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     // run still gets them on the terminal when stdout is redirected.
     let _ = narrate_errors(&report, err);
     let rendered = match cli.format {
-        Format::Human => render_human_colored(&report, out, err, cli.color_enabled()),
+        Format::Human => render_human_with(&report, &cli.human_options(), out, err),
         Format::Json => render_json(&report, out),
         Format::Markdown => render_markdown(&report, &cli.markdown_options(), out),
     };
@@ -564,6 +589,7 @@ mod tests {
                 repo: Some("acme/widgets".into()),
                 sha: Some("0123456789abcdef0123456789abcdef01234567".into()),
                 max_entries: 5,
+                group: true,
             }
         );
         // Omitted, the permalink flags simply render locations as plain text and
@@ -612,6 +638,22 @@ mod tests {
 
         let error = Cli::try_parse_from(["notignored", "--github-sha", "main"]).unwrap_err();
         assert!(error.to_string().contains("hex digits"), "{error}");
+    }
+
+    #[test]
+    fn no_group_turns_grouping_off_for_both_renderers() {
+        assert!(!parse(&[]).no_group);
+        assert!(parse(&[]).human_options().group);
+        let cli = parse(&["--no-group", "--color", "always"]);
+        assert!(cli.no_group);
+        assert_eq!(
+            cli.human_options(),
+            HumanOptions {
+                color: true,
+                group: false
+            }
+        );
+        assert!(!cli.markdown_options().group);
     }
 
     #[test]

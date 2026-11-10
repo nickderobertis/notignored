@@ -1,14 +1,22 @@
 //! Rendering a [`Report`] for people and for machines.
 //!
-//! stdout carries the data — one line per suppression, or the JSON envelope.
+//! stdout carries the data — the human entries, or the JSON envelope.
 //! stderr carries narration: the summary line and any scan errors. Keeping them
 //! apart means `notignored | …` pipes findings and nothing else.
+//!
+//! A human entry is one line per suppression, except that suppressions
+//! identical in everything but where they sit (see [`super::group`]) print as
+//! one header line followed by each location, indented, on a line of its own.
+//! [`HumanOptions::group`] — `--no-group` on the command line — turns that off
+//! and restores one line per suppression. The JSON envelope is never grouped:
+//! it is the record contract, one record per suppression.
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
 
+use super::group::{self, Entry};
 use crate::model::{Change, IgnoreDirective, Report};
 
 // The colour roles of the human line, one per field a reader scans for. Whether
@@ -117,15 +125,38 @@ pub fn narrate_errors(report: &Report, err: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-/// Write the report as one line per suppression, in plain text, with a summary
-/// on `err`.
+/// How the `human` report is presented.
 ///
-/// The same output as [`render_human_colored`] with `color` off.
-pub fn render_human(report: &Report, out: &mut dyn Write, err: &mut dyn Write) -> io::Result<()> {
-    render_human_colored(report, out, err, false)
+/// Both choices belong to the caller, so the renderer stays a pure function of
+/// the report: the CLI resolves `color` from `--color`, the terminal and
+/// `NO_COLOR`, and `group` from `--no-group`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HumanOptions {
+    /// ANSI-colorize the output.
+    pub color: bool,
+    /// Present identical suppressions as one entry listing every location.
+    /// Off, every suppression gets its own line, as `--no-group` asks.
+    pub group: bool,
 }
 
-/// Write the report as one line per suppression, with a summary on `err`,
+/// Plain text, grouped: what a `human` run prints through a pipe.
+impl Default for HumanOptions {
+    fn default() -> Self {
+        HumanOptions {
+            color: false,
+            group: true,
+        }
+    }
+}
+
+/// Write the report's entries in plain text, grouped, with a summary on `err`.
+///
+/// The same output as [`render_human_with`] under [`HumanOptions::default`].
+pub fn render_human(report: &Report, out: &mut dyn Write, err: &mut dyn Write) -> io::Result<()> {
+    render_human_with(report, &HumanOptions::default(), out, err)
+}
+
+/// Write the report's entries, grouped, with a summary on `err`,
 /// ANSI-colorized when `color` is set.
 ///
 /// The decision itself belongs to the caller — see
@@ -137,8 +168,30 @@ pub fn render_human_colored(
     err: &mut dyn Write,
     color: bool,
 ) -> io::Result<()> {
-    for directive in &report.ignores {
-        writeln!(out, "{}", human_line(directive, color))?;
+    let options = HumanOptions {
+        color,
+        ..HumanOptions::default()
+    };
+    render_human_with(report, &options, out, err)
+}
+
+/// Write the report's entries as `options` say, with a summary on `err`.
+///
+/// The summary counts suppressions and the files they sit in whether or not
+/// they are grouped: a group is a way of reading the report, not a smaller one.
+pub fn render_human_with(
+    report: &Report,
+    options: &HumanOptions,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> io::Result<()> {
+    let color = options.color;
+    for entry in group::entries(&report.ignores, options.group) {
+        if entry.is_group() {
+            write_group(&entry, out, color)?;
+        } else {
+            writeln!(out, "{}", human_line(entry.first(), color))?;
+        }
     }
     out.flush()?;
 
@@ -201,6 +254,36 @@ fn plural_edited(count: usize) -> String {
     )
 }
 
+/// A group of identical suppressions: one header line, then every location.
+///
+/// The header is the line a single suppression would print without its
+/// location, with the count of locations after the scope — where the location
+/// would otherwise have said where to look — and before the edited marker and
+/// the reason. Each location follows on its own line, indented under the
+/// header and in the location's own colour, so the list reads as the header's.
+fn write_group(entry: &Entry<'_>, out: &mut dyn Write, color: bool) -> io::Result<()> {
+    let first = entry.first();
+    let count = paint(
+        &format!("({} locations)", entry.members.len()),
+        LOCATION,
+        color,
+    );
+    writeln!(out, "{}", describe(first, Some(&count), color))?;
+    for member in &entry.members {
+        writeln!(out, "  {}", location(member, color))?;
+    }
+    Ok(())
+}
+
+/// `path:line:column`, in the location's colour.
+fn location(directive: &IgnoreDirective, color: bool) -> String {
+    paint(
+        &format!("{}:{}:{}", directive.path, directive.line, directive.column),
+        LOCATION,
+        color,
+    )
+}
+
 /// One suppression as `path:line:column tool rules (scope) -- reason`.
 ///
 /// A blanket suppression renders its rules as `*`; a directive with no stated
@@ -209,22 +292,31 @@ fn plural_edited(count: usize) -> String {
 /// change silenced nothing new there, and the line has to say so before the
 /// reason it is about to quote.
 fn human_line(directive: &IgnoreDirective, color: bool) -> String {
+    format!(
+        "{} {}",
+        location(directive, color),
+        describe(directive, None, color)
+    )
+}
+
+/// What a suppression silences and why — `tool rules (scope) -- reason` — with
+/// `count`, already painted, after the scope when the line heads a group.
+fn describe(directive: &IgnoreDirective, count: Option<&str>, color: bool) -> String {
     let rules = if directive.rules.is_empty() {
         paint("*", BLANKET, color)
     } else {
         paint(&directive.rules.join(","), RULES, color)
     };
     let mut line = format!(
-        "{} {} {} {}",
-        paint(
-            &format!("{}:{}:{}", directive.path, directive.line, directive.column),
-            LOCATION,
-            color
-        ),
+        "{} {} {}",
         paint(&directive.tool.to_string(), TOOL, color),
         rules,
         paint(&format!("({})", directive.scope), SCOPE, color),
     );
+    if let Some(count) = count {
+        line.push(' ');
+        line.push_str(count);
+    }
     if directive.change == Some(Change::JustificationEdited) {
         line.push(' ');
         line.push_str(&paint("(justification edited)", EDITED, color));
@@ -576,6 +668,114 @@ mod tests {
             found.contains(&format!("{FOUND}1 ignore{FOUND:#}")),
             "{found:?}"
         );
+    }
+
+    /// `directive` moved to `path`, line `line`.
+    fn at(path: &str, line: u32, directive: IgnoreDirective) -> IgnoreDirective {
+        IgnoreDirective {
+            path: path.into(),
+            line,
+            ..directive
+        }
+    }
+
+    /// Three identical suppressions across two files, then one with no twin.
+    fn grouped_report() -> Report {
+        let mut report = Report::new();
+        let same = directive(&["E501"], Some("long wrapped URL"), Scope::Line);
+        report.ignores.push(at("src/a.py", 3, same.clone()));
+        report.ignores.push(at("src/a.py", 9, same.clone()));
+        report.ignores.push(at(
+            "src/b.py",
+            1,
+            directive(&["F401"], Some("re-exported"), Scope::Line),
+        ));
+        report.ignores.push(at("src/b.py", 4, same));
+        report
+    }
+
+    /// A group prints one header — the line without its location, counting the
+    /// locations after the scope — then every location, indented; a suppression
+    /// with no twin prints its line exactly, and the summary still counts
+    /// suppressions and files.
+    #[test]
+    fn identical_suppressions_print_one_header_and_every_location() {
+        let (out, err) = human(&grouped_report());
+        assert_eq!(
+            out,
+            "ruff E501 (line) (3 locations) -- long wrapped URL\n\
+             \x20 src/a.py:3:20\n\
+             \x20 src/a.py:9:20\n\
+             \x20 src/b.py:4:20\n\
+             src/b.py:1:20 ruff F401 (line) -- re-exported\n"
+        );
+        assert_eq!(err, "notignored: 4 ignores in 2 files\n");
+    }
+
+    /// The marker stays on the header, between the count and the reason, and a
+    /// classified summary still counts each suppression.
+    #[test]
+    fn a_group_of_rewritten_justifications_carries_its_marker() {
+        let mut report = Report::new();
+        for line in [2, 5] {
+            report.ignores.push(IgnoreDirective {
+                line,
+                ..classified(Change::JustificationEdited, &[], None)
+            });
+        }
+        let (out, err) = human(&report);
+        assert_eq!(
+            out,
+            "ruff * (line) (2 locations) (justification edited)\n  src/app.py:2:20\n  src/app.py:5:20\n"
+        );
+        assert_eq!(
+            err,
+            "notignored: 0 added, 2 justifications edited in 1 file\n"
+        );
+    }
+
+    /// `group: false` is the output before grouping existed: one line each.
+    #[test]
+    fn without_grouping_every_suppression_prints_its_own_line() {
+        let report = grouped_report();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let options = HumanOptions {
+            group: false,
+            ..HumanOptions::default()
+        };
+        render_human_with(&report, &options, &mut out, &mut err).unwrap();
+        let expected: String = report
+            .ignores
+            .iter()
+            .map(|directive| format!("{}\n", human_line(directive, false)))
+            .collect();
+        assert_eq!(String::from_utf8(out).unwrap(), expected);
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "notignored: 4 ignores in 2 files\n"
+        );
+    }
+
+    /// A group's header and locations are coloured by the roles they already
+    /// have, and colouring still changes no character.
+    #[test]
+    fn a_colored_group_keeps_its_roles_and_its_text() {
+        let report = grouped_report();
+        let (color_out, color_err) = colored(&report, true);
+        let (plain_out, plain_err) = colored(&report, false);
+        assert_eq!(strip_ansi(&color_out), plain_out);
+        assert_eq!(strip_ansi(&color_err), plain_err);
+        for (label, style, text) in [
+            ("count", LOCATION, "(3 locations)"),
+            ("location", LOCATION, "src/b.py:4:20"),
+            ("tool", TOOL, "ruff"),
+            ("reason", REASON, "-- long wrapped URL"),
+        ] {
+            assert!(
+                color_out.contains(&format!("{style}{text}{style:#}")),
+                "the {label} span is not styled as its role: {color_out:?}"
+            );
+        }
     }
 
     /// The pre-existing entry point is the plain-text one, unchanged.
