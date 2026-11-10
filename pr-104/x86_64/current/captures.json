@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "shots": [
+    {
+      "name": "diff",
+      "toggles": {},
+      "hash": "dfd82e55366ac3feb8e2fd4c3c1417dc762f23d36a4b85972b8af1ec4a5c8031",
+      "image": "diff.svg"
+    },
+    {
+      "name": "json",
+      "toggles": {},
+      "hash": "638bb9ea67306b759c88fabbbcaf3046b689e5bc56b302710699564352694b92",
+      "image": "json.svg"
+    },
+    {
+      "name": "pr-comment",
+      "toggles": {},
+      "hash": "1df0f859d64282f556d712c41ddf166f916ed872dca70c4ea96ae9ee1d59804d",
+      "image": "pr-comment.svg"
+    },
+    {
+      "name": "scan",
+      "toggles": {},
+      "hash": "980efbfd3f7e3e14cb238b6700f02c0fd670b414651f5bcb5647fda630c92d72",
+      "image": "scan.svg"
+    },
+    {
+      "name": "tool-filter",
+      "toggles": {},
+      "hash": "2fba02ee1d8a2ddf37fbd429bf7b904a99a906c75e2a8bb0a73689620a335fc4",
+      "image": "tool-filter.svg"
+    }
+  ]
+}
