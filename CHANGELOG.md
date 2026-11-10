@@ -10,6 +10,16 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/nickderobertis/notignored/compare/v0.1.20...v0.2.0) - 2026-11-10
+
+### Added
+
+- [**breaking**] group suppressions identical but for their location into one report entry ([#102](https://github.com/nickderobertis/notignored/pull/102))
+
+### Fixed
+
+- *(action)* retry transient download failures when installing notignored ([#97](https://github.com/nickderobertis/notignored/pull/97))
+
 ## [0.1.20](https://github.com/nickderobertis/notignored/compare/v0.1.19...v0.1.20) - 2026-10-19
 
 ### Fixed
