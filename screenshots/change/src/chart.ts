@@ -6,7 +6,7 @@ export function draw(label: string): void {
   analytics.track("chart:drawn", { label });
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: the vendored global's options bag is untyped upstream
+// biome-ignore lint/suspicious/noExplicitAny: the analytics options are untyped
 export function redraw(options: any): void {
   analytics.track("chart:redrawn", options);
 }

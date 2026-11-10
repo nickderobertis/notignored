@@ -12,10 +12,10 @@ export function mount(node: HTMLElement, label: string): void {
   node.dataset.label = label;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: the vendored global's options bag is untyped upstream
+// biome-ignore lint/suspicious/noExplicitAny: the analytics options are untyped
 export type MountOptions = Record<string, any>;
 
-// biome-ignore lint/suspicious/noExplicitAny: the vendored global's options bag is untyped upstream
+// biome-ignore lint/suspicious/noExplicitAny: the analytics options are untyped
 export function track(name: string, options: any): void {
   analytics.track(name, options);
 }
