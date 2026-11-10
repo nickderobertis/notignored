@@ -31,9 +31,10 @@ inputs:
     default: ""
   max-entries:
     description: >-
-      Most suppressions the comment lists before it closes with a line counting
-      the rest. A whole number of at least 1; anything else fails the run rather
-      than falling back to the default.
+      Most entries the comment lists before it closes with a line counting the
+      rest; suppressions identical in tool, scope, rule set, reason and change
+      are one entry listing every location. A whole number of at least 1;
+      anything else fails the run rather than falling back to the default.
     required: false
     default: "20"
   version:

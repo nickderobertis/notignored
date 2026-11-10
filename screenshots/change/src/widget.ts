@@ -14,3 +14,8 @@ export function mount(node: HTMLElement, label: string): void {
 
 // biome-ignore lint/suspicious/noExplicitAny: the vendored global's options bag is untyped upstream
 export type MountOptions = Record<string, any>;
+
+// biome-ignore lint/suspicious/noExplicitAny: the vendored global's options bag is untyped upstream
+export function track(name: string, options: any): void {
+  analytics.track(name, options);
+}

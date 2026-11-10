@@ -2,8 +2,9 @@
 //!
 //! This is what the GitHub Action posts, so it is proven the same way the JSON
 //! report is: real files in, a checked-in golden out. 0 is the all-clear body
-//! and every other count carries one entry per suppression, each with the
-//! collapsed snippet of the code it silences.
+//! and every other count carries one entry per suppression — no two of these
+//! fixtures are identical, so nothing groups — each with the collapsed snippet
+//! of the code it silences. Grouping is driven in `tests/e2e/grouping.rs`.
 //!
 //! The entry cap is not reachable from these fixtures — twenty findings would be
 //! twenty files — so it is proven in `src/cli/markdown.rs`'s unit tests, at the

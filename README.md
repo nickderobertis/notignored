@@ -1,6 +1,6 @@
 # notignored
 
-![A terminal session: `notignored src/` is typed and the suppressions appear one per line — each with its file and line in cyan, the tool in magenta, the silenced rules in yellow, the scope in blue and the stated reason dimmed — then `notignored --diff --diff-base main` reports only what the change touched: the two suppressions it added and, marked "(justification edited)", the one whose reason it merely rewrote](docs/screenshots/demo.gif)
+![A terminal session: `notignored src/` is typed and the suppressions appear one per line — each with its file and line in cyan, the tool in magenta, the silenced rules in yellow, the scope in blue and the stated reason dimmed — then `notignored --diff --diff-base main` reports only what the change touched: a ruff suppression it added, a biome noExplicitAny it added at three places printed once as a header counting "(3 locations)" with each location indented beneath it, and, marked "(justification edited)", the mypy suppression whose reason it merely rewrote](docs/screenshots/demo.gif)
 
 Find every lint and type-check suppression comment in a codebase — natively, and
 fast.
@@ -10,7 +10,12 @@ fast.
 A reviewer cares about the suppressions a change *introduces*, not the inventory
 it inherited, so `--diff` reports only those:
 
-![The same report under --diff: the two suppressions the change added, a ruff E501 and a biome noExplicitAny, and above them a mypy suppression the change only rewrote the justification of, marked "(justification edited)" after its scope, closing with a summary reading "2 added, 1 justification edited in 2 files"](docs/screenshots/diff.svg)
+![The same report under --diff: a mypy suppression the change only rewrote the justification of, marked "(justification edited)" after its scope; a ruff E501 it added; and one biome noExplicitAny it added at three places, printed once as a header reading "(3 locations)" with src/chart.ts:9:1, src/widget.ts:15:1 and src/widget.ts:18:1 indented beneath it, closing with a summary reading "4 added, 1 justification edited in 3 files"](docs/screenshots/diff.svg)
+
+When a change writes the same suppression in several places — the same tool,
+scope, rules, and reason — it is one decision, so it is printed once with every
+location under it, and the distinct decisions a reviewer has to judge stay
+visible however many times each was written.
 
 On a pull request that report is one comment, not a wall of annotations: the
 [GitHub Action](#on-a-pull-request-the-github-action) posts a single sticky
@@ -20,11 +25,13 @@ the rules it silences, quotes the reason the author gave for silencing them,
 links straight to the line, and keeps the suppressed code one click away. The
 heading counts the suppressions the change *added* apart from the existing ones
 whose justification it merely rewrote — so the number a reviewer reads is the
-number of new bypasses, and a reworded explanation never inflates it.
+number of new bypasses, and a reworded explanation never inflates it. A
+suppression written at several places is one entry listing its locations, so
+the comment's entry cutoff is spent on distinct decisions.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/pr-comment-rendered-dark.png">
-  <img alt="The pull-request comment as GitHub renders it: a heading reading &quot;notignored: 2 suppressions added, 1 justification edited&quot;, then a bullet per suppression naming its tool and rule in bold — the first marked &quot;(justification edited)&quot; — with the stated reason in italics and a permalink to the line, the first entry's &quot;suppressed code&quot; block expanded to show the silenced Python with the suppressed line marked, the other two collapsed, and a footer noting the commit the suppressions were read from" src="docs/screenshots/pr-comment-rendered.png">
+  <img alt="The pull-request comment as GitHub renders it: a heading reading &quot;notignored: 4 suppressions added, 1 justification edited&quot;, then three bullets naming a tool and rule in bold with the stated reason in italics — a mypy entry marked &quot;(justification edited)&quot; and a ruff entry, each with a permalink to its line, and a biome noExplicitAny entry reading &quot;3 locations&quot; with three nested permalinks, to src/chart.ts and twice to src/widget.ts — the first entry's &quot;suppressed code&quot; block expanded to show the silenced Python with the suppressed line marked, the other two collapsed, the biome one's labelled with its first location, and a footer noting the commit the suppressions were read from" src="docs/screenshots/pr-comment-rendered.png">
 </picture>
 
 > Every character of that comment is real output — what `--format markdown`
@@ -47,7 +54,7 @@ documented [below](#output):
 `--format markdown` emits the markdown **source** behind the comment above —
 this is what the action hands GitHub to render, permalinks and all:
 
-![The pull-request comment body as markdown: a heading reading "notignored: 2 suppressions added, 1 justification edited", then one bullet per suppression naming its tool and rule — the rewritten one marked "(justification edited)" — with its reason in italics, a permalink to the line, and a collapsed details block holding the suppressed code](docs/screenshots/pr-comment.svg)
+![The pull-request comment body as markdown: a heading reading "notignored: 4 suppressions added, 1 justification edited", then one bullet per entry naming its tool and rule with its reason in italics — the rewritten mypy one marked "(justification edited)" and the ruff one each followed by a permalink to the line, and the biome noExplicitAny one ending "3 locations" with its three permalinks as nested bullets — each entry followed by a collapsed details block holding the suppressed code, the biome one's summary naming its first location, src/chart.ts:9](docs/screenshots/pr-comment.svg)
 
 </details>
 
@@ -139,7 +146,7 @@ the comment the action posts. That block is checked against the real binary by
 ```
 notignored [PATHS...] [--exclude PATH]... [--format human|json|markdown]
            [--color auto|always|never] [--tool NAME]... [--fail-if-found] [--diff [--diff-base REF]]
-           [--github-repo OWNER/REPO] [--github-sha SHA] [--max-entries N]
+           [--github-repo OWNER/REPO] [--github-sha SHA] [--max-entries N] [--no-group]
 ```
 
 - `PATHS` — files and/or directories. Directories are walked recursively,
@@ -156,8 +163,26 @@ notignored [PATHS...] [--exclude PATH]... [--format human|json|markdown]
 - `--diff-base` — the git revision or range `--diff` compares against.
 - `--github-repo` / `--github-sha` — the `owner/repo` and commit the `markdown`
   format builds its permalinks from.
-- `--max-entries` — how many suppressions the `markdown` format lists before it
-  closes with a line counting the rest. Defaults to 20; must be at least 1.
+- `--max-entries` — how many entries the `markdown` format lists before it
+  closes with a line counting the rest; a group of identical suppressions is one
+  entry. Defaults to 20; must be at least 1.
+- `--no-group` — list every suppression as its own entry in the `human` and
+  `markdown` formats instead of grouping identical ones (see below), with
+  `--max-entries` then counting suppressions. `json` is unaffected.
+
+The `human` report prints one line per suppression, except that suppressions
+**identical** in everything but where they sit print once: a header that is the
+line without its location, counting them — `(3 locations)` — then each
+`path:line:column` indented beneath it. Identical means the same tool, the same
+scope, the same rules as a set (`E501,F401` is `F401,E501`, a repeated rule
+counts once, but case matters and a blanket `*` matches only another blanket),
+the same reason exactly as written once whitespace is collapsed (no reason
+matches only no reason), and, under `--diff`, the same change — an added
+suppression never groups with a rewritten justification. Entries appear in the
+order of their first suppression and list their locations in report order; a
+suppression with no twin prints its line exactly as before. The summary still
+counts suppressions and the files they sit in. `--format markdown` groups by the
+same rule, and `--format json` never does: it is one record per suppression.
 
 The `human` report is **colorized** — the location, the tool, the rules, the
 scope, and the reason each get their own role, and a blanket `*` is red because
@@ -181,11 +206,20 @@ reported directive therefore says which it is: an entry the change only
 rejustified carries a `(justification edited)` token after its scope, and the
 summary counts both kinds, including the one whose answer is none.
 
+A change that writes the same suppression at several places — often one rule
+silenced across a codebase — is one decision, so it is one entry: a header
+counting the locations, each location beneath it. The change word is part of
+what makes two suppressions identical, so an added suppression and a rewritten
+justification never share an entry, and the summary still counts suppressions,
+not entries.
+
 ```console
 $ notignored --diff --diff-base main --fail-if-found
-src/app.py:42:20 ruff E501 (line) -- long wrapped URL
+ruff E501 (line) (2 locations) -- long wrapped URL
+  src/app.py:42:20
+  src/client.py:7:31
 src/store.py:8:14 mypy import-untyped (line) (justification edited) -- the SDK ships no stubs
-notignored: 1 added, 1 justification edited in 2 files
+notignored: 2 added, 1 justification edited in 3 files
 ```
 
 - Bare `--diff` compares the work tree — staged *and* unstaged — against `HEAD`.
@@ -217,7 +251,10 @@ on each push instead of adding another, and on a pull request that neither adds 
 suppression nor rewrites a justification it posts nothing at all. A pull request
 that *only* rewrites a justification does get one: its heading counts the
 justifications edited and no additions, and each rejustified entry says so
-beside its rule.
+beside its rule. Suppressions identical in tool, scope, rule set, reason and
+change are one bullet that counts its locations and lists them as nested
+permalinks, so a change silencing one rule in fifty places is one entry rather
+than fifty.
 
 Because that one comment is edited rather than replaced, it closes with a
 footer naming the commit its suppressions were read from — abbreviated, and
@@ -267,7 +304,7 @@ guarantee matters.
 | `diff-base` | the pull request's base branch | Any git revision or range, as `--diff-base` takes. |
 | `paths` | the whole repository | Whitespace-separated files and directories to scan. |
 | `exclude` | nothing | Whitespace-separated files and directories to leave out of the scan, as `--exclude` takes them. |
-| `max-entries` | `20` | How many suppressions the comment lists before it closes with a line counting the rest. At least 1; anything else fails the run. |
+| `max-entries` | `20` | How many entries the comment lists before it closes with a line counting the rest; a group of identical suppressions is one entry. At least 1; anything else fails the run. |
 | `version` | empty: the release the action's own ref names | Empty installs `v<version>` for the `version` in the action's own `Cargo.toml` — at `@vX.Y.Z` that is `vX.Y.Z`, at `@v0` the release `v0` points at — and fails rather than guessing if that file cannot be read. Otherwise a release tag such as `v0.1.0`, `latest` for the newest release, or `local` to build the action's own source with `cargo`. |
 
 | Output | Meaning |
@@ -305,15 +342,32 @@ $ notignored --diff --diff-base main --format markdown \
 Both permalink flags are optional; without them each location renders as plain
 `path:line` text.
 
-The body lists at most `max-entries` suppressions — 20 by default — and when a
-change adds more it closes with one line naming how many it left out and the
-total, so the count is never hidden. Every listed entry carries a collapsed
+Suppressions identical in tool, scope, rules (as a set), reason and change — the
+rule the `human` report groups by — share one entry: a bullet naming the tool,
+rules and reason and counting its locations (`3 locations`), with the locations
+as nested bullets, each a permalink. A group lists its first ten locations and
+then one line counting the rest (`… and 4 more locations`). A suppression with
+no twin is one bullet with its permalink inline.
+
+The body lists at most `max-entries` entries — 20 by default, a group counting
+as one — and when there are more it closes with one line naming what it left
+out and the total, so the count is never hidden: `… and 2 more not shown (22
+total).` when every unlisted entry is a single suppression, and `… and 3 more
+entries (17 suppressions) not shown (40 suppressions total).` when a group is
+among them. The heading counts suppressions, never entries. Every listed entry
+carries a collapsed
 `<details>` block holding the code that suppression silences: its `line`,
 `next-line`, or `block` span, or the top of the file for a whole-file directive,
 line-numbered and capped at ten lines with a note when there is more. Collapsed
 by default, so a long list stays one screen and any single entry is one click
-from its context. A file that has since become unreadable renders its entry
-without a snippet rather than failing — the block only ever shows real source.
+from its context. A group carries one block, for its first location, and its
+summary names that location. A file that has since become unreadable renders
+its entry without a snippet rather than failing — the block only ever shows
+real source.
+
+`--no-group` (there is no action input for it) restores one entry per
+suppression, each with its own permalink and snippet, and `max-entries` then
+counts suppressions.
 
 ### Exit codes
 

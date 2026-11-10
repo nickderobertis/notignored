@@ -162,6 +162,19 @@ the record is what every parser dispatch builds against, and the extractor's
 cursor cannot emit a zero. The invariant that *is* enforceable at a trust
 boundary — an envelope from a newer build — is rejected on deserialization.
 
+## Grouping is presentation, never the record
+
+`human` and `markdown` present suppressions identical in tool, scope, rule set,
+reason and change word as **one entry** listing every location; `--no-group`
+(`HumanOptions::group` / `MarkdownOptions::group`) restores one entry per
+suppression, and `--max-entries` counts entries either way. The identity rule
+lives once, in `src/cli/group.rs::entries`, which both renderers call so the
+terminal and the comment cannot disagree on what groups. It never reaches the
+report: `json`, the SDKs, `counts.sh` and every count a reader sees (the human
+summary, the comment heading) stay per suppression, and the `--no-group` goldens
+in `tests/golden/` were recorded by the binary before grouping existed, so they
+are never re-blessed.
+
 ## Adding a tool parser
 
 One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one
@@ -204,7 +217,8 @@ product's review surface. Keep the judgment in Rust: `--format markdown` renders
 the whole comment body, golden-tested over the fixture counts
 (`tests/golden/markdown/`), so the composite's shell only moves bytes. The
 `--max-entries` cap needs more findings than those fixtures hold, so it is proven
-either side of its boundary in the renderer's own unit tests instead. Its scripts
+either side of its boundary in the renderer's own unit tests instead, and over
+`tests/fixtures/grouping-cap/` once grouping makes many findings one entry. Its scripts
 are proven by running the real thing, never a copy: the inline steps *lifted out
 of `action.yml`*, `comment.sh` and `counts.sh` through their own env interfaces.
 Counting lives in `counts.sh` so the reports that decide it — from a build with

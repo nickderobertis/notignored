@@ -15,7 +15,8 @@ hand-written. Each scene's output is rendered to an SVG by
 
 One scene per part of the CLI surface, so the gallery documents all of it:
 
-- `scan` — the default human report over the whole fixture. Colorized (real ANSI
+- `scan` — the default human report over the whole fixture, one line per
+  suppression because no two of its suppressions are identical. Colorized (real ANSI
   through `--color always`), which is the point of the scene: location, tool,
   rules, scope, and reason each have their own role, and the fixture's blanket
   `*` renders in the alarm colour.
@@ -23,17 +24,20 @@ One scene per part of the CLI surface, so the gallery documents all of it:
   a throwaway copy of `fixture/`, committed as the base, with the `change/`
   overlay laid on top as the uncommitted work under review. Bare `--diff` then
   compares the work tree against `HEAD`, so only what the change added is
-  reported. Colorized.
+  reported. Colorized, and it is the scene that shows **grouping**: the change
+  writes one biome suppression at three places, printed once as a header
+  counting `(3 locations)` with each location beneath it.
 - `tool-filter` — `--tool`, repeated, narrowing that same scan.
 - `json` — the full report envelope. Scoped to **one** fixture file on purpose:
   the envelope is what the scene documents, and a whole-tree capture would run
   off the bottom of the frame with the same fields repeated seven times.
 - `pr-comment` — `--format markdown` over the same change: the exact body the
-  GitHub Action posts, permalinks and all.
+  GitHub Action posts, permalinks and all, the grouped biome entry one bullet
+  with its three permalinks nested beneath it.
 
 ## The fixture
 
-`fixture/` is a tiny four-file project carrying the kind of suppression, and the
+`fixture/` is a tiny five-file project carrying the kind of suppression, and the
 kind of reason, real code collects — seven directives across seven tools (ruff,
 mypy, eslint, typescript, rust, shellcheck, llmlint). It is deliberately not
 uniform:
@@ -59,6 +63,14 @@ added ones, under a heading and a summary counting both. A change that only
 added would photograph a comment that cannot show the distinction. Keep the
 reworded line's length inside the 102-column wrap, and keep it the *only*
 in-place edit, so every other entry in those scenes stays an addition.
+
+It also writes **one suppression three times** — the same biome
+`noExplicitAny` and reason at `src/widget.ts` twice and `src/chart.ts` once — so
+those scenes show a group rather than only single entries. `--diff` does not
+report a file the change creates, so `src/chart.ts` exists suppression-free in
+`fixture/` and the overlay appends the directive to it. Keep that reason short
+enough for the group's header, which drops the location, to fit the 102-column
+frame unwrapped; give a new group the same care.
 
 **Consistent text size.** Every scene renders at a fixed window width (`freeze
 --width 919`, with `--wrap 102` folding the few over-wide lines — the markdown
