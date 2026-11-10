@@ -72,7 +72,8 @@ gate_build() {
 seconds_now() { date +%s.%N; }
 
 mkdir -p "$EVIDENCE" || die "cannot create $EVIDENCE" "check that $TARGET is writable by you"
-rm -f "$EVIDENCE"/backlog-*.txt
+rm -f "$EVIDENCE"/backlog-*.txt ||
+  die "cannot clear the last run's backlog lists from $EVIDENCE" "check that $EVIDENCE is writable by you"
 
 # 1. The backlog, untimed, until the ordinary build is current: its seconds are
 # recorded only as evidence. Convergence takes at most three rounds (the header);
@@ -87,12 +88,17 @@ while :; do
     die "$BACKLOG_ROUNDS backlog rounds each removed builds, so the ordinary build never became current" \
       "read $EVIDENCE/backlog-*-removed.txt: an entry removed every round is one the gate build keeps superseding"
   gate_build
-  entries >"$EVIDENCE/backlog-$round-before.txt"
+  entries >"$EVIDENCE/backlog-$round-before.txt" ||
+    die "cannot list the build entries before backlog round $round" "check that $TARGET is readable and $EVIDENCE writable by you"
   started="$(seconds_now)"
   env -u ONEBUDGETSPEC_RESULT just pool-maintenance >&2 ||
     die "the untimed backlog pass failed" "fix what the pruner reported above, then re-run"
   backlog_seconds="${backlog_seconds:+$backlog_seconds + }$(awk -v a="$started" -v b="$(seconds_now)" 'BEGIN { printf "%.2f", b - a }')s"
-  entries | LC_ALL=C comm -23 "$EVIDENCE/backlog-$round-before.txt" - >"$EVIDENCE/backlog-$round-removed.txt"
+  entries >"$EVIDENCE/backlog-$round-after.txt" ||
+    die "cannot list the build entries after backlog round $round" "check that $TARGET is readable and $EVIDENCE writable by you"
+  LC_ALL=C comm -23 "$EVIDENCE/backlog-$round-before.txt" "$EVIDENCE/backlog-$round-after.txt" \
+    >"$EVIDENCE/backlog-$round-removed.txt" ||
+    die "cannot record what backlog round $round removed" "check that $EVIDENCE is writable by you"
   [ -s "$EVIDENCE/backlog-$round-removed.txt" ] || break
 done
 

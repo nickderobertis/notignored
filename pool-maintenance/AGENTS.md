@@ -13,6 +13,10 @@
   exactly what that build created, rebuilds ordinarily, then times one pass. It fails rather than reports when the pass
   removed nothing or removed an ordinary build; the lists stay in
   `target/pool-maintenance/`.
+- **`test.sh` proves the staging, not the figure.** It runs the real
+  `measure.sh`, the root justfile's recipe and the pinned pruner over a
+  `target/` a cargo double fills — a cache-aged tree, a build that never
+  settles, and both refusals — so the gate needs no real build.
 - **Release-prep only.** It builds the crate twice, so its target is
   `budgets-release`, which no `check`, `budgets` or affected run selects —
   `tests/e2e/nx_workspace.rs` asserts that from Nx's task graphs. CI runs
