@@ -19,6 +19,7 @@ mod diff;
 mod eslint_parity;
 mod examples;
 mod github_release;
+mod grouping;
 mod install_retry;
 mod installer;
 mod js_tools_setup;
