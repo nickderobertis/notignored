@@ -701,3 +701,55 @@ fn a_group_summary_escapes_its_path_as_html() {
         "{body}"
     );
 }
+
+/// Angle brackets are what could open a tag inside the `<summary>`. Windows
+/// forbids them in a file name, so this half runs where a file can carry them.
+#[cfg(unix)]
+#[test]
+fn a_group_summary_cannot_open_a_tag_from_its_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let directive = "# noqa: E501  # the vendor URL cannot be wrapped";
+    write(
+        dir.path(),
+        "<b>.py",
+        &format!("x = 1  {directive}\ny = 2  {directive}\n"),
+    );
+    let (body, _) = run_in(dir.path(), &["--format", "markdown"]);
+    assert!(
+        body.contains("  <summary>suppressed code (&lt;b&gt;.py:1)</summary>\n"),
+        "{body}"
+    );
+    for summary in body.lines().filter(|line| line.contains("<summary>")) {
+        assert!(!summary.contains("<b>"), "{summary}");
+    }
+}
+
+/// One unlisted entry holding a group is named in the singular, beside the
+/// suppressions inside it.
+#[test]
+fn one_unlisted_group_is_one_more_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "a.py",
+        "import os  # noqa: F401  # re-exported for the plugin API\n",
+    );
+    let directive = "# noqa: E501  # the vendor URL cannot be wrapped";
+    write(
+        dir.path(),
+        "b.py",
+        &format!("x = 1  {directive}\ny = 2  {directive}\n"),
+    );
+    let (body, _) = run_in(dir.path(), &["--format", "markdown", "--max-entries", "1"]);
+    assert_eq!(
+        bullets(&body),
+        vec!["- **ruff F401** — _re-exported for the plugin API_ — `a.py:1`"],
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            "\n_… and 1 more entry (2 suppressions) not shown (3 suppressions total)._\n"
+        ),
+        "{body}"
+    );
+}
