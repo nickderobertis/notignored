@@ -75,8 +75,9 @@ mkdir -p "$EVIDENCE" || die "cannot create $EVIDENCE" "check that $TARGET is wri
 rm -f "$EVIDENCE"/backlog-*.txt
 
 # 1. The backlog, untimed, until the ordinary build is current: its seconds are
-# recorded only as evidence. Convergence takes at most three rounds (the header),
-# so a fourth means the build is not reproducible and the workload is unknown.
+# recorded only as evidence. Convergence takes at most three rounds (the header);
+# a fourth is margin, and if it too removes builds the tree never reached the
+# workload, so the script refuses rather than times a pass over an unknown one.
 readonly BACKLOG_ROUNDS=4
 backlog_seconds=""
 round=0
