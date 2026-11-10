@@ -162,6 +162,14 @@ the record is what every parser dispatch builds against, and the extractor's
 cursor cannot emit a zero. The invariant that *is* enforceable at a trust
 boundary — an envelope from a newer build — is rejected on deserialization.
 
+## Grouping is presentation, never the record
+
+`human` and `markdown` show identical suppressions as one entry (`--no-group`
+turns it off); the rule lives once, in `src/cli/group.rs`, so the two formats
+cannot disagree. Never let it reach `json`, the SDKs or any count a reader sees
+— those stay per suppression. The `--no-group` goldens were recorded by the
+binary *before* grouping existed: never re-bless them.
+
 ## Adding a tool parser
 
 One module under `src/tools/`, one line in `src/tools/mod.rs::registry()`, one

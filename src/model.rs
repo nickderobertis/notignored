@@ -130,7 +130,7 @@ impl FromStr for Tool {
 }
 
 /// How far a directive's suppression reaches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Scope {
     /// Silences rules on the line the directive sits on.
@@ -173,7 +173,7 @@ impl fmt::Display for Scope {
 /// or reach the change altered is [`Change::Added`], because it now silences
 /// something its base version did not — a block whose end marker moved down has
 /// swallowed real code, however unchanged its own words are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Change {
     /// The change wrote this suppression — or rewrote which rules, or how far,

@@ -1,0 +1,15 @@
+tests/fixtures/grouping/src/lib.rs:4:1 rust dead_code (next-line) -- kept for the plugin API
+tests/fixtures/grouping/src/lib.rs:7:1 rust dead_code (next-line) -- kept for the plugin API
+tests/fixtures/grouping/src/models.py:3:14 ruff E501,F401 (line) -- re-exported for the plugin API
+tests/fixtures/grouping/src/models.py:4:12 ruff F401,E501 (line) -- re-exported for the plugin API
+tests/fixtures/grouping/src/models.py:5:12 ruff E501,F401,E501 (line) -- re-exported for the plugin API
+tests/fixtures/grouping/src/models.py:6:13 ruff * (line) -- re-exported for the plugin API
+tests/fixtures/grouping/src/models.py:7:12 ruff F401 (line) -- re-exported for the plugin API
+tests/fixtures/grouping/src/models.py:8:13 ruff e501,F401 (line) -- re-exported for the plugin API
+tests/fixtures/grouping/src/models.py:9:13 ruff E501,F401 (line) -- re-exported for the public API
+tests/fixtures/grouping/src/models.py:10:1 ruff E501,F401 (file) -- re-exported for the plugin API
+tests/fixtures/grouping/src/models.py:12:19 mypy attr-defined (line) -- the stub predates this constant
+tests/fixtures/grouping/src/models.py:13:21 ty attr-defined (line) -- the stub predates this constant
+tests/fixtures/grouping/src/views.py:3:23 ruff F401,E501 (line) -- re-exported for the plugin API
+tests/fixtures/grouping/src/views.py:5:28 mypy attr-defined (line) -- the stub predates this constant
+tests/fixtures/grouping/src/views.py:6:25 pyright reportPrivateUsage (line) -- the private cache is ours

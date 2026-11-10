@@ -144,8 +144,10 @@ fn a_noqa_inside_a_string_literal_is_never_reported() {
 
 #[test]
 fn the_human_format_renders_the_same_grammar_readably() {
+    // `--no-group`: each spelling is its own case here, and the default would
+    // fold the identical ones under one header, hiding which line said what.
     let output = notignored(&grammar_dir())
-        .args(["grammar.py", "--tool", "ruff"])
+        .args(["grammar.py", "--tool", "ruff", "--no-group"])
         .output()
         .expect("run notignored");
     assert!(output.status.success());

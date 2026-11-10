@@ -4,7 +4,7 @@
     {
       "name": "diff",
       "toggles": {},
-      "hash": "fbf478b0cc6799a13668d19af8bd36d4cbeebe69f341ef25aca61e8f7dbb6d63"
+      "hash": "dfd82e55366ac3feb8e2fd4c3c1417dc762f23d36a4b85972b8af1ec4a5c8031"
     },
     {
       "name": "json",
@@ -14,7 +14,7 @@
     {
       "name": "pr-comment",
       "toggles": {},
-      "hash": "51014a6c71c1b3f448fe4bce79d594c37619db944490815cdbd366a3848c284d"
+      "hash": "1df0f859d64282f556d712c41ddf166f916ed872dca70c4ea96ae9ee1d59804d"
     },
     {
       "name": "scan",

@@ -7,10 +7,18 @@
 //! The body opens with a hidden [`MARKER`] comment. That marker is how the
 //! action finds its own comment again and edits it in place, so exactly one
 //! sticky comment accumulates on a pull request rather than one per push.
+//!
+//! Each entry is a bullet. Suppressions identical in everything but where they
+//! sit (see [`super::group`]) share one bullet that counts its locations and
+//! lists them as nested bullets, with one collapsed snippet for the first;
+//! every other suppression is a bullet carrying its own location and snippet.
+//! [`MarkdownOptions::group`] — `--no-group` — gives every suppression its own
+//! bullet again, and `max_entries` then counts suppressions.
 
 use std::io::{self, Write};
 use std::path::Path;
 
+use super::group::{self, Entry};
 use super::render::ChangeCounts;
 use super::{github_repo, github_sha};
 use crate::model::{Change, IgnoreDirective, Report, Scope};
@@ -27,6 +35,8 @@ pub const MARKER: &str = "<!-- notignored-report -->";
 /// A pull request that adds a hundred suppressions must not become a comment a
 /// hundred entries long — the reviewer scrolls past the diff to reach it. The
 /// closing line still names the total, so nothing is hidden, only unlisted.
+/// A group of identical suppressions is one entry, so the cap spends itself on
+/// distinct decisions rather than on one decision written many times.
 pub const DEFAULT_MAX_ENTRIES: u32 = 20;
 
 /// Lines of suppressed source a snippet shows.
@@ -35,6 +45,14 @@ pub const DEFAULT_MAX_ENTRIES: u32 = 20;
 /// block long enough to need its own scrollbar has stopped being one — a reader
 /// who wants the rest follows the permalink.
 const SNIPPET_LINES: u32 = 10;
+
+/// Locations a group lists under its bullet before one line counts the rest.
+///
+/// Not configurable, for the reason the snippet is not: a group is one decision,
+/// and a bullet whose location list outgrows the comment buries every other
+/// decision under it. Every location is still in the report and the `json`
+/// envelope; the comment shows enough to follow the pattern.
+const MAX_GROUP_LOCATIONS: usize = 10;
 
 /// Lines of unsuppressed source shown either side of a **single** suppressed
 /// line.
@@ -69,18 +87,23 @@ pub struct MarkdownOptions {
     pub repo: Option<String>,
     /// Commit the permalinks pin the source to.
     pub sha: Option<String>,
-    /// Most entries the body lists before summarizing the remainder.
+    /// Most entries the body lists before summarizing the remainder; a group
+    /// of identical suppressions is one entry.
     pub max_entries: u32,
+    /// Present identical suppressions as one entry listing every location.
+    /// Off, every suppression is its own entry, as `--no-group` asks.
+    pub group: bool,
 }
 
 /// The defaults a `--format markdown` run gets when it is told nothing: no
-/// permalinks, and the standard cap.
+/// permalinks, the standard cap, and identical suppressions grouped.
 impl Default for MarkdownOptions {
     fn default() -> Self {
         MarkdownOptions {
             repo: None,
             sha: None,
             max_entries: DEFAULT_MAX_ENTRIES,
+            group: true,
         }
     }
 }
@@ -158,21 +181,26 @@ fn body(report: &Report, options: &MarkdownOptions, source: &dyn SnippetSource) 
     } else {
         let count = report.ignores.len();
         body.push_str(&format!("### notignored: {}\n\n", heading(report)));
+        let entries = group::entries(&report.ignores, options.group);
         let listed = usize::try_from(options.max_entries).unwrap_or(usize::MAX);
-        for directive in report.ignores.iter().take(listed) {
-            body.push_str(&entry(directive, options));
-            if let Some(snippet) = snippet(directive, source) {
+        for entry in entries.iter().take(listed) {
+            let first = entry.first();
+            let label = if entry.is_group() {
+                body.push_str(&group_entry(entry, options));
+                Some(format!("{}:{}", first.path, first.line))
+            } else {
+                body.push_str(&single_entry(first, options));
+                None
+            };
+            if let Some(snippet) = snippet(first, label.as_deref(), source) {
                 body.push('\n');
                 body.push_str(&snippet);
                 body.push('\n');
             }
         }
-        let omitted = count.saturating_sub(listed);
-        if omitted > 0 {
+        if let Some(closing) = closing(entries.get(listed..).unwrap_or_default(), count) {
             separate(&mut body);
-            body.push_str(&format!(
-                "_… and {omitted} more not shown ({count} total)._\n"
-            ));
+            body.push_str(&closing);
         }
     }
     if !report.errors.is_empty() {
@@ -262,8 +290,77 @@ fn separate(body: &mut String) {
     }
 }
 
-/// One directive as a list item: what is silenced, why, and where.
-fn entry(directive: &IgnoreDirective, options: &MarkdownOptions) -> String {
+/// The line closing a body that could not list every entry, or `None` when it
+/// listed them all.
+///
+/// When every unlisted entry is a single suppression the two counts are one
+/// number, and the line reads as it did before grouping existed. Otherwise it
+/// names both — the entries left out and the suppressions inside them — beside
+/// the total, so a reader never mistakes eleven unlisted entries for eleven
+/// unlisted suppressions.
+fn closing(unlisted: &[Entry<'_>], total: usize) -> Option<String> {
+    if unlisted.is_empty() {
+        return None;
+    }
+    let suppressions: usize = unlisted.iter().map(Entry::len).sum();
+    if suppressions == unlisted.len() {
+        return Some(format!(
+            "_… and {suppressions} more not shown ({total} total)._\n"
+        ));
+    }
+    Some(format!(
+        "_… and {} ({}) not shown ({} total)._\n",
+        plural(unlisted.len(), "more entry", "more entries"),
+        plural(suppressions, "suppression", "suppressions"),
+        plural(total, "suppression", "suppressions"),
+    ))
+}
+
+/// One suppression as a list item: what is silenced, why, and where.
+fn single_entry(directive: &IgnoreDirective, options: &MarkdownOptions) -> String {
+    format!(
+        "- {} — {}\n",
+        decision(directive),
+        location(directive, options)
+    )
+}
+
+/// A group of identical suppressions as one list item that counts them, with
+/// their locations as nested items — the first [`MAX_GROUP_LOCATIONS`] of them,
+/// then one item counting the rest.
+fn group_entry(entry: &Entry<'_>, options: &MarkdownOptions) -> String {
+    let count = entry.len();
+    let mut item = format!(
+        "- {} — {}\n",
+        decision(entry.first()),
+        plural(count, "location", "locations")
+    );
+    for member in entry.members().take(MAX_GROUP_LOCATIONS) {
+        item.push_str(&format!("  - {}\n", location(member, options)));
+    }
+    let unlisted = count.saturating_sub(MAX_GROUP_LOCATIONS);
+    if unlisted > 0 {
+        item.push_str(&format!(
+            "  - … and {}\n",
+            plural(unlisted, "more location", "more locations")
+        ));
+    }
+    item
+}
+
+/// Where a suppression sits: a permalink to its line, or `path:line` as code
+/// text when this run was not told where the source lives.
+fn location(directive: &IgnoreDirective, options: &MarkdownOptions) -> String {
+    let location = format!("{}:{}", directive.path, directive.line);
+    match options.permalink(directive) {
+        Some(url) => format!("[{}]({url})", escape(&location)),
+        None => format!("`{location}`"),
+    }
+}
+
+/// What a suppression silences and why: `**tool rules**`, the edited marker
+/// when the change rewrote its justification, and the reason.
+fn decision(directive: &IgnoreDirective) -> String {
     let rules = if directive.rules.is_empty() {
         "(all rules)".to_string()
     } else {
@@ -278,21 +375,13 @@ fn entry(directive: &IgnoreDirective, options: &MarkdownOptions) -> String {
         Some(reason) => format!("_{}_", escape(reason)),
         None => "_no reason given_".to_string(),
     };
-    let location = format!("{}:{}", directive.path, directive.line);
-    let location = match options.permalink(directive) {
-        Some(url) => format!("[{}]({url})", escape(&location)),
-        None => format!("`{location}`"),
-    };
     // The marker sits at the head of the item, where the eye lands, rather than
     // inside the italic prose the stated reason already owns.
     let edited = match directive.change {
         Some(Change::JustificationEdited) => " _(justification edited)_",
         _ => "",
     };
-    format!(
-        "- **{} {rules}**{edited} — {reason} — {location}\n",
-        directive.tool
-    )
+    format!("**{} {rules}**{edited} — {reason}", directive.tool)
 }
 
 /// The 1-based source range a directive silences, clamped to a file of `count`
@@ -337,9 +426,17 @@ fn suppressed_range(directive: &IgnoreDirective, count: u32) -> Option<(u32, u32
 /// span, and a `file`-scope directive, carry their own context and are shown as
 /// they always were.
 ///
+/// `label` names the location in the `<summary>` — a group's snippet is its
+/// first location's, and has to say so — and is `None` for a single
+/// suppression, whose bullet already sits beside its one location.
+///
 /// `None` when the file cannot be read or does not hold the range the record
 /// names — the entry then renders without its snippet rather than failing.
-fn snippet(directive: &IgnoreDirective, source: &dyn SnippetSource) -> Option<String> {
+fn snippet(
+    directive: &IgnoreDirective,
+    label: Option<&str>,
+    source: &dyn SnippetSource,
+) -> Option<String> {
     let lines = source.lines(&directive.path)?;
     let count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
     let (first, last) = suppressed_range(directive, count)?;
@@ -356,7 +453,11 @@ fn snippet(directive: &IgnoreDirective, source: &dyn SnippetSource) -> Option<St
     let window = &lines[(from as usize - 1)..to as usize];
     let fence = fence_for(window);
     let width = to.to_string().len();
-    let mut block = String::from("  <details>\n  <summary>suppressed code</summary>\n\n");
+    let summary = match label {
+        Some(label) => format!("suppressed code ({})", escape_html(label)),
+        None => "suppressed code".to_string(),
+    };
+    let mut block = format!("  <details>\n  <summary>{summary}</summary>\n\n");
     if let Some(note) = note(directive, last - first + 1) {
         block.push_str(&format!("  {note}\n\n"));
     }
@@ -440,6 +541,15 @@ fn escape(text: &str) -> String {
         escaped.push(character);
     }
     escaped
+}
+
+/// Escape text bound for raw HTML — a `<summary>` — where markdown's backslash
+/// escapes mean nothing, so a path holding `<` or `&` cannot open a tag or an
+/// entity of its own.
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Percent-encode a report path for use in a URL.
@@ -826,7 +936,16 @@ mod tests {
         }
     }
 
-    /// The cap, at the two counts that decide it.
+    /// Options that list every suppression on its own, as `--no-group` does.
+    fn ungrouped() -> MarkdownOptions {
+        MarkdownOptions {
+            group: false,
+            ..options()
+        }
+    }
+
+    /// The cap, at the two counts that decide it, over suppressions that each
+    /// get their own entry.
     #[test]
     fn the_body_lists_at_most_max_entries_and_counts_the_rest() {
         for (count, listed, overflow) in [
@@ -838,7 +957,7 @@ mod tests {
             for line in 1..=count {
                 report.ignores.push(directive(line, Some("why")));
             }
-            let rendered = body(&report, &options(), &Stub::default());
+            let rendered = body(&report, &ungrouped(), &Stub::default());
             assert_eq!(
                 rendered.matches("- **ruff E501**").count(),
                 listed,
@@ -867,7 +986,7 @@ mod tests {
         }
         let capped = MarkdownOptions {
             max_entries: 2,
-            ..options()
+            ..ungrouped()
         };
         let rendered = body(&report, &capped, &Stub::default());
         assert_eq!(rendered.matches("- **ruff E501**").count(), 2, "{rendered}");
@@ -878,11 +997,225 @@ mod tests {
 
         let roomy = MarkdownOptions {
             max_entries: 50,
-            ..options()
+            ..ungrouped()
         };
         let rendered = body(&report, &roomy, &Stub::default());
         assert_eq!(rendered.matches("- **ruff E501**").count(), 3, "{rendered}");
         assert!(!rendered.contains("not shown"), "{rendered}");
+    }
+
+    /// The permalink for `line` of `src/app.py` at the options' commit.
+    fn link(line: u32) -> String {
+        format!(
+            "[src/app.py:{line}](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/src/app.py#L{line})"
+        )
+    }
+
+    /// `count` identical suppressions, on lines 1 to `count`.
+    fn identical(count: u32) -> Report {
+        let mut report = Report::new();
+        for line in 1..=count {
+            report.ignores.push(directive(line, Some("why")));
+        }
+        report
+    }
+
+    /// The whole shape of a group, spelled out: one bullet counting its
+    /// locations, each location a nested permalink, then one snippet naming the
+    /// location it shows.
+    #[test]
+    fn a_group_is_one_bullet_with_its_locations_nested_and_one_snippet() {
+        let source =
+            Stub::default().with("src/app.py", "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+        let mut report = Report::new();
+        report.ignores.push(directive(2, Some("why")));
+        report.ignores.push(directive(6, Some("why")));
+        let rendered = body(&report, &options(), &source);
+        assert_eq!(
+            rendered,
+            format!(
+                "{MARKER}\n\n### notignored: 2 suppressions\n\n\
+                 - **ruff E501** — _why_ — 2 locations\n  - {}\n  - {}\n\n\
+                 \x20 <details>\n  <summary>suppressed code (src/app.py:2)</summary>\n\n\
+                 \x20 ```python\n    1 | one\n  > 2 | two\n    3 | three\n    4 | four\n  ```\n\n\
+                 \x20 </details>\n\n{STAMP}",
+                link(2),
+                link(6)
+            )
+        );
+    }
+
+    /// Without the permalink flags a location is code text, as a single
+    /// entry's is, and a group's edited marker sits where a single entry's does.
+    #[test]
+    fn a_group_without_permalinks_lists_plain_locations_and_keeps_its_marker() {
+        let mut report = Report::new();
+        for line in [3, 9] {
+            report.ignores.push(IgnoreDirective {
+                change: Some(Change::JustificationEdited),
+                ..directive(line, Some("why"))
+            });
+        }
+        let rendered = render(&report, &MarkdownOptions::default());
+        assert!(
+            rendered.contains(
+                "- **ruff E501** _(justification edited)_ — _why_ — 2 locations\n  - `src/app.py:3`\n  - `src/app.py:9`\n"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("### notignored: 2 justifications edited\n"),
+            "{rendered}"
+        );
+    }
+
+    /// Ten locations are all listed; the eleventh is counted, never linked.
+    #[test]
+    fn a_group_lists_ten_locations_and_counts_the_rest() {
+        let rendered = render(&identical(10), &options());
+        assert_eq!(
+            rendered.matches("\n  - [src/app.py:").count(),
+            10,
+            "{rendered}"
+        );
+        assert!(!rendered.contains("more location"), "{rendered}");
+
+        let rendered = render(&identical(11), &options());
+        assert_eq!(
+            rendered.matches("\n  - [src/app.py:").count(),
+            10,
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("  - {}\n  - … and 1 more location\n", link(10))),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&link(11)), "{rendered}");
+
+        let rendered = render(&identical(14), &options());
+        assert!(
+            rendered.contains("  - … and 4 more locations\n"),
+            "{rendered}"
+        );
+    }
+
+    /// The cap counts entries: a group of many is one of them, and a closing
+    /// line with a group among the unlisted names entries and suppressions.
+    #[test]
+    fn max_entries_counts_a_group_as_one_entry() {
+        let mut report = Report::new();
+        report.ignores.push(IgnoreDirective {
+            rules: vec!["F401".into()],
+            ..directive(1, Some("why"))
+        });
+        for line in 2..=4 {
+            report.ignores.push(directive(line, Some("why")));
+        }
+        report.ignores.push(IgnoreDirective {
+            rules: vec!["E402".into()],
+            ..directive(5, Some("why"))
+        });
+        let at = |max_entries| {
+            render(
+                &report,
+                &MarkdownOptions {
+                    max_entries,
+                    ..options()
+                },
+            )
+        };
+        assert!(!at(3).contains("not shown"), "{}", at(3));
+        assert!(
+            at(1).ends_with(&format!(
+                "_… and 2 more entries (4 suppressions) not shown (5 suppressions total)._\n\n{STAMP}"
+            )),
+            "{}",
+            at(1)
+        );
+        // Only a single suppression is left out: the line it always was.
+        assert!(
+            at(2).ends_with(&format!("_… and 1 more not shown (5 total)._\n\n{STAMP}")),
+            "{}",
+            at(2)
+        );
+
+        // One unlisted entry is singular, whatever it holds.
+        let mut grouped_last = identical(3);
+        grouped_last.ignores.insert(
+            0,
+            IgnoreDirective {
+                rules: vec!["F401".into()],
+                ..directive(1, Some("why"))
+            },
+        );
+        let rendered = render(
+            &grouped_last,
+            &MarkdownOptions {
+                max_entries: 1,
+                ..options()
+            },
+        );
+        assert!(
+            rendered.contains(
+                "_… and 1 more entry (3 suppressions) not shown (4 suppressions total)._\n"
+            ),
+            "{rendered}"
+        );
+    }
+
+    /// A single suppression beside a group renders exactly as it did before
+    /// grouping existed, and turning grouping off restores one bullet each.
+    #[test]
+    fn a_suppression_with_no_twin_renders_as_it_always_did() {
+        let source =
+            Stub::default().with("src/app.py", "one\ntwo\nthree\nfour\nfive\nsix\nseven\n");
+        let mut report = identical(2);
+        report.ignores.push(IgnoreDirective {
+            rules: vec!["F401".into()],
+            ..directive(4, Some("why"))
+        });
+        let grouped = body(&report, &options(), &source);
+        let alone = body(
+            &Report {
+                ignores: vec![report.ignores[2].clone()],
+                ..Report::new()
+            },
+            &options(),
+            &source,
+        );
+        let single = alone
+            .split_once("\n\n- ")
+            .and_then(|(_, rest)| rest.split_once("\n\n---"))
+            .map(|(entry, _)| format!("- {entry}\n\n"))
+            .expect("one entry");
+        assert!(grouped.contains(&single), "{grouped}\nlacks\n{single}");
+
+        let flat = body(&report, &ungrouped(), &source);
+        assert_eq!(flat.matches("\n- **ruff").count(), 3, "{flat}");
+        assert!(!flat.contains("locations"), "{flat}");
+        assert_eq!(
+            flat.matches("<summary>suppressed code</summary>").count(),
+            3,
+            "{flat}"
+        );
+    }
+
+    /// The `<summary>` is raw HTML, where a backslash escapes nothing.
+    #[test]
+    fn a_group_summary_cannot_open_a_tag_of_its_own() {
+        let source = Stub::default().with("a<b>&c.py", "one\n");
+        let mut report = Report::new();
+        for _ in 0..2 {
+            report.ignores.push(IgnoreDirective {
+                path: "a<b>&c.py".into(),
+                ..directive(1, Some("why"))
+            });
+        }
+        let rendered = body(&report, &options(), &source);
+        assert!(
+            rendered.contains("<summary>suppressed code (a&lt;b&gt;&amp;c.py:1)</summary>"),
+            "{rendered}"
+        );
     }
 
     /// What a snippet shows is the record's `suppressed` span, which is what
