@@ -5,10 +5,12 @@
   pool-maintenance` pass holds a warm slot out of service. The recipe owns the
   window and the target dirs; `measure.sh` only runs it.
 - **Steady state, never backlog.** The figure is the pass after one run's worth
-  of superseded builds. `measure.sh` clears the backlog untimed, builds the
-  gate's test binaries under a debuginfo profile (new metadata hashes in the
-  same profile dir), backdates exactly what that build created, rebuilds
-  ordinarily, then times one pass. It fails rather than reports when the pass
+  of superseded builds. `measure.sh` clears the backlog untimed — gate build
+  then pass, repeated until a pass removes nothing, because a crate built twice
+  per profile is one unit to the pruner and a cache-aged half of it only goes
+  stale once the other is rebuilt — builds the gate's test binaries under a
+  debuginfo profile (new metadata hashes in the same profile dir), backdates
+  exactly what that build created, rebuilds ordinarily, then times one pass. It fails rather than reports when the pass
   removed nothing or removed an ordinary build; the lists stay in
   `target/pool-maintenance/`.
 - **Release-prep only.** It builds the crate twice, so its target is
