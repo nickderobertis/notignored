@@ -302,7 +302,7 @@ fn closing(unlisted: &[Entry<'_>], total: usize) -> Option<String> {
     if unlisted.is_empty() {
         return None;
     }
-    let suppressions: usize = unlisted.iter().map(|entry| entry.members.len()).sum();
+    let suppressions: usize = unlisted.iter().map(Entry::len).sum();
     if suppressions == unlisted.len() {
         return Some(format!(
             "_… and {suppressions} more not shown ({total} total)._\n"
@@ -329,13 +329,13 @@ fn single_entry(directive: &IgnoreDirective, options: &MarkdownOptions) -> Strin
 /// their locations as nested items — the first [`MAX_GROUP_LOCATIONS`] of them,
 /// then one item counting the rest.
 fn group_entry(entry: &Entry<'_>, options: &MarkdownOptions) -> String {
-    let count = entry.members.len();
+    let count = entry.len();
     let mut item = format!(
         "- {} — {}\n",
         decision(entry.first()),
         plural(count, "location", "locations")
     );
-    for member in entry.members.iter().take(MAX_GROUP_LOCATIONS) {
+    for member in entry.members().take(MAX_GROUP_LOCATIONS) {
         item.push_str(&format!("  - {}\n", location(member, options)));
     }
     let unlisted = count.saturating_sub(MAX_GROUP_LOCATIONS);

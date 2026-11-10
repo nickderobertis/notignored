@@ -14,29 +14,47 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::model::{IgnoreDirective, Tool};
+use crate::model::{Change, IgnoreDirective, Scope, Tool};
 
 /// One entry of a rendered report: a suppression, or every suppression
 /// identical to it.
 ///
-/// Never empty: the first member is the one whose position the entry takes and
-/// whose rule spelling it shows.
+/// It cannot be empty: the first member is held apart from the rest, and it is
+/// the one whose position the entry takes and whose rule spelling it shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry<'a> {
-    /// The suppressions this entry stands for, in report order.
-    pub(crate) members: Vec<&'a IgnoreDirective>,
+    first: &'a IgnoreDirective,
+    /// The members after the first, in report order.
+    rest: Vec<&'a IgnoreDirective>,
 }
 
 impl<'a> Entry<'a> {
+    fn new(first: &'a IgnoreDirective) -> Self {
+        Entry {
+            first,
+            rest: Vec::new(),
+        }
+    }
+
     /// The member the entry is rendered from.
     pub(crate) fn first(&self) -> &'a IgnoreDirective {
-        self.members[0]
+        self.first
+    }
+
+    /// Every suppression this entry stands for, in report order.
+    pub(crate) fn members(&self) -> impl Iterator<Item = &'a IgnoreDirective> + '_ {
+        std::iter::once(self.first).chain(self.rest.iter().copied())
+    }
+
+    /// How many suppressions this entry stands for.
+    pub(crate) fn len(&self) -> usize {
+        1 + self.rest.len()
     }
 
     /// Whether this entry stands for more than one suppression, and so lists
     /// its locations under it rather than inline.
     pub(crate) fn is_group(&self) -> bool {
-        self.members.len() > 1
+        !self.rest.is_empty()
     }
 }
 
@@ -44,20 +62,20 @@ impl<'a> Entry<'a> {
 #[derive(PartialEq, Eq, Hash)]
 struct Identity<'a> {
     tool: Tool,
-    scope: &'static str,
+    scope: Scope,
     rules: BTreeSet<&'a str>,
     reason: Option<&'a str>,
-    change: Option<&'static str>,
+    change: Option<Change>,
 }
 
 impl<'a> Identity<'a> {
     fn of(directive: &'a IgnoreDirective) -> Self {
         Identity {
             tool: directive.tool,
-            scope: directive.scope.as_str(),
+            scope: directive.scope,
             rules: directive.rules.iter().map(String::as_str).collect(),
             reason: directive.reason.as_deref(),
-            change: directive.change.map(|change| change.as_str()),
+            change: directive.change,
         }
     }
 }
@@ -70,23 +88,18 @@ impl<'a> Identity<'a> {
 /// is exactly the output before grouping existed.
 pub(crate) fn entries(ignores: &[IgnoreDirective], group: bool) -> Vec<Entry<'_>> {
     if !group {
-        return ignores
-            .iter()
-            .map(|directive| Entry {
-                members: vec![directive],
-            })
-            .collect();
+        return ignores.iter().map(Entry::new).collect();
     }
     let mut entries: Vec<Entry<'_>> = Vec::new();
     let mut seen: HashMap<Identity<'_>, usize> = HashMap::new();
     for directive in ignores {
-        let index = *seen.entry(Identity::of(directive)).or_insert_with(|| {
-            entries.push(Entry {
-                members: Vec::new(),
-            });
-            entries.len() - 1
-        });
-        entries[index].members.push(directive);
+        match seen.get(&Identity::of(directive)) {
+            Some(&index) => entries[index].rest.push(directive),
+            None => {
+                seen.insert(Identity::of(directive), entries.len());
+                entries.push(Entry::new(directive));
+            }
+        }
     }
     entries
 }
@@ -119,7 +132,7 @@ mod tests {
     fn lines(ignores: &[IgnoreDirective], group: bool) -> Vec<Vec<u32>> {
         entries(ignores, group)
             .iter()
-            .map(|entry| entry.members.iter().map(|member| member.line).collect())
+            .map(|entry| entry.members().map(|member| member.line).collect())
             .collect()
     }
 

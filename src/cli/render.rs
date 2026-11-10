@@ -263,13 +263,9 @@ fn plural_edited(count: usize) -> String {
 /// header and in the location's own colour, so the list reads as the header's.
 fn write_group(entry: &Entry<'_>, out: &mut dyn Write, color: bool) -> io::Result<()> {
     let first = entry.first();
-    let count = paint(
-        &format!("({} locations)", entry.members.len()),
-        LOCATION,
-        color,
-    );
+    let count = paint(&format!("({} locations)", entry.len()), LOCATION, color);
     writeln!(out, "{}", describe(first, Some(&count), color))?;
-    for member in &entry.members {
+    for member in entry.members() {
         writeln!(out, "  {}", location(member, color))?;
     }
     Ok(())

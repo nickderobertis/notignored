@@ -563,3 +563,141 @@ fn a_diff_never_groups_an_addition_with_a_rewritten_justification() {
         "{body}"
     );
 }
+
+/// Run the binary in `dir` over `.` and require a clean exit.
+fn run_in(dir: &std::path::Path, args: &[&str]) -> (String, String) {
+    let output = notignored(dir).args(args).output().expect("run notignored");
+    assert!(output.status.success(), "{}", stderr(&output));
+    (stdout(&output), stderr(&output))
+}
+
+/// A missing reason is a reason of its own: two reason-less suppressions
+/// group, and neither joins a reasoned one. Written at run time rather than
+/// committed, because a committed reason-less directive is a finding this
+/// repository's own scan would have to be told to ignore.
+#[test]
+fn suppressions_without_a_reason_group_only_with_each_other() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "app.py",
+        "x = 1  # noqa: E501\ny = 2  # noqa: E501\nz = 3  # noqa: E501  # why\n",
+    );
+    let (out, _) = run_in(dir.path(), &[]);
+    assert_eq!(
+        out,
+        "ruff E501 (line) (2 locations)\n  app.py:1:8\n  app.py:2:8\napp.py:3:8 ruff E501 (line) -- why\n"
+    );
+    let (body, _) = run_in(dir.path(), &["--format", "markdown"]);
+    assert_eq!(
+        bullets(&body),
+        vec![
+            "- **ruff E501** — _no reason given_ — 2 locations",
+            "- **ruff E501** — _why_ — `app.py:3`",
+        ],
+        "{body}"
+    );
+    // Without the permalink flags a group's locations are code text.
+    assert_eq!(
+        nested(&body, "- **ruff E501** — _no reason given_"),
+        vec!["`app.py:1`", "`app.py:2`"],
+        "{body}"
+    );
+}
+
+/// Colour stays presentation: a grouped report forced into colour reads the
+/// same once the escapes are gone, and the count and every location carry the
+/// location's role.
+#[test]
+fn a_colored_group_changes_no_character_and_colors_its_locations() {
+    let (plain, plain_err) = human(&[TREE], &[]);
+    let (colored, colored_err) = human(&[TREE], &["--color", "always"]);
+    assert_ne!(colored, plain, "nothing was colorized");
+    assert_eq!(strip_ansi(&colored), plain);
+    assert_eq!(strip_ansi(&colored_err), plain_err);
+    let cyan = |text: &str| format!("\u{1b}[36m{text}\u{1b}[0m");
+    assert!(colored.contains(&cyan("(4 locations)")), "{colored:?}");
+    for line in human_locations(
+        &plain,
+        "ruff E501,F401 (line) (4 locations) -- re-exported for the plugin API",
+    ) {
+        assert!(
+            colored.contains(&format!("\n  {}\n", cyan(line))),
+            "{line} is not in the location colour: {colored:?}"
+        );
+    }
+}
+
+/// Drop every SGR escape, leaving the text a terminal would show.
+fn strip_ansi(text: &str) -> String {
+    let mut plain = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('\u{1b}') {
+        plain.push_str(&rest[..start]);
+        let after = &rest[start..];
+        let end = after.find('m').expect("an SGR escape ends in `m`");
+        rest = &after[end + 1..];
+    }
+    plain.push_str(rest);
+    plain
+}
+
+/// Rewritten justifications identical in every other way group like any
+/// others, and the group keeps the marker the summary and heading count.
+#[test]
+fn a_diff_groups_identical_rewritten_justifications_under_their_marker() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(root, "a.py", "x = 1  # noqa: E501  # the old reason\n");
+    write(root, "b.py", "y = 2  # noqa: E501  # an older reason\n");
+    commit(root, "baseline");
+    let directive = "# noqa: E501  # the vendor URL cannot be wrapped";
+    write(root, "a.py", &format!("x = 1  {directive}\n"));
+    write(root, "b.py", &format!("y = 2  {directive}\n"));
+
+    let (out, err) = run_in(root, &["--diff"]);
+    assert_eq!(
+        out,
+        "ruff E501 (line) (2 locations) (justification edited) -- the vendor URL cannot be wrapped\n  a.py:1:8\n  b.py:1:8\n"
+    );
+    assert_eq!(
+        err,
+        "notignored: 0 added, 2 justifications edited in 2 files\n"
+    );
+
+    let (body, _) = run_in(root, &["--diff", "--format", "markdown"]);
+    assert!(
+        body.contains("### notignored: 2 justifications edited\n"),
+        "{body}"
+    );
+    assert_eq!(
+        bullets(&body),
+        vec![
+            "- **ruff E501** _(justification edited)_ — _the vendor URL cannot be wrapped_ — 2 locations"
+        ],
+        "{body}"
+    );
+    assert_eq!(
+        nested(&body, "- **ruff E501**"),
+        vec!["`a.py:1`", "`b.py:1`"],
+        "{body}"
+    );
+}
+
+/// A group's `<summary>` is raw HTML, where markdown's backslash escapes mean
+/// nothing, so a path holding `&` is written as an entity.
+#[test]
+fn a_group_summary_escapes_its_path_as_html() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let directive = "# noqa: E501  # the vendor URL cannot be wrapped";
+    write(
+        dir.path(),
+        "R&D.py",
+        &format!("x = 1  {directive}\ny = 2  {directive}\n"),
+    );
+    let (body, _) = run_in(dir.path(), &["--format", "markdown"]);
+    assert!(
+        body.contains("  <summary>suppressed code (R&amp;D.py:1)</summary>\n"),
+        "{body}"
+    );
+}
