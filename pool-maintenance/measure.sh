@@ -5,7 +5,15 @@
 #
 # A regular pass faces one run's worth of superseded builds, never weeks of
 # history, so that state is made before anything is timed:
-#   1. the declared maintenance once, untimed, clears any backlog;
+#   1. the ordinary gate build, then the declared maintenance, untimed, repeated
+#      until a pass removes nothing — the steady state of a slot that runs the
+#      gate and then its maintenance. Once is not enough: cargo leaves a fresh
+#      unit's files as old as the run that wrote them (a restored CI cache keeps
+#      them weeks old), and the pruner groups a profile's builds by unit name, so
+#      a crate the gate builds twice — two feature sets, or a build script's
+#      compile and run — is a unit with two current builds. A pass removes the
+#      older of the two, the next build rewrites it fresh, and that now makes the
+#      other one superseded; only the round after converges;
 #   2. the gate's test build under an alternative profile — debuginfo on, which
 #      gives every unit a new metadata hash in the same profile directory — and
 #      exactly the entries that build created backdated past the 2-day window,
@@ -16,7 +24,7 @@
 # did not create, or the figure would describe a different workload; either is a
 # failure, never a figure. The entry lists stay in $EVIDENCE.
 #
-# It builds the crate twice, so only the release pull request's sweep runs it
+# It builds the crate under two profiles, so only the release pull request's sweep runs it
 # (`just budgets-release`), never a per-change gate.
 set -euo pipefail
 
@@ -64,12 +72,35 @@ gate_build() {
 seconds_now() { date +%s.%N; }
 
 mkdir -p "$EVIDENCE" || die "cannot create $EVIDENCE" "check that $TARGET is writable by you"
+rm -f "$EVIDENCE"/backlog-*.txt ||
+  die "cannot clear the last run's backlog lists from $EVIDENCE" "check that $EVIDENCE is writable by you"
 
-# 1. The backlog, untimed: its figure is recorded only as evidence.
-started="$(seconds_now)"
-env -u ONEBUDGETSPEC_RESULT just pool-maintenance >&2 ||
-  die "the untimed backlog pass failed" "fix what the pruner reported above, then re-run"
-backlog_seconds="$(awk -v a="$started" -v b="$(seconds_now)" 'BEGIN { printf "%.2f", b - a }')"
+# 1. The backlog, untimed, until the ordinary build is current: its seconds are
+# recorded only as evidence. Convergence takes at most three rounds (the header);
+# a fourth is margin, and if it too removes builds the tree never reached the
+# workload, so the script refuses rather than times a pass over an unknown one.
+readonly BACKLOG_ROUNDS=4
+backlog_seconds=""
+round=0
+while :; do
+  round=$((round + 1))
+  [ "$round" -le "$BACKLOG_ROUNDS" ] ||
+    die "$BACKLOG_ROUNDS backlog rounds each removed builds, so the ordinary build never became current" \
+      "read $EVIDENCE/backlog-*-removed.txt: an entry removed every round is one the gate build keeps superseding"
+  gate_build
+  entries >"$EVIDENCE/backlog-$round-before.txt" ||
+    die "cannot list the build entries before backlog round $round" "check that $TARGET is readable and $EVIDENCE writable by you"
+  started="$(seconds_now)"
+  env -u ONEBUDGETSPEC_RESULT just pool-maintenance >&2 ||
+    die "the untimed backlog pass failed" "fix what the pruner reported above, then re-run"
+  backlog_seconds="${backlog_seconds:+$backlog_seconds + }$(awk -v a="$started" -v b="$(seconds_now)" 'BEGIN { printf "%.2f", b - a }')s"
+  entries >"$EVIDENCE/backlog-$round-after.txt" ||
+    die "cannot list the build entries after backlog round $round" "check that $TARGET is readable and $EVIDENCE writable by you"
+  LC_ALL=C comm -23 "$EVIDENCE/backlog-$round-before.txt" "$EVIDENCE/backlog-$round-after.txt" \
+    >"$EVIDENCE/backlog-$round-removed.txt" ||
+    die "cannot record what backlog round $round removed" "check that $EVIDENCE is writable by you"
+  [ -s "$EVIDENCE/backlog-$round-removed.txt" ] || break
+done
 
 # 2. One run's worth of builds, then superseded.
 entries >"$EVIDENCE/before-alternative.txt"
@@ -102,7 +133,7 @@ LC_ALL=C comm -23 "$EVIDENCE/removed.txt" "$EVIDENCE/alternative.txt" >"$EVIDENC
   die "the timed pass removed $(wc -l <"$EVIDENCE/unexpected.txt") entries the alternative build did not create" \
     "read $EVIDENCE/unexpected.txt: the ordinary build was not each unit's newest"
 
-echo "measure: the timed pass removed $(wc -l <"$EVIDENCE/removed.txt") of the alternative build's $(wc -l <"$EVIDENCE/alternative.txt") entries; untimed backlog pass ${backlog_seconds}s; lists in $EVIDENCE" >&2
+echo "measure: the timed pass removed $(wc -l <"$EVIDENCE/removed.txt") of the alternative build's $(wc -l <"$EVIDENCE/alternative.txt") entries; untimed backlog passes ${backlog_seconds}; lists in $EVIDENCE" >&2
 
 # The backlog pass is evidence beside the figure, never part of it.
 if [ -n "${ONEBUDGETSPEC_RESULT:-}" ]; then
@@ -111,7 +142,7 @@ if [ -n "${ONEBUDGETSPEC_RESULT:-}" ]; then
     const fs = require("fs");
     const [file, backlog] = process.argv.slice(1);
     const result = JSON.parse(fs.readFileSync(file, "utf8"));
-    const note = `untimed backlog pass beforehand: ${backlog} s (not counted)`;
+    const note = `untimed backlog passes beforehand: ${backlog} (not counted)`;
     result.detail = result.detail ? `${result.detail}; ${note}` : note;
     fs.writeFileSync(file, JSON.stringify(result));
   ' "$ONEBUDGETSPEC_RESULT" "$backlog_seconds" ||

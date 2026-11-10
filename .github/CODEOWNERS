@@ -24,6 +24,7 @@
 # The pool maintenance onevcs runs, and the budget that times it.
 /onevcs.toml             @nickderobertis
 /pool-maintenance/       @nickderobertis
+/pool-maintenance/journeys/ @nickderobertis
 
 # The orchestration and release surfaces, where a mistake is repo-wide.
 /.github/                @nickderobertis
