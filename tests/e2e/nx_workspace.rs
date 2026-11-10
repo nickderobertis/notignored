@@ -21,15 +21,18 @@ use crate::support::{bash_program, repo_root};
 /// pays only for the tiers it reaches: the `tests/*.rs` contract suites and the
 /// `tests/e2e/` journeys. The crate's unit tests stay in the crate's project.
 /// `pool-maintenance` owns the budget of the pool maintenance `onevcs.toml`
-/// declares, and reaches nothing else. `github-workflows` owns the workflow
-/// graph's macOS scheduling policy and its budgets.
-const PROJECTS: [&str; 7] = [
+/// declares, and reaches nothing else; `pool-maintenance-journeys` drives its
+/// measurement with the real pruner, so like the e2e tier it names the files it
+/// reads rather than depending on a project. `github-workflows` owns the
+/// workflow graph's macOS scheduling policy and its budgets.
+const PROJECTS: [&str; 8] = [
     "notignored",
     "notignored-integration",
     "notignored-e2e",
     "notignored-sdk-python",
     "notignored-sdk-npm",
     "pool-maintenance",
+    "pool-maintenance-journeys",
     "github-workflows",
 ];
 
@@ -268,7 +271,7 @@ fn the_crates_coverage_combines_every_test_tier() {
 #[test]
 fn affected_selection_maps_each_tree_to_its_own_project() {
     const CRATE_AND_TIERS: &[&str] = &CRATE_PROJECTS;
-    let cases: [(&str, &[&str]); 16] = [
+    let cases: [(&str, &[&str]); 17] = [
         (
             "src/lib.rs",
             &[
@@ -304,7 +307,14 @@ fn affected_selection_maps_each_tree_to_its_own_project() {
             &["notignored-sdk-python"],
         ),
         ("npm/notignored-sdk/README.md", &["notignored-sdk-npm"]),
-        ("pool-maintenance/measure.sh", &["pool-maintenance"]),
+        (
+            "pool-maintenance/measure.sh",
+            &["pool-maintenance", "pool-maintenance-journeys"],
+        ),
+        (
+            "pool-maintenance/journeys/test.sh",
+            &["pool-maintenance-journeys"],
+        ),
         // The orchestrator's own config changes what every target *is*, so it
         // has to reach every project — the one case where scoping would be wrong.
         ("nx.json", &PROJECTS),
