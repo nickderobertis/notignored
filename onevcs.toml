@@ -14,7 +14,14 @@
 # the justfile owns that window and the target list; how long one pass takes is
 # the `notignored-pool-maintenance-seconds` budget in
 # `pool-maintenance/budgets.yaml`.
-schema_version = 1
+schema_version = 2
+
+[policy]
+publication = "change-auto"
+approvals = "none"
+
+[policy.checks]
+wait_seconds = 8100  # recorded max 6321 s (run 39155169357) + 25% margin
 
 [pool.maintain]
 command = ["just", "pool-maintenance"]
