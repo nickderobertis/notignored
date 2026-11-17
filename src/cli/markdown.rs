@@ -305,11 +305,11 @@ fn closing(unlisted: &[Entry<'_>], total: usize) -> Option<String> {
     let suppressions: usize = unlisted.iter().map(Entry::len).sum();
     if suppressions == unlisted.len() {
         return Some(format!(
-            "_… and {suppressions} more not shown ({total} total)._\n"
+            "… and {suppressions} more not shown ({total} total).\n"
         ));
     }
     Some(format!(
-        "_… and {} ({}) not shown ({} total)._\n",
+        "… and {} ({}) not shown ({} total).\n",
         plural(unlisted.len(), "more entry", "more entries"),
         plural(suppressions, "suppression", "suppressions"),
         plural(total, "suppression", "suppressions"),
@@ -372,13 +372,13 @@ fn decision(directive: &IgnoreDirective) -> String {
             .join(", ")
     };
     let reason = match &directive.reason {
-        Some(reason) => format!("_{}_", escape(reason)),
-        None => "_no reason given_".to_string(),
+        Some(reason) => escape(reason),
+        None => "(no reason given)".to_string(),
     };
     // The marker sits at the head of the item, where the eye lands, rather than
-    // inside the italic prose the stated reason already owns.
+    // trailing the reason, where it would read as part of the justification.
     let edited = match directive.change {
-        Some(Change::JustificationEdited) => " _(justification edited)_",
+        Some(Change::JustificationEdited) => " (justification edited)",
         _ => "",
     };
     format!("**{} {rules}**{edited} — {reason}", directive.tool)
@@ -491,11 +491,11 @@ fn note(directive: &IgnoreDirective, span: u32) -> Option<String> {
     let truncated = span > SNIPPET_LINES;
     match (directive.scope == Scope::File, truncated) {
         (true, true) => Some(format!(
-            "_the whole file is suppressed; showing its first {SNIPPET_LINES} of {span} lines._"
+            "the whole file is suppressed; showing its first {SNIPPET_LINES} of {span} lines."
         )),
-        (true, false) => Some("_the whole file is suppressed._".to_string()),
+        (true, false) => Some("the whole file is suppressed.".to_string()),
         (false, true) => Some(format!(
-            "_showing the first {SNIPPET_LINES} of {span} suppressed lines._"
+            "showing the first {SNIPPET_LINES} of {span} suppressed lines."
         )),
         (false, false) => None,
     }
@@ -667,7 +667,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "- **ruff E501** — _long wrapped URL_ — [src/app.py:12](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/src/app.py#L12)\n"
+                "- **ruff E501** — long wrapped URL — [src/app.py:12](https://github.com/acme/widgets/blob/0123456789abcdef0123456789abcdef01234567/src/app.py#L12)\n"
             ),
             "{rendered}"
         );
@@ -747,12 +747,12 @@ mod tests {
         let rendered = render(&report, &options());
         assert!(
             rendered.contains(
-                "- **ruff E501** _(justification edited)_ — _long wrapped URL_ — [src/app.py:12]"
+                "- **ruff E501** (justification edited) — long wrapped URL — [src/app.py:12]"
             ),
             "{rendered}"
         );
         assert!(
-            rendered.contains("- **ruff E501** — _long wrapped URL_ — [src/app.py:13]"),
+            rendered.contains("- **ruff E501** — long wrapped URL — [src/app.py:13]"),
             "an added entry gained a marker:\n{rendered}"
         );
     }
@@ -772,7 +772,7 @@ mod tests {
         let mut report = Report::new();
         report.ignores.push(directive(12, None));
         assert!(
-            render(&report, &options()).contains("— _no reason given_ —"),
+            render(&report, &options()).contains("— (no reason given) —"),
             "the missing-reason wording changed"
         );
     }
@@ -817,10 +817,10 @@ mod tests {
         let mut report = Report::new();
         report
             .ignores
-            .push(directive(12, Some("*not* a `code` <span> [link]")));
+            .push(directive(12, Some("*not* a `code` <span> [link] _under_")));
         let rendered = render(&report, &options());
         assert!(
-            rendered.contains("_\\*not\\* a \\`code\\` \\<span> \\[link\\]_"),
+            rendered.contains("— \\*not\\* a \\`code\\` \\<span> \\[link\\] \\_under\\_ —"),
             "{rendered}"
         );
     }
@@ -950,8 +950,8 @@ mod tests {
     fn the_body_lists_at_most_max_entries_and_counts_the_rest() {
         for (count, listed, overflow) in [
             (20, 20, None),
-            (21, 20, Some("_… and 1 more not shown (21 total)._\n")),
-            (25, 20, Some("_… and 5 more not shown (25 total)._\n")),
+            (21, 20, Some("… and 1 more not shown (21 total).\n")),
+            (25, 20, Some("… and 5 more not shown (25 total).\n")),
         ] {
             let mut report = Report::new();
             for line in 1..=count {
@@ -991,7 +991,7 @@ mod tests {
         let rendered = body(&report, &capped, &Stub::default());
         assert_eq!(rendered.matches("- **ruff E501**").count(), 2, "{rendered}");
         assert!(
-            rendered.ends_with(&format!("_… and 1 more not shown (3 total)._\n\n{STAMP}")),
+            rendered.ends_with(&format!("… and 1 more not shown (3 total).\n\n{STAMP}")),
             "{rendered}"
         );
 
@@ -1035,7 +1035,7 @@ mod tests {
             rendered,
             format!(
                 "{MARKER}\n\n### notignored: 2 suppressions\n\n\
-                 - **ruff E501** — _why_ — 2 locations\n  - {}\n  - {}\n\n\
+                 - **ruff E501** — why — 2 locations\n  - {}\n  - {}\n\n\
                  \x20 <details>\n  <summary>suppressed code (src/app.py:2)</summary>\n\n\
                  \x20 ```python\n    1 | one\n  > 2 | two\n    3 | three\n    4 | four\n  ```\n\n\
                  \x20 </details>\n\n{STAMP}",
@@ -1059,7 +1059,7 @@ mod tests {
         let rendered = render(&report, &MarkdownOptions::default());
         assert!(
             rendered.contains(
-                "- **ruff E501** _(justification edited)_ — _why_ — 2 locations\n  - `src/app.py:3`\n  - `src/app.py:9`\n"
+                "- **ruff E501** (justification edited) — why — 2 locations\n  - `src/app.py:3`\n  - `src/app.py:9`\n"
             ),
             "{rendered}"
         );
@@ -1127,14 +1127,14 @@ mod tests {
         assert!(!at(3).contains("not shown"), "{}", at(3));
         assert!(
             at(1).ends_with(&format!(
-                "_… and 2 more entries (4 suppressions) not shown (5 suppressions total)._\n\n{STAMP}"
+                "… and 2 more entries (4 suppressions) not shown (5 suppressions total).\n\n{STAMP}"
             )),
             "{}",
             at(1)
         );
         // Only a single suppression is left out: the line it always was.
         assert!(
-            at(2).ends_with(&format!("_… and 1 more not shown (5 total)._\n\n{STAMP}")),
+            at(2).ends_with(&format!("… and 1 more not shown (5 total).\n\n{STAMP}")),
             "{}",
             at(2)
         );
@@ -1157,7 +1157,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "_… and 1 more entry (3 suppressions) not shown (4 suppressions total)._\n"
+                "… and 1 more entry (3 suppressions) not shown (4 suppressions total).\n"
             ),
             "{rendered}"
         );
@@ -1266,7 +1266,7 @@ mod tests {
         report.ignores.push(spanning(Scope::File, 1, None));
         let rendered = body(&report, &options(), &short);
         assert!(
-            rendered.contains("  _the whole file is suppressed._\n"),
+            rendered.contains("  the whole file is suppressed.\n"),
             "{rendered}"
         );
         assert!(
@@ -1285,7 +1285,7 @@ mod tests {
         );
         assert!(
             rendered
-                .contains("  _the whole file is suppressed; showing its first 10 of 14 lines._\n"),
+                .contains("  the whole file is suppressed; showing its first 10 of 14 lines.\n"),
             "{rendered}"
         );
         assert!(rendered.contains("   1 | line 1\n"), "{rendered}");
@@ -1303,7 +1303,7 @@ mod tests {
         report.ignores.push(spanning(Scope::Block, 5, Some(28)));
         let rendered = body(&report, &options(), &source);
         assert!(
-            rendered.contains("  _showing the first 10 of 24 suppressed lines._\n"),
+            rendered.contains("  showing the first 10 of 24 suppressed lines.\n"),
             "{rendered}"
         );
         assert!(rendered.contains("   5 | line 5\n"), "{rendered}");

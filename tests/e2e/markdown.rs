@@ -216,7 +216,7 @@ fn max_entries_bounds_the_listed_entries_and_names_what_it_left_out() {
     assert!(body.contains("### notignored: 5 suppressions\n"), "{body}");
     assert_eq!(body.matches("\n- **").count(), 2, "{body}");
     assert!(
-        body.ends_with("_… and 3 more not shown (5 total)._\n"),
+        body.ends_with("… and 3 more not shown (5 total).\n"),
         "{body}"
     );
 }
@@ -370,21 +370,17 @@ fn the_comment_heading_counts_what_the_change_actually_did() {
     );
     assert!(
         both.contains(&format!(
-            "- **ruff E501** _(justification edited)_ — _the SDK builds this path, not us_ — [kept.py:1](https://github.com/{REPO}/blob/{SHA}/kept.py#L1)\n"
+            "- **ruff E501** (justification edited) — the SDK builds this path, not us — [kept.py:1](https://github.com/{REPO}/blob/{SHA}/kept.py#L1)\n"
         )),
         "{both}"
     );
     assert!(
         both.contains(&format!(
-            "- **ruff F401** — _imported for its side effects_ — [quiet.py:1](https://github.com/{REPO}/blob/{SHA}/quiet.py#L1)\n"
+            "- **ruff F401** — imported for its side effects — [quiet.py:1](https://github.com/{REPO}/blob/{SHA}/quiet.py#L1)\n"
         )),
         "an added entry gained a marker:\n{both}"
     );
-    assert_eq!(
-        both.matches("_(justification edited)_").count(),
-        1,
-        "{both}"
-    );
+    assert_eq!(both.matches("(justification edited)").count(), 1, "{both}");
 
     // Rejustified only: the pull request that this whole distinction exists
     // for. A justification rewritten, no suppression added, and the word
@@ -539,4 +535,168 @@ fn the_stamp_closes_the_body_below_what_could_not_be_scanned() {
         )),
         "the stamp is not the last block of the body:\n{body}"
     );
+}
+
+/// What a CommonMark reader makes of a comment body: whether anything in it is
+/// emphasis, what each strong span says, and all of its text run together.
+struct Parsed {
+    emphasis: usize,
+    strong: Vec<String>,
+    text: String,
+}
+
+fn parse(body: &str) -> Parsed {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let mut parsed = Parsed {
+        emphasis: 0,
+        strong: Vec::new(),
+        text: String::new(),
+    };
+    let mut in_strong = false;
+    for event in Parser::new(body) {
+        match event {
+            Event::Start(Tag::Emphasis) => parsed.emphasis += 1,
+            Event::Start(Tag::Strong) => {
+                in_strong = true;
+                parsed.strong.push(String::new());
+            }
+            Event::End(TagEnd::Strong) => in_strong = false,
+            Event::Text(text) | Event::Code(text) => {
+                if in_strong {
+                    parsed
+                        .strong
+                        .last_mut()
+                        .expect("an open strong span")
+                        .push_str(&text);
+                }
+                parsed.text.push_str(&text);
+            }
+            _ => {}
+        }
+    }
+    parsed
+}
+
+/// The comment is read on phones, where italic prose is the hardest thing on
+/// the page to read, so no piece of it is emphasis: not a reason, not the
+/// placeholder for a missing one, not the edited marker, not either overflow
+/// line, not a snippet note. Asserted on what a CommonMark parser — the reading
+/// GitHub gives the body — makes of it, rather than on spellings, so an
+/// emphasis introduced any way at all is caught. Markdown inside a reason must
+/// stay literal text, which is what keeps it from opening emphasis of its own.
+#[test]
+fn no_piece_of_the_comment_renders_as_emphasis() {
+    let repo = git_repo();
+    let root = repo.path();
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the URL is generated\n",
+    );
+    commit(root, "baseline");
+
+    git(root, &["checkout", "-q", "-b", "change"]);
+    write(
+        root,
+        "kept.py",
+        "x = 1  # noqa: E501  # the _under_ and *star* URL is generated\n",
+    );
+    write(root, "bare.py", "y = 2  # noqa: F401\n");
+    write(root, "small.py", "# ruff: noqa\nA = 1\n");
+    let filler: String = (0..12).map(|n| format!("V{n} = {n}\n")).collect();
+    write(root, "whole.py", &format!("# ruff: noqa: F401\n{filler}"));
+    let body: String = (0..12).map(|n| format!("    let _v{n} = {n};\n")).collect();
+    write(
+        root,
+        "long.rs",
+        &format!(
+            "#[allow(dead_code, reason = \"kept for the next change\")]\nfn planned() {{\n{body}}}\n"
+        ),
+    );
+    write(
+        root,
+        "dup.py",
+        "a = 1  # noqa: E501  # generated table\nb = 2  # noqa: E501  # generated table\n",
+    );
+    commit(root, "change");
+
+    let render = |args: &[&str]| -> String {
+        let output = notignored(root)
+            .args(args)
+            .args(["--format", "markdown"])
+            .args(["--github-repo", REPO, "--github-sha", SHA])
+            .output()
+            .expect("run notignored");
+        assert!(
+            output.status.success(),
+            "exit: {:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("a UTF-8 comment body")
+    };
+    let diff = ["--diff", "--diff-base", "main"];
+    let full = render(&diff);
+    let grouped_overflow = render(&[&diff[..], &["--max-entries", "1"]].concat());
+    let single_overflow = render(&["bare.py", "small.py", "--max-entries", "1"]);
+
+    // Each piece is really in some body, in words that do not depend on how it
+    // is set, so the emphasis check below cannot pass over a missing piece.
+    for (body, piece) in [
+        (&full, "justification edited"),
+        (&full, "no reason given"),
+        (&full, "the whole file is suppressed."),
+        (
+            &full,
+            "the whole file is suppressed; showing its first 10 of 13 lines.",
+        ),
+        (&full, "showing the first 10 of 15 suppressed lines."),
+        (&grouped_overflow, "suppressions) not shown ("),
+        (&single_overflow, "… and 1 more not shown (2 total)."),
+    ] {
+        assert!(body.contains(piece), "{piece:?} is not in:\n{body}");
+    }
+
+    for body in [&full, &grouped_overflow, &single_overflow] {
+        let parsed = parse(body);
+        assert_eq!(parsed.emphasis, 0, "the body sets text in italics:\n{body}");
+    }
+
+    let parsed = parse(&full);
+    for decision in [
+        "ruff E501",
+        "ruff F401",
+        "ruff (all rules)",
+        "rust dead_code",
+    ] {
+        assert!(
+            parsed.strong.iter().any(|strong| strong == decision),
+            "{decision:?} is not bold; bold spans are {:?}:\n{full}",
+            parsed.strong
+        );
+    }
+    assert!(
+        parsed
+            .text
+            .contains("the _under_ and *star* URL is generated"),
+        "the reason's markdown characters did not arrive as literal text:\n{full}"
+    );
+
+    let goldens = repo_root().join("tests/golden/markdown");
+    let mut read = 0;
+    for entry in fs::read_dir(&goldens).expect("read the markdown goldens") {
+        let path = entry.expect("a golden entry").path();
+        if path.extension().is_some_and(|extension| extension == "md") {
+            let golden = fs::read_to_string(&path).expect("read a golden body");
+            assert_eq!(
+                parse(&golden).emphasis,
+                0,
+                "{} sets text in italics",
+                path.display()
+            );
+            read += 1;
+        }
+    }
+    assert!(read > 0, "no golden body under {}", goldens.display());
 }
