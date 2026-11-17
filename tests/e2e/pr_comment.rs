@@ -162,12 +162,12 @@ fn the_review_case_shows_additions_apart_from_justification_edits() {
         "the heading no longer counts additions apart from edits: {heading}"
     );
     assert!(
-        body.contains("_(justification edited)_"),
+        body.contains("(justification edited)"),
         "no entry is marked as a justification edit, so the picture cannot show \
          one:\n{body}"
     );
     assert_eq!(
-        body.matches("_(justification edited)_").count(),
+        body.matches("(justification edited)").count(),
         1,
         "the change overlay stopped being one in-place edit among additions:\n{body}"
     );

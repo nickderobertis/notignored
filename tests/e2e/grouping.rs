@@ -10,7 +10,9 @@
 //! The `--no-group` outputs are compared with goldens recorded from the binary
 //! *before* the renderers grouped anything (commit 04eb8a7), so they prove the
 //! flag restores that output rather than whatever this build prints. They are
-//! never re-blessed; the grouped goldens are, with `just bless`.
+//! never re-blessed; the grouped goldens are, with `just bless`. A restyle that
+//! moves every body alike is no grouping change, so it reaches the `--no-group`
+//! goldens as a hand edit of exactly that restyle, never as a re-bless.
 
 use std::fs;
 use std::process::Output;
@@ -197,35 +199,35 @@ fn the_markdown_body_groups_by_the_same_rule() {
     assert_eq!(
         bullets(&body),
         vec![
-            "- **rust dead\\_code** — _kept for the plugin API_ — 2 locations".to_string(),
-            "- **ruff E501, F401** — _re-exported for the plugin API_ — 4 locations".to_string(),
+            "- **rust dead\\_code** — kept for the plugin API — 2 locations".to_string(),
+            "- **ruff E501, F401** — re-exported for the plugin API — 4 locations".to_string(),
             format!(
-                "- **ruff (all rules)** — _re-exported for the plugin API_ — {}",
+                "- **ruff (all rules)** — re-exported for the plugin API — {}",
                 permalink(&models, 6)
             ),
             format!(
-                "- **ruff F401** — _re-exported for the plugin API_ — {}",
+                "- **ruff F401** — re-exported for the plugin API — {}",
                 permalink(&models, 7)
             ),
             format!(
-                "- **ruff e501, F401** — _re-exported for the plugin API_ — {}",
+                "- **ruff e501, F401** — re-exported for the plugin API — {}",
                 permalink(&models, 8)
             ),
             format!(
-                "- **ruff E501, F401** — _re-exported for the public API_ — {}",
+                "- **ruff E501, F401** — re-exported for the public API — {}",
                 permalink(&models, 9)
             ),
             format!(
-                "- **ruff E501, F401** — _re-exported for the plugin API_ — {}",
+                "- **ruff E501, F401** — re-exported for the plugin API — {}",
                 permalink(&models, 10)
             ),
-            "- **mypy attr-defined** — _the stub predates this constant_ — 2 locations".to_string(),
+            "- **mypy attr-defined** — the stub predates this constant — 2 locations".to_string(),
             format!(
-                "- **ty attr-defined** — _the stub predates this constant_ — {}",
+                "- **ty attr-defined** — the stub predates this constant — {}",
                 permalink(&models, 13)
             ),
             format!(
-                "- **pyright reportPrivateUsage** — _the private cache is ours_ — {}",
+                "- **pyright reportPrivateUsage** — the private cache is ours — {}",
                 permalink(&views, 6)
             ),
         ],
@@ -234,7 +236,7 @@ fn the_markdown_body_groups_by_the_same_rule() {
     assert_eq!(
         nested(
             &body,
-            "- **ruff E501, F401** — _re-exported for the plugin API_ — 4"
+            "- **ruff E501, F401** — re-exported for the plugin API — 4"
         ),
         vec![
             permalink(&models, 3),
@@ -286,7 +288,7 @@ fn a_suppression_with_no_twin_renders_on_its_own() {
     let entry = block(&body, "- **pyright reportPrivateUsage**");
     assert!(
         entry.starts_with(&format!(
-            "- **pyright reportPrivateUsage** — _the private cache is ours_ — {}\n\n  <details>\n  <summary>suppressed code</summary>\n",
+            "- **pyright reportPrivateUsage** — the private cache is ours — {}\n\n  <details>\n  <summary>suppressed code</summary>\n",
             permalink(&views, 6)
         )),
         "{entry}"
@@ -305,7 +307,7 @@ fn a_group_carries_one_snippet_naming_its_first_location() {
     let models = src("models.py");
     let entry = block(
         &body,
-        "- **ruff E501, F401** — _re-exported for the plugin API_ — 4",
+        "- **ruff E501, F401** — re-exported for the plugin API — 4",
     );
     assert_eq!(entry.matches("<details>").count(), 1, "{entry}");
     assert!(
@@ -360,16 +362,16 @@ fn twenty_five_identical_and_three_distinct_are_four_entries() {
         bullets(&body),
         vec![
             format!(
-                "- **ruff F401** — _re-exported for the plugin API_ — {}",
+                "- **ruff F401** — re-exported for the plugin API — {}",
                 permalink(&path, 3)
             ),
             format!(
-                "- **ruff F811** — _the shim redefines it on purpose_ — {}",
+                "- **ruff F811** — the shim redefines it on purpose — {}",
                 permalink(&path, 4)
             ),
-            "- **ruff E501** — _the vendor URL cannot be wrapped_ — 25 locations".to_string(),
+            "- **ruff E501** — the vendor URL cannot be wrapped — 25 locations".to_string(),
             format!(
-                "- **ruff E402** — _imported after the path is patched_ — {}",
+                "- **ruff E402** — imported after the path is patched — {}",
                 permalink(&path, 30)
             ),
         ],
@@ -390,7 +392,7 @@ fn max_entries_counts_entries_and_the_closing_line_counts_both() {
     assert_eq!(bullets(&body).len(), 2, "{body}");
     assert!(
         body.contains(
-            "\n_… and 2 more entries (26 suppressions) not shown (28 suppressions total)._\n"
+            "\n… and 2 more entries (26 suppressions) not shown (28 suppressions total).\n"
         ),
         "{body}"
     );
@@ -398,7 +400,7 @@ fn max_entries_counts_entries_and_the_closing_line_counts_both() {
     let body = markdown(&[&path], &["--max-entries", "3"]);
     assert_eq!(bullets(&body).len(), 3, "{body}");
     assert!(
-        body.contains("\n_… and 1 more not shown (28 total)._\n"),
+        body.contains("\n… and 1 more not shown (28 total).\n"),
         "{body}"
     );
 }
@@ -455,7 +457,7 @@ fn no_group_renders_one_markdown_bullet_per_suppression() {
     );
     assert!(
         body.contains(&format!(
-            "- **ruff F401, E501** — _re-exported for the plugin API_ — {}\n",
+            "- **ruff F401, E501** — re-exported for the plugin API — {}\n",
             permalink(&src("views.py"), 3)
         )),
         "{body}"
@@ -464,7 +466,7 @@ fn no_group_renders_one_markdown_bullet_per_suppression() {
     let capped = markdown(&[TREE], &["--no-group", "--max-entries", "3"]);
     assert_eq!(bullets(&capped).len(), 3, "{capped}");
     assert!(
-        capped.contains("\n_… and 12 more not shown (15 total)._\n"),
+        capped.contains("\n… and 12 more not shown (15 total).\n"),
         "{capped}"
     );
 }
@@ -557,8 +559,8 @@ fn a_diff_never_groups_an_addition_with_a_rewritten_justification() {
     assert_eq!(
         bullets(&body),
         vec![
-            "- **ruff E501** — _the vendor URL cannot be wrapped_ — `added.py:1`",
-            "- **ruff E501** _(justification edited)_ — _the vendor URL cannot be wrapped_ — `edited.py:1`",
+            "- **ruff E501** — the vendor URL cannot be wrapped — `added.py:1`",
+            "- **ruff E501** (justification edited) — the vendor URL cannot be wrapped — `edited.py:1`",
         ],
         "{body}"
     );
@@ -592,14 +594,14 @@ fn suppressions_without_a_reason_group_only_with_each_other() {
     assert_eq!(
         bullets(&body),
         vec![
-            "- **ruff E501** — _no reason given_ — 2 locations",
-            "- **ruff E501** — _why_ — `app.py:3`",
+            "- **ruff E501** — (no reason given) — 2 locations",
+            "- **ruff E501** — why — `app.py:3`",
         ],
         "{body}"
     );
     // Without the permalink flags a group's locations are code text.
     assert_eq!(
-        nested(&body, "- **ruff E501** — _no reason given_"),
+        nested(&body, "- **ruff E501** — (no reason given)"),
         vec!["`app.py:1`", "`app.py:2`"],
         "{body}"
     );
@@ -673,7 +675,7 @@ fn a_diff_groups_identical_rewritten_justifications_under_their_marker() {
     assert_eq!(
         bullets(&body),
         vec![
-            "- **ruff E501** _(justification edited)_ — _the vendor URL cannot be wrapped_ — 2 locations"
+            "- **ruff E501** (justification edited) — the vendor URL cannot be wrapped — 2 locations"
         ],
         "{body}"
     );
@@ -743,13 +745,11 @@ fn one_unlisted_group_is_one_more_entry() {
     let (body, _) = run_in(dir.path(), &["--format", "markdown", "--max-entries", "1"]);
     assert_eq!(
         bullets(&body),
-        vec!["- **ruff F401** — _re-exported for the plugin API_ — `a.py:1`"],
+        vec!["- **ruff F401** — re-exported for the plugin API — `a.py:1`"],
         "{body}"
     );
     assert!(
-        body.contains(
-            "\n_… and 1 more entry (2 suppressions) not shown (3 suppressions total)._\n"
-        ),
+        body.contains("\n… and 1 more entry (2 suppressions) not shown (3 suppressions total).\n"),
         "{body}"
     );
 }

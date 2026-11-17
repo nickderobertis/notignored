@@ -31,7 +31,7 @@ the comment's entry cutoff is spent on distinct decisions.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/pr-comment-rendered-dark.png">
-  <img alt="The pull-request comment as GitHub renders it: a heading reading &quot;notignored: 4 suppressions added, 1 justification edited&quot;, then three bullets naming a tool and rule in bold with the stated reason in italics — a mypy entry marked &quot;(justification edited)&quot; and a ruff entry, each with a permalink to its line, and a biome noExplicitAny entry reading &quot;3 locations&quot; with three nested permalinks, to src/chart.ts and twice to src/widget.ts — the first entry's &quot;suppressed code&quot; block expanded to show the silenced Python with the suppressed line marked, the other two collapsed, the biome one's labelled with its first location, and a footer noting the commit the suppressions were read from" src="docs/screenshots/pr-comment-rendered.png">
+  <img alt="The pull-request comment as GitHub renders it: a heading reading &quot;notignored: 4 suppressions added, 1 justification edited&quot;, then three bullets naming a tool and rule in bold followed by the stated reason in plain text — a mypy entry marked &quot;(justification edited)&quot; and a ruff entry, each with a permalink to its line, and a biome noExplicitAny entry reading &quot;3 locations&quot; with three nested permalinks, to src/chart.ts and twice to src/widget.ts — the first entry's &quot;suppressed code&quot; block expanded to show the silenced Python with the suppressed line marked, the other two collapsed, the biome one's labelled with its first location, and a footer noting the commit the suppressions were read from" src="docs/screenshots/pr-comment-rendered.png">
 </picture>
 
 > Every character of that comment is real output — what `--format markdown`
@@ -54,7 +54,7 @@ documented [below](#output):
 `--format markdown` emits the markdown **source** behind the comment above —
 this is what the action hands GitHub to render, permalinks and all:
 
-![The pull-request comment body as markdown: a heading reading "notignored: 4 suppressions added, 1 justification edited", then one bullet per entry naming its tool and rule with its reason in italics — the rewritten mypy one marked "(justification edited)" and the ruff one each followed by a permalink to the line, and the biome noExplicitAny one ending "3 locations" with its three permalinks as nested bullets — each entry followed by a collapsed details block holding the suppressed code, the biome one's summary naming its first location, src/chart.ts:9](docs/screenshots/pr-comment.svg)
+![The pull-request comment body as markdown: a heading reading "notignored: 4 suppressions added, 1 justification edited", then one bullet per entry naming its tool and rule in bold followed by its reason in plain text — the rewritten mypy one marked "(justification edited)" and the ruff one each followed by a permalink to the line, and the biome noExplicitAny one ending "3 locations" with its three permalinks as nested bullets — each entry followed by a collapsed details block holding the suppressed code, the biome one's summary naming its first location, src/chart.ts:9](docs/screenshots/pr-comment.svg)
 
 </details>
 
