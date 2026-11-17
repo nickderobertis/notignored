@@ -662,7 +662,7 @@ mod tests {
         let (code, out, _) = run_in(dir.path(), &["--format", "markdown"]);
         assert_eq!(code, EXIT_OK);
         assert!(out.starts_with(MARKER), "{out}");
-        assert!(out.contains("- **ruff E501** — _long URL_ — "), "{out}");
+        assert!(out.contains("- **ruff E501** — long URL — "), "{out}");
     }
 
     #[test]
