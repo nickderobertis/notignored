@@ -41,6 +41,11 @@ const FIXTURES: [(&str, usize); 5] = [
 /// Render the first `files` fixtures as a comment body, with the permalink flags
 /// the action passes.
 fn render(files: usize) -> String {
+    render_with(files, &[])
+}
+
+/// [`render`], with `extra` flags passed after the fixtures.
+fn render_with(files: usize, extra: &[&str]) -> String {
     let mut command = notignored(&repo_root());
     for tool in TOOLS {
         command.args(["--tool", tool]);
@@ -48,6 +53,7 @@ fn render(files: usize) -> String {
     let output = command
         .args(FIXTURES.iter().take(files).map(|(path, _)| *path))
         .args(["--format", "markdown"])
+        .args(extra)
         .args(["--github-repo", REPO, "--github-sha", SHA])
         .output()
         .expect("run notignored");
@@ -587,6 +593,15 @@ fn parse(body: &str) -> Parsed {
 /// stay literal text, which is what keeps it from opening emphasis of its own.
 #[test]
 fn no_piece_of_the_comment_renders_as_emphasis() {
+    // The committed fixtures already hold a missing reason twice (`blanket.py`,
+    // `pair.ts`), a file-scope directive over a file of ten lines or fewer
+    // (`blanket.py`) and five findings for a cap of two to overflow.
+    let fixtures = render(FIXTURES.len());
+    let single_overflow = render_with(FIXTURES.len(), &["--max-entries", "2"]);
+
+    // What none of them holds: a rewritten justification whose words carry
+    // markdown, a file-scope directive over more than ten lines, a span longer
+    // than ten lines, and a group to overflow.
     let repo = git_repo();
     let root = repo.path();
     write(
@@ -602,8 +617,6 @@ fn no_piece_of_the_comment_renders_as_emphasis() {
         "kept.py",
         "x = 1  # noqa: E501  # the _under_ and *star* URL is generated\n",
     );
-    write(root, "bare.py", "y = 2  # noqa: F401\n");
-    write(root, "small.py", "# ruff: noqa\nA = 1\n");
     let filler: String = (0..12).map(|n| format!("V{n} = {n}\n")).collect();
     write(root, "whole.py", &format!("# ruff: noqa: F401\n{filler}"));
     let body: String = (0..12).map(|n| format!("    let _v{n} = {n};\n")).collect();
@@ -616,16 +629,17 @@ fn no_piece_of_the_comment_renders_as_emphasis() {
     );
     write(
         root,
-        "dup.py",
+        "table.py",
         "a = 1  # noqa: E501  # generated table\nb = 2  # noqa: E501  # generated table\n",
     );
     commit(root, "change");
 
-    let render = |args: &[&str]| -> String {
+    let render_change = |extra: &[&str]| -> String {
         let output = notignored(root)
-            .args(args)
+            .args(["--diff", "--diff-base", "main"])
             .args(["--format", "markdown"])
             .args(["--github-repo", REPO, "--github-sha", SHA])
+            .args(extra)
             .output()
             .expect("run notignored");
         assert!(
@@ -636,51 +650,50 @@ fn no_piece_of_the_comment_renders_as_emphasis() {
         );
         String::from_utf8(output.stdout).expect("a UTF-8 comment body")
     };
-    let diff = ["--diff", "--diff-base", "main"];
-    let full = render(&diff);
-    let grouped_overflow = render(&[&diff[..], &["--max-entries", "1"]].concat());
-    let single_overflow = render(&["bare.py", "small.py", "--max-entries", "1"]);
+    let change = render_change(&[]);
+    let grouped_overflow = render_change(&["--max-entries", "1"]);
 
     // Each piece is really in some body, in words that do not depend on how it
     // is set, so the emphasis check below cannot pass over a missing piece.
     for (body, piece) in [
-        (&full, "justification edited"),
-        (&full, "no reason given"),
-        (&full, "the whole file is suppressed."),
+        (&fixtures, "no reason given"),
+        (&fixtures, "the whole file is suppressed."),
+        (&single_overflow, "… and 3 more not shown (5 total)."),
+        (&change, "justification edited"),
         (
-            &full,
+            &change,
             "the whole file is suppressed; showing its first 10 of 13 lines.",
         ),
-        (&full, "showing the first 10 of 15 suppressed lines."),
+        (&change, "showing the first 10 of 15 suppressed lines."),
         (&grouped_overflow, "suppressions) not shown ("),
-        (&single_overflow, "… and 1 more not shown (2 total)."),
     ] {
         assert!(body.contains(piece), "{piece:?} is not in:\n{body}");
     }
 
-    for body in [&full, &grouped_overflow, &single_overflow] {
+    for body in [&fixtures, &single_overflow, &change, &grouped_overflow] {
         let parsed = parse(body);
         assert_eq!(parsed.emphasis, 0, "the body sets text in italics:\n{body}");
     }
 
-    let parsed = parse(&full);
-    for decision in [
-        "ruff E501",
-        "ruff F401",
-        "ruff (all rules)",
-        "rust dead_code",
+    for (body, decision) in [
+        (&fixtures, "ruff (all rules)"),
+        (&fixtures, "eslint no-console"),
+        (&fixtures, "typescript (all rules)"),
+        (&fixtures, "rust dead_code"),
+        (&change, "ruff E501"),
+        (&change, "ruff F401"),
     ] {
+        let strong = parse(body).strong;
         assert!(
-            parsed.strong.iter().any(|strong| strong == decision),
-            "{decision:?} is not bold; bold spans are {:?}:\n{full}",
-            parsed.strong
+            strong.iter().any(|span| span == decision),
+            "{decision:?} is not bold; bold spans are {strong:?}:\n{body}"
         );
     }
     assert!(
-        parsed
+        parse(&change)
             .text
             .contains("the _under_ and *star* URL is generated"),
-        "the reason's markdown characters did not arrive as literal text:\n{full}"
+        "the reason's markdown characters did not arrive as literal text:\n{change}"
     );
 
     let goldens = repo_root().join("tests/golden/markdown");
