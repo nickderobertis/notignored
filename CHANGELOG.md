@@ -10,6 +10,12 @@ version, and tags. Do not edit released sections by hand.
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/nickderobertis/notignored/compare/v0.2.0...v0.2.1) - 2026-11-17
+
+### Fixed
+
+- *(markdown)* render the pull-request comment without italics ([#112](https://github.com/nickderobertis/notignored/pull/112))
+
 ## [0.2.0](https://github.com/nickderobertis/notignored/compare/v0.1.20...v0.2.0) - 2026-11-10
 
 ### Added
