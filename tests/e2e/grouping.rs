@@ -10,9 +10,9 @@
 //! The `--no-group` outputs are compared with goldens recorded from the binary
 //! *before* the renderers grouped anything (commit 04eb8a7), so they prove the
 //! flag restores that output rather than whatever this build prints. They are
-//! never re-blessed; the grouped goldens are, with `just bless`. The markdown
-//! one has since been edited by hand, once, to drop the italics the comment no
-//! longer sets — that restyle moved every body alike and is no grouping change.
+//! never re-blessed; the grouped goldens are, with `just bless`. A restyle that
+//! moves every body alike is no grouping change, so it reaches the `--no-group`
+//! goldens as a hand edit of exactly that restyle, never as a re-bless.
 
 use std::fs;
 use std::process::Output;
